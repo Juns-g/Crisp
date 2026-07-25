@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Crisp release script — builds a signed universal DMG with the Command Line
+# Crisp release script: builds a signed universal DMG with the Command Line
 # Tools only (no Xcode), and optionally publishes the GitHub release and bumps
 # the Homebrew tap. Default is a dry run: it builds and verifies the DMG but
 # publishes nothing. Pass --publish to actually release.
