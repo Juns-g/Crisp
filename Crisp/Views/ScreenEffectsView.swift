@@ -9,7 +9,7 @@ struct ScreenEffectsView: View {
         HStack(spacing: 0) {
             if effects.darkModeAvailable {
                 EffectCircleButton(
-                    icon: "circle.lefthalf.filled",
+                    glyph: .darkMode,
                     label: "Dark Mode",
                     isOn: effects.darkModeEnabled
                 ) {
@@ -19,7 +19,7 @@ struct ScreenEffectsView: View {
             }
             if effects.nightShiftAvailable {
                 EffectCircleButton(
-                    icon: "moon.fill",
+                    glyph: .nightShift,
                     label: "Night Shift",
                     isOn: effects.nightShiftEnabled,
                     onFill: .orange,
@@ -31,7 +31,7 @@ struct ScreenEffectsView: View {
             }
             if effects.trueToneAvailable {
                 EffectCircleButton(
-                    icon: "sun.max.fill",
+                    glyph: .trueTone,
                     label: "True Tone",
                     isOn: effects.trueToneEnabled,
                     onFill: .blue,
@@ -63,7 +63,7 @@ private struct InstantPressStyle: ButtonStyle {
 /// circle; on = the effect's own tint (white for Dark Mode, orange for Night
 /// Shift, blue for True Tone), matching the native panel.
 private struct EffectCircleButton: View {
-    let icon: String
+    let glyph: EffectGlyph
     let label: String
     let isOn: Bool
     var onFill: Color = .white
@@ -85,14 +85,12 @@ private struct EffectCircleButton: View {
                 ZStack {
                     Circle()
                         .fill(isOn ? AnyShapeStyle(onFill) : AnyShapeStyle(Color.primary.opacity(0.12)))
-                        .frame(width: 42, height: 42)
-                    Image(systemName: icon)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(isOn ? onIcon : .primary.opacity(0.85))
+                        .frame(width: 36, height: 36)
+                    EffectGlyphView(glyph: glyph, color: isOn ? onIcon : .primary.opacity(0.85))
                 }
                 VStack(spacing: 1) {
                     Text(localizedLabel)
-                        .font(.caption)
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.primary)
                     Text(isOn ? "On" : "Off")
                         .font(.caption2)
@@ -104,5 +102,92 @@ private struct EffectCircleButton: View {
         .buttonStyle(InstantPressStyle())
         .accessibilityLabel(isOn ? "\(localizedLabel), on" : "\(localizedLabel), off")
         .accessibilityAddTraits(.isButton)
+    }
+}
+
+// MARK: - Effect glyphs
+//
+// Dark Mode maps to the public SF Symbol `circle.lefthalf.filled`. The Night Shift and
+// True Tone glyphs use private system symbols that aren't in the public SF Symbols set,
+// so no `Image(systemName:)` matches them; those two are hand-drawn to evoke the same
+// glyphs (a sun-with-moon, a sun-with-stripes) without reproducing Apple's artwork:
+// original monochrome vector shapes, tinted by the caller like a symbol.
+
+enum EffectGlyph { case darkMode, nightShift, trueTone }
+
+private struct EffectGlyphView: View {
+    let glyph: EffectGlyph
+    let color: Color
+
+    var body: some View {
+        switch glyph {
+        case .darkMode:
+            // Public SF Symbol: the closest match to the native Dark Mode glyph, and
+            // fully covered by the SF Symbols license (unlike the private originals).
+            Image(systemName: "circle.lefthalf.filled")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(color)
+        case .nightShift:
+            ZStack { SunRaysGlyph(color: color); CrescentGlyph(color: color) }
+                .frame(width: 18, height: 18)
+        case .trueTone:
+            ZStack { SunRaysGlyph(color: color); StripedDiscGlyph(color: color) }
+                .frame(width: 18, height: 18)
+        }
+    }
+}
+
+/// Eight short rounded rays around the center, the shared base of the Night Shift
+/// and True Tone glyphs.
+private struct SunRaysGlyph: View {
+    let color: Color
+    var body: some View {
+        ZStack {
+            ForEach(0..<8, id: \.self) { i in
+                Capsule(style: .continuous)
+                    .fill(color)
+                    .frame(width: 1.6, height: 3)
+                    .offset(y: -6.9)
+                    .rotationEffect(.degrees(Double(i) * 45))
+            }
+        }
+        .frame(width: 18, height: 18)
+    }
+}
+
+/// Crescent moon (a disc with an offset disc erased), the Night Shift center.
+private struct CrescentGlyph: View {
+    let color: Color
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 7.5, height: 7.5)
+            .overlay(
+                Circle()
+                    .fill(color)
+                    .frame(width: 6.5, height: 6.5)
+                    .offset(x: 2.3, y: -0.7)
+                    .blendMode(.destinationOut)
+            )
+            .compositingGroup()
+    }
+}
+
+/// Disc crossed by horizontal gaps (a striped circle), the True Tone center.
+private struct StripedDiscGlyph: View {
+    let color: Color
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 7.5, height: 7.5)
+            .overlay(
+                VStack(spacing: 0.9) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        Rectangle().fill(color).frame(width: 7.5, height: 0.8)
+                    }
+                }
+                .blendMode(.destinationOut)
+            )
+            .compositingGroup()
     }
 }

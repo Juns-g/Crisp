@@ -6,20 +6,41 @@ import SwiftUI
 struct BrightnessStepButton: View {
     let systemName: String
     let action: () -> Void
-    @State private var isPressed = false
-    @State private var repeatTask: Task<Void, Never>? = nil
 
     var body: some View {
-        Image(systemName: systemName)
-            .font(.system(size: 15))
-            .foregroundColor(isPressed ? .primary : .secondary)
-            .contentShape(Rectangle())
-            .accessibilityHidden(true)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard !isPressed else { return }
-                        isPressed = true
+        // A Button, not a raw DragGesture: these live inside the panel's
+        // ScrollView, which steals a DragGesture so its onEnded never fires and
+        // the "pressed" highlight sticks on. ButtonStyle.isPressed is managed by
+        // the framework and always resets on release (and on scroll-steal).
+        Button(action: {}) {
+            Image(systemName: systemName)
+                .font(.system(size: 15))
+        }
+        .buttonStyle(HoldRepeatButtonStyle(action: action))
+        .accessibilityHidden(true)
+    }
+}
+
+/// Lights the glyph only while physically held, and repeats the step action
+/// (initial delay, then steady repeat) for as long as it stays held.
+private struct HoldRepeatButtonStyle: ButtonStyle {
+    let action: () -> Void
+
+    func makeBody(configuration: Configuration) -> some View {
+        HoldRepeatLabel(configuration: configuration, action: action)
+    }
+
+    private struct HoldRepeatLabel: View {
+        let configuration: ButtonStyleConfiguration
+        let action: () -> Void
+        @State private var repeatTask: Task<Void, Never>? = nil
+
+        var body: some View {
+            configuration.label
+                .foregroundColor(configuration.isPressed ? .primary : .secondary)
+                .contentShape(Rectangle())
+                .onChange(of: configuration.isPressed) { _, pressed in
+                    if pressed {
                         action()
                         repeatTask = Task { @MainActor in
                             try? await Task.sleep(nanoseconds: 400_000_000)
@@ -28,13 +49,12 @@ struct BrightnessStepButton: View {
                                 try? await Task.sleep(nanoseconds: 150_000_000)
                             }
                         }
-                    }
-                    .onEnded { _ in
-                        isPressed = false
+                    } else {
                         repeatTask?.cancel()
                         repeatTask = nil
                     }
-            )
+                }
+        }
     }
 }
 

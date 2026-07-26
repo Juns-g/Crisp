@@ -423,7 +423,7 @@ struct MenuBarView: View {
 
             }
             .padding(.vertical, 4)
-            .frame(width: 360)
+            .frame(width: 308)
             .onGeometryChange(for: CGFloat.self) { proxy in
                 proxy.size.height
             } action: { newHeight in
@@ -474,7 +474,7 @@ struct MenuBarView: View {
         .padding(.top, 4)
 
         } // end VStack
-        .frame(width: 360)
+        .frame(width: 308)
         .padding(.vertical, 8)
         .onReceive(displayManager.$displays) { newDisplays in
             let validIDs = Set(newDisplays.map { $0.displayID })
