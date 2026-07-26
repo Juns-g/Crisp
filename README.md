@@ -28,7 +28,7 @@ Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/
 
 ## Support
 
-Crisp is free, and every feature stays free. If it saved you a BetterDisplay or Lunar license and you'd like to say thanks, you can [buy me a coffee](https://ko-fi.com/didriksg). Completely optional.
+Crisp is free, and every feature stays free. If it saved you a BetterDisplay or Lunar license and you'd like to say thanks, you can [buy me a coffee](https://ko-fi.com/didriksg) (in China, [爱发电](https://ifdian.net/a/didriksg)). Completely optional.
 
 ## Requirements
 
