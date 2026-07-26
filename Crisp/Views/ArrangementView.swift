@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import ImageIO
 
 /// Visual display arrangement view.
 /// Shows all active displays as scaled thumbnails on a canvas.
@@ -8,8 +10,13 @@ struct ArrangementView: View {
     @State private var draggedID: CGDirectDisplayID?
     @State private var dragOffset: CGSize = .zero
     @State private var dragError: String?
+    @State private var hoveredID: CGDirectDisplayID?
 
-    private let canvasHeight: CGFloat = 160
+    private let canvasHeight: CGFloat = 190
+    /// Fraction of the canvas the displays fill; the rest stays free so a display
+    /// can be dragged to a new side without leaving the canvas. computeLayout and
+    /// canvasScale must use the same value.
+    private let canvasFillRatio: CGFloat = 0.78
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -27,8 +34,11 @@ struct ArrangementView: View {
                     // Display thumbnails
                     thumbnails(canvasSize: geo.size)
                 }
+                // Stable space for the drag gesture; see the gesture comment.
+                .coordinateSpace(.named("arranger"))
             }
             .frame(height: canvasHeight)
+            .onDisappear { DisplayIdentifierOverlay.hide() }
 
             // Drag error feedback
             if let err = dragError {
@@ -37,28 +47,6 @@ struct ArrangementView: View {
                     .foregroundColor(.red)
                     .padding(.horizontal, 4)
                     .transition(.opacity)
-            }
-
-            // "Set as main display" for non-main displays
-            ForEach(displayManager.displays.filter { !$0.isMain }) { display in
-                Button(action: {
-                    Task { @MainActor in
-                        let ok = await ArrangementService.shared.setAsMainDisplay(
-                            display.displayID,
-                            among: displayManager.displays
-                        )
-                        if ok { displayManager.refreshDisplays() }
-                    }
-                }) {
-                    Label("Set \(display.name) as Main Display", systemImage: "star.fill")
-                        .font(.caption)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Color.blue.opacity(0.1))
-                        .foregroundColor(.blue)
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 8)
@@ -71,24 +59,59 @@ struct ArrangementView: View {
         ForEach(displayManager.displays) { display in
             let rect = layout[display.displayID] ?? CGRect(x: canvasSize.width / 2, y: canvasSize.height / 2, width: 60, height: 40)
             let isDragged = draggedID == display.displayID
+            let identified = hoveredID == display.displayID || isDragged
             DisplayThumbnailView(display: display, isDragged: isDragged)
                 .frame(width: max(rect.width, 40), height: max(rect.height, 25))
+                // Hover/drag must attach to the framed thumbnail BEFORE .position:
+                // .position expands the view to fill the canvas, so a hit test
+                // placed after it would cover the whole canvas, not this screen.
+                .contentShape(Rectangle())
+                .onHover { hovering in
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.72)) {
+                        if hovering { hoveredID = display.displayID }
+                        else if hoveredID == display.displayID { hoveredID = nil }
+                    }
+                }
+                .gesture(
+                    // minimumDistance 0 so the red identifier appears the instant
+                    // you press (hold), not only once the display starts moving.
+                    // The fixed "arranger" space keeps translation stable: measured
+                    // in the thumbnail's own (moving) space it fed back and made the
+                    // display jitter between its new and old position.
+                    DragGesture(minimumDistance: 0, coordinateSpace: .named("arranger"))
+                        .onChanged { value in
+                            draggedID = display.displayID
+                            dragOffset = snappedCanvasOffset(for: display, translation: value.translation, canvasSize: canvasSize)
+                            DisplayIdentifierOverlay.show(for: display.displayID)
+                        }
+                        .onEnded { value in
+                            // A press without real movement is just a click: flash
+                            // the identifier, don't reposition the display.
+                            let moved = abs(value.translation.width) + abs(value.translation.height)
+                            if moved > 2 {
+                                applyDrag(for: display, translation: value.translation, canvasSize: canvasSize)
+                            }
+                            draggedID = nil
+                            dragOffset = .zero
+                            DisplayIdentifierOverlay.hide()
+                        }
+                )
+                .overlay(alignment: .top) {
+                    // Native cue: hovering (or dragging) a screen floats its name
+                    // in a little callout above the thumbnail. Aligning the badge's
+                    // bottom (+ a small gap) to the thumbnail's top lifts it fully
+                    // above the display; it grows up out of that edge.
+                    if identified {
+                        DisplayNameBadge(name: display.name)
+                            .alignmentGuide(.top) { $0[.bottom] + 4 }
+                            .transition(.scale(scale: 0.8, anchor: .bottom).combined(with: .opacity))
+                    }
+                }
                 .position(
                     x: rect.midX + (isDragged ? dragOffset.width : 0),
                     y: rect.midY + (isDragged ? dragOffset.height : 0)
                 )
-                .gesture(
-                    DragGesture()
-                        .onChanged { value in
-                            draggedID = display.displayID
-                            dragOffset = snappedCanvasOffset(for: display, translation: value.translation, canvasSize: canvasSize)
-                        }
-                        .onEnded { value in
-                            applyDrag(for: display, translation: value.translation, canvasSize: canvasSize)
-                            draggedID = nil
-                            dragOffset = .zero
-                        }
-                )
+                .zIndex(identified ? 2 : 0)
         }
     }
 
@@ -111,9 +134,7 @@ struct ArrangementView: View {
         let availW = canvasSize.width - padding * 2
         let availH = canvasSize.height - padding * 2
 
-        // 0.6x leaves free canvas around the thumbnails so displays can be
-        // dragged to a new side without leaving the canvas. Keep in sync with canvasScale.
-        let scale = min(availW / totalW, availH / totalH) * 0.6
+        let scale = min(availW / totalW, availH / totalH) * canvasFillRatio
         let scaledW = totalW * scale
         let scaledH = totalH * scale
         let offsetX = padding + (availW - scaledW) / 2
@@ -143,7 +164,7 @@ struct ArrangementView: View {
         let totalH = maxY - minY
         guard totalW > 0, totalH > 0 else { return 0 }
         let padding: CGFloat = 16
-        return min((canvasSize.width - padding * 2) / totalW, (canvasSize.height - padding * 2) / totalH) * 0.6
+        return min((canvasSize.width - padding * 2) / totalW, (canvasSize.height - padding * 2) / totalH) * canvasFillRatio
     }
 
     /// Proposed screen-space rect for the dragged display, snapped to the other displays.
@@ -153,8 +174,11 @@ struct ArrangementView: View {
         let others = displayManager.displays
             .filter { $0.displayID != display.displayID }
             .map { CGDisplayBounds($0.displayID) }
-        // Threshold is ~10 canvas points, expressed in screen points.
-        return snappedRect(proposed, others: others, threshold: 10 / scale)
+        // Resolve overlap first (choosing the side the drag pulls toward), then
+        // edge-snap for clean alignment. Displays can never overlap, like the
+        // native Arrange Displays sheet.
+        let resolved = resolveOverlaps(proposed, others: others)
+        return snappedRect(resolved, others: others, threshold: 10 / scale)
     }
 
     /// Canvas-space drag offset with snapping applied, for live thumbnail feedback.
@@ -177,7 +201,8 @@ struct ArrangementView: View {
         let newY = Int(snapped.minY.rounded())
 
         Task { @MainActor in
-            let ok = await ArrangementService.shared.setPosition(x: newX, y: newY, for: display.displayID)
+            let ok = await ArrangementService.shared.setPosition(
+                x: newX, y: newY, for: display.displayID, among: displayManager.displays)
             if ok {
                 displayManager.refreshDisplays()
             } else {
@@ -235,64 +260,243 @@ func snappedRect(_ rect: CGRect, others: [CGRect], threshold: CGFloat) -> CGRect
     return r
 }
 
+/// Pushes `rect` out of any display it overlaps by snapping it flush against the
+/// side it's being pulled toward, so displays can never sit on top of each other
+/// (matching the native Arrange Displays sheet). Iterates so it settles against
+/// multiple neighbors; capped to avoid a pathological oscillation looping forever.
+func resolveOverlaps(_ rect: CGRect, others: [CGRect]) -> CGRect {
+    var r = rect
+    for _ in 0..<32 {
+        guard let o = others.first(where: { overlapExtents($0, r) != nil }) else { break }
+        r = snapToDominantSide(r, of: o)
+    }
+    return r
+}
+
+/// Places `r` flush against one side of `o`, choosing the side the drag is
+/// pulling toward rather than the shallowest push (which makes a sideways drag
+/// jump vertically). Horizontal stays put until `r`'s center passes `o`'s
+/// center, then flips; it only switches to a vertical stack once the vertical
+/// pull clearly dominates. Never leaves `r` overlapping `o`.
+private func snapToDominantSide(_ r: CGRect, of o: CGRect) -> CGRect {
+    var out = r
+    let dx = r.midX - o.midX
+    let dy = r.midY - o.midY
+    // Strongly prefer side-by-side: only stack vertically when the drag is
+    // clearly more vertical than horizontal (the 1.5 bias). Dragging one
+    // display across another then keeps them side-by-side and flips left/right
+    // as its center passes the other's center, instead of jumping into a
+    // vertical stack; native only stacks when you pull one distinctly up/down.
+    if abs(dy) <= abs(dx) * 1.5 {
+        out.origin.x = dx >= 0 ? o.maxX : o.minX - r.width
+    } else {
+        out.origin.y = dy >= 0 ? o.maxY : o.minY - r.height
+    }
+    return out
+}
+
+/// Positive overlap width/height of two rects, or nil when they merely touch or
+/// are disjoint (a shared edge is allowed — that's the target adjacent state).
+private func overlapExtents(_ a: CGRect, _ b: CGRect) -> (x: CGFloat, y: CGFloat)? {
+    let ox = min(a.maxX, b.maxX) - max(a.minX, b.minX)
+    let oy = min(a.maxY, b.maxY) - max(a.minY, b.minY)
+    return (ox > 0 && oy > 0) ? (ox, oy) : nil
+}
+
+// MARK: - Display Name Badge
+
+/// The dark name callout the native Arrange Displays sheet floats above a
+/// display when you hover it: a rounded bubble with a downward tail.
+private struct DisplayNameBadge: View {
+    let name: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(name)
+                .font(.caption)
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color(white: 0.18))
+                )
+            BadgeTail()
+                .fill(Color(white: 0.18))
+                .frame(width: 11, height: 5)
+        }
+        .fixedSize()
+        .shadow(color: .black.opacity(0.3), radius: 2.5, y: 1)
+        .allowsHitTesting(false)
+    }
+}
+
+/// Downward-pointing triangle for the badge's tail.
+private struct BadgeTail: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        p.closeSubpath()
+        return p
+    }
+}
+
 // MARK: - Display Thumbnail
 
 private struct DisplayThumbnailView: View {
     let display: DisplayInfo
     let isDragged: Bool
 
+    @State private var wallpaper: NSImage?
+
     var body: some View {
-        ZStack {
-            // Background fill
-            RoundedRectangle(cornerRadius: 4)
-                .fill(
-                    display.isBuiltin
-                    ? AnyShapeStyle(LinearGradient(
-                        colors: [.blue.opacity(0.75), .purple.opacity(0.65)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing))
-                    : AnyShapeStyle(Color(NSColor.controlBackgroundColor))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .stroke(
-                            isDragged ? Color.accentColor : (display.isMain ? Color.accentColor.opacity(0.6) : Color.gray.opacity(0.4)),
-                            lineWidth: isDragged ? 2 : (display.isMain ? 1.5 : 1)
-                        )
-                )
-
-            // External display top decorative bar (border feel)
-            if !display.isBuiltin {
-                VStack {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color.gray.opacity(0.3))
-                        .frame(height: 3)
-                    Spacer()
-                }
-                .padding(.horizontal, 3)
-                .padding(.top, 3)
+        // Color.clear adopts the exact frame proposed by the parent, so the
+        // aspect-fill wallpaper (which reports a size larger than the frame to
+        // cover it) is clipped to the frame instead of bleeding past it and
+        // visually overlapping the neighbouring thumbnail.
+        Color.clear
+        .overlay {
+            // Desktop wallpaper fill (native arranger look); a gradient/panel
+            // fallback shows while it loads or when a display has no picture.
+            if let wallpaper {
+                Image(nsImage: wallpaper)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Rectangle().fill(fallbackFill)
             }
-
-            // Display name + main display marker
-            VStack(spacing: 2) {
-                Text(display.name)
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundColor(display.isBuiltin ? .white : .primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if display.isMain {
-                    HStack(spacing: 2) {
-                        Image(systemName: "star.fill")
-                            .font(.system(size: 5))
-                        Text("Main")
-                            .font(.system(size: 6))
-                    }
-                    .foregroundColor(display.isBuiltin ? .white.opacity(0.9) : .blue)
-                }
-            }
-            .padding(3)
         }
-        .scaleEffect(isDragged ? 1.04 : 1.0)
-        .shadow(color: .black.opacity(isDragged ? 0.3 : 0.05), radius: isDragged ? 6 : 1)
+        .overlay(alignment: .top) {
+            // Native cue: the main display shows a thin menu-bar strip at the top.
+            // No name labels — the system Arrange Displays sheet has none either.
+            if display.isMain {
+                Rectangle()
+                    .fill(.white.opacity(0.8))
+                    .frame(height: 2.5)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(
+                    isDragged ? Color.accentColor : Color.white.opacity(0.5),
+                    lineWidth: isDragged ? 1.5 : 1
+                )
+        )
+        // No scale-up on drag: native doesn't balloon the dragged display, and
+        // the extra 4% made the drag overlap read wrong. A slightly deeper
+        // shadow gives the "lifted" cue instead.
+        .shadow(color: .black.opacity(isDragged ? 0.28 : 0.18),
+                radius: isDragged ? 5 : 3, x: 0, y: isDragged ? 2 : 1)
         .animation(.spring(response: 0.2, dampingFraction: 0.8), value: isDragged)
+        .task(id: display.displayID) {
+            wallpaper = await DesktopWallpaper.image(for: display.displayID)
+        }
+    }
+
+    private var fallbackFill: AnyShapeStyle {
+        display.isBuiltin
+        ? AnyShapeStyle(LinearGradient(
+            colors: [.blue.opacity(0.75), .purple.opacity(0.65)],
+            startPoint: .topLeading, endPoint: .bottomTrailing))
+        : AnyShapeStyle(Color(NSColor.controlBackgroundColor))
+    }
+}
+
+// MARK: - Desktop Wallpaper
+
+/// Loads and caches a downsampled desktop-picture thumbnail per display, so the
+/// arrangement thumbnails show each screen's wallpaper like the native
+/// "Arrange Displays" sheet. Cached for the session (a wallpaper change needs a
+/// relaunch to refresh, which is fine for a transient arrangement view).
+@MainActor
+enum DesktopWallpaper {
+    private static var cache: [CGDirectDisplayID: NSImage] = [:]
+
+    static func image(for displayID: CGDirectDisplayID, maxPixel: Int = 400) async -> NSImage? {
+        if let cached = cache[displayID] { return cached }
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        guard let screen = NSScreen.screens.first(where: {
+            ($0.deviceDescription[key] as? NSNumber)?.uint32Value == displayID
+        }), let url = NSWorkspace.shared.desktopImageURL(for: screen) else {
+            return nil
+        }
+        let image = await Task.detached(priority: .userInitiated) {
+            downsample(url: url, maxPixel: maxPixel)
+        }.value
+        if let image { cache[displayID] = image }
+        return image
+    }
+
+    nonisolated private static func downsample(url: URL, maxPixel: Int) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    }
+}
+
+// MARK: - Physical Display Identifier
+
+/// Draws a red border around a physical display — like the native Arrange
+/// Displays sheet — so hovering or dragging a thumbnail shows which real screen
+/// it maps to. A single transparent, click-through overlay window is reused and
+/// moved between screens.
+@MainActor
+enum DisplayIdentifierOverlay {
+    private static var window: NSWindow?
+    private static var shownID: CGDirectDisplayID?
+
+    static func show(for displayID: CGDirectDisplayID) {
+        guard shownID != displayID else { return }
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        guard let screen = NSScreen.screens.first(where: {
+            ($0.deviceDescription[key] as? NSNumber)?.uint32Value == displayID
+        }) else { hide(); return }
+        shownID = displayID
+        let w = window ?? makeWindow()
+        window = w
+        w.setFrame(screen.frame, display: true)
+        w.orderFrontRegardless()
+    }
+
+    /// Hides only if `displayID` is the one currently framed, so a thumbnail's
+    /// hover-exit can't clear a border another thumbnail just raised.
+    static func hide(for displayID: CGDirectDisplayID) {
+        if shownID == displayID { hide() }
+    }
+
+    static func hide() {
+        shownID = nil
+        window?.orderOut(nil)
+    }
+
+    private static func makeWindow() -> NSWindow {
+        let w = NSWindow(contentRect: .zero, styleMask: .borderless,
+                         backing: .buffered, defer: false)
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        w.hasShadow = false
+        w.ignoresMouseEvents = true
+        w.level = .screenSaver
+        w.isReleasedWhenClosed = false
+        w.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        let border = NSView()
+        border.wantsLayer = true
+        border.layer?.borderColor = NSColor.systemRed.cgColor
+        border.layer?.borderWidth = 7
+        border.layer?.cornerRadius = 10
+        border.autoresizingMask = [.width, .height]
+        w.contentView = border
+        return w
     }
 }
