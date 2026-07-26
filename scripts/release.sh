@@ -34,6 +34,8 @@ SRC=$(find Crisp -name '*.swift')
 for a in arm64 x86_64; do
   swiftc -O -parse-as-library -target "$a-apple-macos15.0" \
     -import-objc-header Crisp/Crisp-Bridging-Header.h \
+    -Xlinker -U -Xlinker _SLSConfigureDisplayEnabled \
+    -Xlinker -U -Xlinker _SLSGetDisplayList \
     $SRC -o "$BUILD/Crisp-$a"
 done
 lipo -create "$BUILD/Crisp-arm64" "$BUILD/Crisp-x86_64" -output "$APP/Contents/MacOS/Crisp"
