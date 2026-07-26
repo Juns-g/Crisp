@@ -9,7 +9,7 @@ struct MenuItemIcon: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .font(.system(size: 11, weight: .medium))
+            .font(.system(size: 12, weight: .medium))
             .foregroundColor(.white)
             .frame(width: 26, height: 26)
             .background(Circle().fill(color))
@@ -347,9 +347,9 @@ struct MenuBarView: View {
                     CombinedBrightnessView(displays: displayManager.displays)
                 }
 
-                // Dark Mode / Night Shift / True Tone circular toggle row (modeled on the system displays panel)
+                // Dark Mode / Night Shift / True Tone circular toggle row (modeled on the system displays panel).
+                // No divider above it: the native panel runs the effect row straight under the sliders.
                 if CoreBrightnessService.shared.darkModeAvailable || CoreBrightnessService.shared.nightShiftAvailable || CoreBrightnessService.shared.trueToneAvailable {
-                    sectionDivider
                     ScreenEffectsView()
                 }
 

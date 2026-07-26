@@ -282,15 +282,17 @@ private func snapToDominantSide(_ r: CGRect, of o: CGRect) -> CGRect {
     var out = r
     let dx = r.midX - o.midX
     let dy = r.midY - o.midY
-    // Strongly prefer side-by-side: only stack vertically when the drag is
-    // clearly more vertical than horizontal (the 1.5 bias). Dragging one
-    // display across another then keeps them side-by-side and flips left/right
-    // as its center passes the other's center, instead of jumping into a
-    // vertical stack; native only stacks when you pull one distinctly up/down.
-    if abs(dy) <= abs(dx) * 1.5 {
-        out.origin.x = dx >= 0 ? o.maxX : o.minX - r.width
-    } else {
+    // Strongly prefer side-by-side. Stack vertically only when the drag is
+    // clearly more vertical than horizontal (the 1.8 bias) AND the vertical
+    // pull is real: the center offset must exceed half the shorter display's
+    // height. Without that absolute floor, a horizontal drag briefly stacks at
+    // the crossover point (where dx≈0, so any dy beats the ratio test). Native
+    // only stacks once you distinctly pull one display up or down.
+    let verticalPullFloor = min(r.height, o.height) * 0.5
+    if abs(dy) > abs(dx) * 1.8 && abs(dy) > verticalPullFloor {
         out.origin.y = dy >= 0 ? o.maxY : o.minY - r.height
+    } else {
+        out.origin.x = dx >= 0 ? o.maxX : o.minX - r.width
     }
     return out
 }

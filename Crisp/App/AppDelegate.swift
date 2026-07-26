@@ -356,7 +356,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let vis = screen?.visibleFrame {
             x = min(max(x, vis.minX + 8), vis.maxX - size.width - 8)
         }
-        let topY = btnFrame.minY - 4
+        let topY = btnFrame.minY - 1
         if let vis = screen?.visibleFrame {
             // Cap like the native Wi-Fi panel: grow to ~80% of the drop below
             // the status item, then scroll, leaving real breathing room at
