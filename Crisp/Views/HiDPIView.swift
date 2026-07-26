@@ -21,9 +21,13 @@ struct HiDPIToggleRow: View {
     @State private var errorMessage: String? = nil
     @State private var lastToggleAt = Date.distantPast
 
-    /// Ground truth: the HiDPI preset matches the displays' current modes.
-    private var matchedOn: Bool {
-        hidpiPreset.map { presetService.currentPresetMatch() == $0.id } ?? false
+    /// Ground truth for the switch: the external displays are currently in a HiDPI
+    /// mode. Any HiDPI scaled resolution counts, not only the single max-resolution
+    /// "HiDPI Mode" preset — so the switch matches its label instead of reading OFF
+    /// while the display sits at a lower HiDPI resolution. (The toggle *action* still
+    /// applies the max HiDPI / native presets.)
+    private var hidpiActive: Bool {
+        !displays.isEmpty && displays.allSatisfy { $0.currentDisplayMode?.isHiDPI == true }
     }
 
     var body: some View {
@@ -51,8 +55,8 @@ struct HiDPIToggleRow: View {
         .toggleStyle(.switch)
         .controlSize(.small)
         .padding(.horizontal, 12)
-        .onAppear { isOn = matchedOn }
-        .onChange(of: matchedOn) { _, newValue in
+        .onAppear { isOn = hidpiActive }
+        .onChange(of: hidpiActive) { _, newValue in
             // Adopt external truth (Control Center, another app, a failed
             // apply) unless our own toggle is still settling.
             guard !isLoading, Date().timeIntervalSince(lastToggleAt) > 5 else { return }
@@ -134,7 +138,7 @@ struct HiDPIToggleRow: View {
             // Settle-check: once the mode change has had time to land, adopt
             // whatever is actually true (catches silent apply failures).
             try? await Task.sleep(nanoseconds: 5_000_000_000)
-            if !isLoading { isOn = matchedOn }
+            if !isLoading { isOn = hidpiActive }
         }
     }
 }
