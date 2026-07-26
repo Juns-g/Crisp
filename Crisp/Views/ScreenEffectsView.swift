@@ -93,7 +93,7 @@ private struct EffectCircleButton: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.primary)
                     Text(isOn ? "On" : "Off")
-                        .font(.caption2)
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
             }
