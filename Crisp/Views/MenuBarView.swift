@@ -9,7 +9,7 @@ struct MenuItemIcon: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .font(.system(size: 12.5, weight: .semibold))
+            .font(.system(size: 11, weight: .medium))
             .foregroundColor(.white)
             .frame(width: 26, height: 26)
             .background(Circle().fill(color))
@@ -23,6 +23,11 @@ struct MenuItemIcon: View {
 enum PanelOpenGuard {
     static var openedAt = Date.distantPast
     static var allowsActivation: Bool { Date().timeIntervalSince(openedAt) > 0.25 }
+    /// While true, the panel ignores its auto-dismiss triggers (resign-key and
+    /// outside-click). Set around a system-modal prompt we raise ourselves (the
+    /// admin auth dialog for installing a HiDPI override) so clicking/typing in
+    /// that dialog doesn't dismiss the panel out from under it.
+    static var suppressAutoDismiss = false
 }
 
 /// The content view remounts on every panel open, resetting @State. Remembering
@@ -96,6 +101,38 @@ extension View {
     }
 }
 
+// MARK: - SectionDivider
+
+/// The one canonical section separator, used between every group across the
+/// panel (main menu, display detail, settings) so the divider rhythm is
+/// consistent everywhere.
+struct SectionDivider: View {
+    var body: some View {
+        Divider()
+            .opacity(0.5)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 3)
+    }
+}
+
+// MARK: - SectionHeader
+
+/// A group label in the native menu-bar idiom (the "Known Networks" /
+/// "Energy Mode" captions in the Wi-Fi and Battery menus): a small semibold
+/// secondary caption sitting above a group of rows.
+struct SectionHeader: View {
+    let title: String
+    var body: some View {
+        Text(title)
+            .font(.callout)
+            .fontWeight(.semibold)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.top, 4)
+            .padding(.bottom, 3)
+    }
+}
+
 // MARK: - ExpandableRow
 
 struct ExpandableRow: View {
@@ -125,7 +162,9 @@ struct ExpandableRow: View {
                 .accessibilityHidden(true)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        .padding(.vertical, 5)
+        // Highlight on hover only. The native Wi-Fi "Other Networks" header
+        // stays flat when expanded (just the chevron rotates), so we do too.
         .menuRowHover(isHovered)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -166,7 +205,7 @@ struct UpdateRow: View {
                 .accessibilityHidden(true)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        .padding(.vertical, 5)
         .menuRowHover(isHovered)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -176,6 +215,53 @@ struct UpdateRow: View {
         .onHover { isHovered = $0 }
         .accessibilityLabel("Update available, version \(version)")
         .accessibilityHint("Click to open the release page")
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
+// MARK: - SupportRow
+
+/// Optional "buy me a coffee" link at the bottom of Settings, styled as a normal
+/// menu row (icon badge + label + hover + trailing ↗) so it's as findable as the
+/// update row — the genre standard for free apps. Never a popup or launch-time
+/// nag, and every feature stays free.
+struct SupportRow: View {
+    @State private var isHovered = false
+
+    /// Mainland China can't complete Ko-fi's PayPal/Stripe checkout, so route
+    /// those supporters to Afdian (WeChat/Alipay) and everyone else to Ko-fi.
+    private var supportURL: URL? {
+        let china = Locale.current.region?.identifier == "CN"
+        return URL(string: china
+            ? "https://ifdian.net/a/didriksg"
+            : "https://ko-fi.com/didriksg")
+    }
+
+    var body: some View {
+        HStack {
+            MenuItemIcon(systemName: "heart.fill", color: .pink)
+            Text("Support Crisp")
+                .font(.body)
+            Spacer()
+            Image(systemName: "arrow.up.forward")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .menuRowHover(isHovered)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard PanelOpenGuard.allowsActivation, let url = supportURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        .onHover { hovering in
+            isHovered = hovering
+            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        .accessibilityLabel("Support Crisp")
+        .accessibilityHint("Opens a page where you can buy me a coffee")
         .accessibilityAddTraits(.isButton)
     }
 }
@@ -208,12 +294,7 @@ struct MenuBarView: View {
     }
 
     /// A thin group divider styled like the native menu bar panel (modeled on the system Wi-Fi/Battery panel)
-    private var sectionDivider: some View {
-        Divider()
-            .opacity(0.25)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-    }
+    private var sectionDivider: some View { SectionDivider() }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -258,11 +339,14 @@ struct MenuBarView: View {
 
                 // Preset list (Phase 19): located below the effects toggles
                 sectionDivider
+                SectionHeader(title: "Presets")
                 PresetListView()
 
                 sectionDivider
 
-                // Tools area (collapsible section, collapsed by default)
+                // Tools area (collapsible section, collapsed by default): the
+                // Virtual Displays + Arrange tools live here. Auto Brightness is
+                // a behavior preference and lives in Settings instead.
                 ExpandableRow(
                     icon: "wrench.and.screwdriver.fill",
                     iconColor: .gray,
@@ -279,12 +363,17 @@ struct MenuBarView: View {
                         isExpanded: $showVirtualDisplays
                     )
 
+                    // Nest entries a modest amount under the "Virtual Displays"
+                    // header: enough to read as children, not the earlier 32 (too
+                    // far) or 0 (reads as flat siblings).
                     VirtualDisplayView()
-                        .padding(.leading, 8)
+                        .padding(.leading, 20)
                         .curtainReveal(showVirtualDisplays)
 
-                    // Arrange Displays (Phase 4): only useful with multiple displays
-                    if visibleDisplays.count > 1 {
+                    // Arrange Displays (Phase 4): shown whenever more than one
+                    // display exists to arrange — including an active virtual one
+                    // (visibleDisplays excludes virtuals, so count all displays).
+                    if displayManager.displays.count > 1 {
                         ExpandableRow(
                             icon: "rectangle.3.offgrid",
                             iconColor: .blue,
@@ -293,12 +382,8 @@ struct MenuBarView: View {
                         )
 
                         ArrangementView()
-                            .padding(.leading, 8)
                             .curtainReveal(showArrangement)
                     }
-
-                    // Auto Brightness: a single toggle row, no nested section
-                    AutoBrightnessView()
                 }
                 .padding(.leading, 8)
                 .curtainReveal(showTools)
@@ -354,26 +439,23 @@ struct MenuBarView: View {
 
         Divider().opacity(0.25).padding(.horizontal, 12)
 
-        // Quit only (fixed at the bottom, does not scroll with content);
-        // the version string lives in Settings, like native panels.
+        // Quit: a plain left-aligned menu row (like the Wi-Fi menu's
+        // "Wi-Fi Settings…" footer) — highlights on hover, not a button.
+        // Fixed at the bottom, does not scroll with content.
         HStack {
+            Text("Quit Crisp")
+                .font(.body)
             Spacer()
-            Button(action: {
-                NSApplication.shared.terminate(nil)
-            }) {
-                Text("Quit")
-                    .font(.body)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(quitHovered ? Color.primary.opacity(0.06) : .clear)
-                    .cornerRadius(6)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .onHover { quitHovered = $0 }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 6)
+        .padding(.vertical, 5)
+        .menuRowHover(quitHovered)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            NSApplication.shared.terminate(nil)
+        }
+        .onHover { quitHovered = $0 }
+        .padding(.top, 4)
 
         } // end VStack
         .frame(width: 360)
@@ -435,6 +517,24 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Auto Brightness: a behavior preference (moved out of the Tools
+            // group, which is display features only).
+            AutoBrightnessView()
+
+            // Show combined brightness
+            Toggle(isOn: $settings.showCombinedBrightness) {
+                HStack(spacing: 6) {
+                    MenuItemIcon(systemName: "sun.min.fill", color: .yellow)
+                        .accessibilityHidden(true)
+                    Text("Show Combined Brightness")
+                        .font(.body)
+                    Spacer()
+                }
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .padding(.horizontal, 12)
+
             // Launch at login
             Toggle(isOn: Binding(
                 get: { settings.launchAtLogin },
@@ -459,21 +559,6 @@ struct SettingsView: View {
             .controlSize(.small)
             .padding(.horizontal, 12)
 
-
-            // Show combined brightness
-            Toggle(isOn: $settings.showCombinedBrightness) {
-                HStack(spacing: 6) {
-                    MenuItemIcon(systemName: "sun.min.fill", color: .yellow)
-                        .accessibilityHidden(true)
-                    Text("Show Combined Brightness")
-                        .font(.body)
-                    Spacer()
-                }
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .padding(.horizontal, 12)
-
             // Check for updates at launch
             Toggle(isOn: $settings.checkUpdatesOnLaunch) {
                 HStack(spacing: 6) {
@@ -490,13 +575,9 @@ struct SettingsView: View {
 
             // HiDPI / Scaling (moved here from the top-level segmented control and per-display panel)
             if !builtinPresets.isEmpty || !externalDisplays.isEmpty {
-                Divider().opacity(0.25).padding(.horizontal, 12).padding(.vertical, 2)
+                SectionDivider()
 
-                Text("HiDPI & Scaling")
-                    .font(.caption2)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 12)
+                SectionHeader(title: "HiDPI & Scaling")
 
                 // One switch for the whole HiDPI story: flips the Native/HiDPI
                 // presets, and the first enable also installs the per-monitor
@@ -510,12 +591,17 @@ struct SettingsView: View {
                 }
             }
 
-            Divider().opacity(0.25).padding(.horizontal, 12).padding(.vertical, 2)
+            SectionDivider()
 
             Text("Crisp v\(UpdateService.shared.currentVersion)")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.horizontal, 12)
+
+            // Optional support link, tucked next to the version stamp where
+            // "about" info lives. Muted, but with a link affordance so it doesn't
+            // read as static text — no popup, no launch nag; every feature stays free.
+            SupportRow()
         }
         .padding(.vertical, 6)
     }

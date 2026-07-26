@@ -162,7 +162,11 @@ struct ImageAdjustmentView: View {
                 .font(.caption)
                 .frame(width: 72, alignment: .leading)
 
-            Slider(value: $quantLevels, in: 2...256, step: 1) { _ in
+            // Round in the binding rather than using `step:`, which would make
+            // macOS draw tick marks under this slider (and no other).
+            Slider(value: Binding(get: { quantLevels },
+                                  set: { quantLevels = $0.rounded() }),
+                   in: 2...256) { _ in
                 commitAdjustment()
             }
 

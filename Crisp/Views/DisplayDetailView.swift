@@ -57,7 +57,7 @@ struct DisplayDetailView: View {
             }
             .clipped()
 
-            Divider().opacity(0.3).padding(.vertical, 2)
+            SectionDivider()
 
             // Reference preset section (XDR builtin panels), mirrors the
             // System Settings "Preset" menu
@@ -117,7 +117,7 @@ struct DisplayDetailView: View {
             }
             .clipped()
 
-            Divider().opacity(0.3).padding(.vertical, 2)
+            SectionDivider()
 
             // Set as main display
             MainDisplayView(display: display)
