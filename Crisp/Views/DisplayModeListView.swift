@@ -70,7 +70,7 @@ struct DisplayModeListView: View {
                     .pickerStyle(.menu)
                     .labelsHidden()
                     .controlSize(.small)
-                    .frame(maxWidth: 190)
+                    .frame(maxWidth: 190, alignment: .trailing)
                     .disabled(isSwitching)
                     .onChange(of: selectedGroupID) { _, newValue in
                         guard let group = resolutionGroups.first(where: { $0.id == newValue }),
@@ -96,7 +96,7 @@ struct DisplayModeListView: View {
                         .pickerStyle(.menu)
                         .labelsHidden()
                         .controlSize(.small)
-                        .frame(maxWidth: 130)
+                        .frame(maxWidth: 130, alignment: .trailing)
                         .disabled(isSwitching)
                         .onChange(of: selectedModeID) { _, newValue in
                             guard newValue != currentMode?.id,
