@@ -108,6 +108,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var clickMonitor: Any?
     private var clickInterceptor: Any?
 
+    // One-time migration of legacy `fd.*` UserDefaults keys into the `crisp.*`
+    // namespace. Declared above `displayManager` on purpose: stored-property
+    // initializers run in declaration order, and DisplayManager() reads persisted
+    // keys during init (reapplySavedModeIfNeeded etc.), so this must complete first.
+    private let _defaultsMigrated = AppDelegate.migrateLegacyDefaultsNamespace()
+
     let displayManager = DisplayManager()
     private var statusItem: NSStatusItem?
     private var panel: MenuPanel?
@@ -119,6 +125,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Called after wake-from-sleep; wired in setupStartupBehavior.
     var onWake: (() -> Void)?
+
+    /// One-time migration of legacy `fd.*` UserDefaults keys into the `crisp.*`
+    /// namespace: copies each key to its `crisp.` counterpart (without clobbering an
+    /// existing value) and drops the old one. Idempotent via a sentinel flag so
+    /// existing installs keep their settings instead of resetting to defaults.
+    @discardableResult
+    static func migrateLegacyDefaultsNamespace() -> Bool {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: "crisp.didMigrateLegacyDefaults") else { return false }
+        for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix("fd.") {
+            let newKey = "crisp." + key.dropFirst(3)
+            if defaults.object(forKey: newKey) == nil { defaults.set(value, forKey: newKey) }
+            defaults.removeObject(forKey: key)
+        }
+        defaults.set(true, forKey: "crisp.didMigrateLegacyDefaults")
+        return true
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Prevent duplicate launch via an exclusive file lock. Unlike consulting

@@ -165,8 +165,8 @@ final class AutoBrightnessService: ObservableObject, @unchecked Sendable {
 
     // MARK: - Persistence
 
-    private let enabledKey = "fd.AutoBrightnessEnabled"
-    private let sensitivityKey = "fd.AutoBrightnessSensitivity"
+    private let enabledKey = "crisp.AutoBrightnessEnabled"
+    private let sensitivityKey = "crisp.AutoBrightnessSensitivity"
 
     private func loadPrefs() {
         isEnabled = UserDefaults.standard.bool(forKey: enabledKey)

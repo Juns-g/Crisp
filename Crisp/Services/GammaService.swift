@@ -142,7 +142,7 @@ final class GammaService: @unchecked Sendable {
     }
 
     private static func stateKey(for displayID: CGDirectDisplayID) -> String {
-        "fd.GammaService.savedAdjustment.\(displayID)"
+        "crisp.GammaService.savedAdjustment.\(displayID)"
     }
 
     func saveState(_ adj: GammaAdjustment, for displayID: CGDirectDisplayID) {

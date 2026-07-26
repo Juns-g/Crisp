@@ -55,7 +55,7 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
     /// Releasing an entry causes the virtual display to disappear immediately.
     private var activeDisplayObjects: [UUID: CGVirtualDisplay] = [:]
 
-    private let configsKey = "fd.VirtualDisplayConfigs"
+    private let configsKey = "crisp.VirtualDisplayConfigs"
 
     // MARK: - Queries
 

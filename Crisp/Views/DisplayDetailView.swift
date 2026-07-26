@@ -13,7 +13,7 @@ struct DisplayDetailView: View {
     @State private var presetName: String = ""
 
     private func sectionKey(_ name: String) -> String {
-        "fd.expanded.\(display.displayUUID).\(name)"
+        "crisp.expanded.\(display.displayUUID).\(name)"
     }
 
     private func loadExpanded(_ name: String, default value: Bool) -> Bool {

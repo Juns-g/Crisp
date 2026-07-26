@@ -131,7 +131,7 @@ final class BrightnessService: @unchecked Sendable {
     private let softwareBrightnessLock = NSLock()
 
     private func softBrightnessKey(for displayID: CGDirectDisplayID) -> String {
-        "fd.softBrightness_\(displayID)"
+        "crisp.softBrightness_\(displayID)"
     }
 
     private func saveSoftwareBrightness(factor: Double, for displayID: CGDirectDisplayID) {

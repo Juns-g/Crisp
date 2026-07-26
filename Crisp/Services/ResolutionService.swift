@@ -9,17 +9,17 @@ final class ResolutionService: @unchecked Sendable {
 
     /// Persisted modeIDs keyed by displayID string. Used to re-apply modes after sleep/wake.
     private var savedModeIDs: [String: Int32] = {
-        (UserDefaults.standard.dictionary(forKey: "fd.ResolutionService.savedModes") as? [String: Int32]) ?? [:]
+        (UserDefaults.standard.dictionary(forKey: "crisp.ResolutionService.savedModes") as? [String: Int32]) ?? [:]
     }()
 
     private func persistModeID(_ modeID: Int32, for displayID: CGDirectDisplayID) {
         savedModeIDs["\(displayID)"] = modeID
-        UserDefaults.standard.set(savedModeIDs, forKey: "fd.ResolutionService.savedModes")
+        UserDefaults.standard.set(savedModeIDs, forKey: "crisp.ResolutionService.savedModes")
     }
 
     private func clearSavedModeID(for displayID: CGDirectDisplayID) {
         savedModeIDs.removeValue(forKey: "\(displayID)")
-        UserDefaults.standard.set(savedModeIDs, forKey: "fd.ResolutionService.savedModes")
+        UserDefaults.standard.set(savedModeIDs, forKey: "crisp.ResolutionService.savedModes")
     }
 
     /// Re-applies the last user-set mode for `displayID` if it differs from the current active mode.

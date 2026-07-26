@@ -30,16 +30,16 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
     // MARK: - Keys
 
     private enum Keys {
-        static let launchAtLogin          = "fd.launchAtLogin"
-        static let launchAtLoginPrompted  = "fd.launchAtLogin.prompted"
-        static let menuWidth              = "fd.menuWidth"
-        static let showCombinedBrightness = "fd.showCombinedBrightness"
-        static let ddcCacheTTL            = "fd.ddcCacheTTL"
-        static let checkUpdatesOnLaunch   = "fd.checkUpdatesOnLaunch"
-        static let colorPickerHistory     = "fd.colorPickerHistory"
+        static let launchAtLogin          = "crisp.launchAtLogin"
+        static let launchAtLoginPrompted  = "crisp.launchAtLogin.prompted"
+        static let menuWidth              = "crisp.menuWidth"
+        static let showCombinedBrightness = "crisp.showCombinedBrightness"
+        static let ddcCacheTTL            = "crisp.ddcCacheTTL"
+        static let checkUpdatesOnLaunch   = "crisp.checkUpdatesOnLaunch"
+        static let colorPickerHistory     = "crisp.colorPickerHistory"
         // Per-display keys use prefix + displayID
-        static let brightnessPrefix       = "fd.brightness_"
-        static let contrastPrefix         = "fd.contrast_"
+        static let brightnessPrefix       = "crisp.brightness_"
+        static let contrastPrefix         = "crisp.contrast_"
     }
 
     // MARK: - Published Settings

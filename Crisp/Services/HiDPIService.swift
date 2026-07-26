@@ -90,7 +90,7 @@ final class HiDPIService: @unchecked Sendable {
         }
 
         // Write to a temp file first, then use privileged helper to move it
-        let tmpPath = NSTemporaryDirectory() + "fd_hidpi_override.plist"
+        let tmpPath = NSTemporaryDirectory() + "crisp_hidpi_override.plist"
         do {
             try data.write(to: URL(fileURLWithPath: tmpPath), options: .atomic)
         } catch {
