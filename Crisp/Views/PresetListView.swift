@@ -115,7 +115,8 @@ struct PresetRow: View {
         .menuRowHover(isHovered)
         .contentShape(Rectangle())
         .onTapGesture {
-            guard PanelOpenGuard.allowsActivation, !PresetService.shared.isApplying else { return }
+            // Already the active preset (the checkmarked row): tapping it is a no-op.
+            guard PanelOpenGuard.allowsActivation, !PresetService.shared.isApplying, !isCurrentMatch else { return }
             Task { await PresetService.shared.applyPreset(preset) }
         }
         .onHover { isHovered = $0 }
