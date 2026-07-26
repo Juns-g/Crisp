@@ -97,14 +97,14 @@ struct ArrangementView: View {
                         }
                 )
                 .overlay(alignment: .top) {
-                    // Native cue: hovering (or dragging) a screen floats its name
-                    // in a little callout above the thumbnail. Aligning the badge's
-                    // bottom (+ a small gap) to the thumbnail's top lifts it fully
-                    // above the display; it grows up out of that edge.
+                    // Native cue: hovering (or dragging) a screen floats its name in
+                    // a callout above the thumbnail, its tail meeting the top edge.
+                    // The badge lifts itself by its own measured height (see
+                    // DisplayNameBadge) — an alignment guide did not lift it reliably
+                    // inside this overlay, leaving it overlapping the wallpaper.
                     if identified {
                         DisplayNameBadge(name: display.name)
-                            .alignmentGuide(.top) { $0[.bottom] + 4 }
-                            .transition(.scale(scale: 0.8, anchor: .bottom).combined(with: .opacity))
+                            .transition(.scale(scale: 0.85, anchor: .bottom).combined(with: .opacity))
                     }
                 }
                 .position(
@@ -311,6 +311,11 @@ private func overlapExtents(_ a: CGRect, _ b: CGRect) -> (x: CGFloat, y: CGFloat
 /// display when you hover it: a rounded bubble with a downward tail.
 private struct DisplayNameBadge: View {
     let name: String
+    /// Measured height of the whole callout (bubble + tail), used to lift it so
+    /// the tail tip lands on the thumbnail's top edge.
+    @State private var height: CGFloat = 0
+
+    private let fill = Color(white: 0.22)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -318,20 +323,30 @@ private struct DisplayNameBadge: View {
                 .font(.caption)
                 .foregroundStyle(.white)
                 .lineLimit(1)
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 9)
                 .padding(.vertical, 4)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color(white: 0.18))
+                    RoundedRectangle(cornerRadius: 7, style: .continuous).fill(fill)
                 )
             BadgeTail()
-                .fill(Color(white: 0.18))
-                .frame(width: 11, height: 5)
+                .fill(fill)
+                .frame(width: 12, height: 6)
         }
         .fixedSize()
         .shadow(color: .black.opacity(0.3), radius: 2.5, y: 1)
+        .background(GeometryReader { g in
+            Color.clear.preference(key: BadgeHeightKey.self, value: g.size.height)
+        })
+        .onPreferenceChange(BadgeHeightKey.self) { height = $0 }
+        .offset(y: -height)   // lift fully above the thumbnail; tail meets its top edge
         .allowsHitTesting(false)
     }
+}
+
+/// Measures the name callout's height so it can lift itself above the thumbnail.
+private struct BadgeHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 /// Downward-pointing triangle for the badge's tail.

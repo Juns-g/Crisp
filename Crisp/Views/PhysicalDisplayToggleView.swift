@@ -80,26 +80,11 @@ struct ReconnectDisplaysSection: View {
                     .padding(.bottom, 2)
 
                 ForEach(service.disconnected) { record in
-                    let busy = busyUUIDs.contains(record.uuid)
-                    HStack(spacing: 8) {
-                        MenuItemIcon(systemName: "rectangle.slash", color: .secondary)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(record.name).font(.body).lineLimit(1)
-                            Text("\(record.width)×\(record.height)")
-                                .font(.caption2).foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        if busy {
-                            ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
-                        } else {
-                            Button("Reconnect") { reconnect(record) }
-                                .buttonStyle(.borderless)
-                                .foregroundColor(.green)
-                                .font(.caption)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    DisconnectedDisplayRow(
+                        record: record,
+                        busy: busyUUIDs.contains(record.uuid),
+                        onReconnect: { reconnect(record) }
+                    )
                 }
             }
         }
@@ -113,5 +98,52 @@ struct ReconnectDisplaysSection: View {
             displayManager.refreshDisplays()
             busyUUIDs.remove(record.uuid)
         }
+    }
+}
+
+/// One disconnected-display row. The whole row highlights and is tappable to
+/// reconnect (like clicking a network in the native Wi-Fi menu), with a
+/// "Reconnect" hint that is always visible and brightens to the accent color on
+/// hover — so the action is discoverable at rest, not a small stray button.
+private struct DisconnectedDisplayRow: View {
+    let record: PhysicalDisplayToggleService.DisconnectedDisplay
+    let busy: Bool
+    let onReconnect: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            MenuItemIcon(systemName: "rectangle.slash", color: .secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(record.name).font(.body).lineLimit(1)
+                Text("\(record.width)×\(record.height)")
+                    .font(.caption2).foregroundColor(.secondary)
+            }
+            Spacer()
+            if busy {
+                ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
+            } else {
+                Text("Reconnect")
+                    .font(.caption).fontWeight(.medium)
+                    .foregroundColor(isHovered ? .accentColor : .secondary)
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(isHovered ? .accentColor : .secondary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .menuRowHover(isHovered)
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .onTapGesture {
+            guard !busy else { return }
+            onReconnect()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(record.name), disconnected")
+        .accessibilityHint("Reconnect this display")
+        .accessibilityAddTraits(.isButton)
     }
 }
