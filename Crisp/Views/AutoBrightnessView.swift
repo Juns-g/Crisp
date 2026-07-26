@@ -39,11 +39,11 @@ struct AutoBrightnessView: View {
 
     private var statusText: String {
         if builtinUnavailable {
-            return "No built-in display detected"
+            return String(localized: "No built-in display detected")
         } else if service.isEnabled {
-            return "Syncing with built-in display brightness"
+            return String(localized: "Syncing with built-in display brightness")
         } else {
-            return "Adjusts external displays to follow the built-in display brightness"
+            return String(localized: "Adjusts external displays to follow the built-in display brightness")
         }
     }
 }

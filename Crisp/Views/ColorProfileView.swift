@@ -104,7 +104,7 @@ struct ColorProfileView: View {
         let success = ColorProfileService.shared.setProfile(profile, for: display.displayID)
         if !success {
             selectedPath = previous
-            applyError = "Failed to apply. Please try again."
+            applyError = String(localized: "Failed to apply. Please try again.")
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 applyError = nil

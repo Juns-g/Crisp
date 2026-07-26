@@ -58,7 +58,7 @@ struct VirtualDisplayView: View {
                         if success {
                             showCreateForm = false
                         } else {
-                            createError = "Failed to create virtual display. Please try again."
+                            createError = String(localized: "Failed to create virtual display. Please try again.")
                             Task { @MainActor in
                                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                                 createError = nil
@@ -158,7 +158,7 @@ struct CreateVirtualDisplayForm: View {
     @Binding var isCreating: Bool
     let onConfirm: (VirtualDisplayService.VirtualDisplayConfig) -> Void
 
-    @State private var name: String = "Virtual Display"
+    @State private var name: String = String(localized: "Virtual Display")
     @State private var selectedPreset: Int = 0
     @State private var hiDPI: Bool = true
     @State private var autoCreate: Bool = true
@@ -251,7 +251,7 @@ struct CreateVirtualDisplayForm: View {
         guard !isCreating else { return }
         let preset = presets[selectedPreset]
         let config = VirtualDisplayService.VirtualDisplayConfig(
-            name: name.isEmpty ? "Virtual Display" : name,
+            name: name.isEmpty ? String(localized: "Virtual Display") : name,
             width: preset.width,
             height: preset.height,
             refreshRate: 60,
