@@ -204,6 +204,12 @@ final class PresetService: ObservableObject, @unchecked Sendable {
                         print("[PresetService]   -> setting mode \(mode.width)×\(mode.height) hiDPI=\(mode.isHiDPI)")
                         let ok = await ResolutionService.shared.setDisplayMode(mode, for: displayID)
                         print("[PresetService]   -> setDisplayMode result: \(ok)")
+                        if ok {
+                            // refreshDisplays() doesn't re-read the current mode for
+                            // already-present displays, so write it back here (as the manual
+                            // switch does) or the panel keeps showing the old resolution.
+                            display.currentDisplayMode = mode
+                        }
                         anyActionTaken = true
                     }
                 } else {
