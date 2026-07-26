@@ -41,6 +41,12 @@ enum PanelMetrics {
     static var maxContentHeight: CGFloat = 600
 }
 
+extension Notification.Name {
+    /// Posted once the panel has finished hiding, so the menu content can reset
+    /// transient UI (collapse the tool/nav sections) and reopen fresh like a native menu.
+    static let crispPanelDidClose = Notification.Name("crisp.panelDidClose")
+}
+
 extension Animation {
     /// Duration shared by the SwiftUI spring and the panel window's mirror
     /// spring (MenuPanel.applyContentSize); change both by changing this.
@@ -470,6 +476,15 @@ struct MenuBarView: View {
         .onReceive(displayManager.$displays) { newDisplays in
             let validIDs = Set(newDisplays.map { $0.displayID })
             expandedDisplayIDs = expandedDisplayIDs.intersection(validIDs)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
+            // Reopen collapsed, like a native menu. Fires while the panel is hidden,
+            // so the content resizes off screen and reopens at the collapsed height.
+            showTools = false
+            showVirtualDisplays = false
+            showArrangement = false
+            showSettings = false
+            expandedDisplayIDs.removeAll()
         }
         .task {
             if settings.checkUpdatesOnLaunch {

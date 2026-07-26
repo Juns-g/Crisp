@@ -12,20 +12,6 @@ struct DisplayDetailView: View {
     @State private var colorSpaceName: String = ""
     @State private var presetName: String = ""
 
-    private func sectionKey(_ name: String) -> String {
-        "crisp.expanded.\(display.displayUUID).\(name)"
-    }
-
-    private func loadExpanded(_ name: String, default value: Bool) -> Bool {
-        let key = sectionKey(name)
-        guard UserDefaults.standard.object(forKey: key) != nil else { return value }
-        return UserDefaults.standard.bool(forKey: key)
-    }
-
-    private func saveExpanded(_ name: String, _ value: Bool) {
-        UserDefaults.standard.set(value, forKey: sectionKey(name))
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
 
@@ -128,16 +114,14 @@ struct DisplayDetailView: View {
         }
         .padding(.leading, 32)
         .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
-        .onAppear {
-            showModeList = loadExpanded("modeList", default: false)
-            showPreset = loadExpanded("preset", default: false)
-            showColorProfile = loadExpanded("colorProfile", default: false)
-            showImageAdjustment = loadExpanded("imageAdjust", default: false)
+        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
+            // Reopen fresh, like a native menu (this view persists across opens, so
+            // its sections stay expanded until reset).
+            showModeList = false
+            showPreset = false
+            showColorProfile = false
+            showImageAdjustment = false
         }
-        .onChange(of: showModeList) { _, v in saveExpanded("modeList", v) }
-        .onChange(of: showPreset) { _, v in saveExpanded("preset", v) }
-        .onChange(of: showColorProfile) { _, v in saveExpanded("colorProfile", v) }
-        .onChange(of: showImageAdjustment) { _, v in saveExpanded("imageAdjust", v) }
         .task(id: display.displayID) {
             colorSpaceName = ""
             presetName = ""

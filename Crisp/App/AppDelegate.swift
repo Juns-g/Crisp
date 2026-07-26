@@ -427,11 +427,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Hide with a quick fade, like native menus; never order out (see
         // isPanelShown comment). Click-through is immediate.
         p.ignoresMouseEvents = true
-        NSAnimationContext.runAnimationGroup { ctx in
+        NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.18
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             p.animator().alphaValue = 0
-        }
+        }, completionHandler: { [weak self] in
+            // Hidden now: tell the content to collapse its tool/nav sections so the
+            // next open is fresh. Skip if the panel was reopened during the fade.
+            guard let self, !self.isPanelShown else { return }
+            NotificationCenter.default.post(name: .crispPanelDidClose, object: nil)
+        })
         if let monitor = clickMonitor {
             NSEvent.removeMonitor(monitor)
             clickMonitor = nil
