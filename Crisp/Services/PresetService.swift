@@ -57,15 +57,85 @@ final class PresetService: ObservableObject, @unchecked Sendable {
         savePresets()
     }
 
-    /// Overwrites a user preset with the current display state (name and icon kept).
+    /// Overwrites a user preset with the current display state (name, icon, and
+    /// which attributes it controls are kept).
     func updatePreset(id: UUID) {
         guard let index = presets.firstIndex(where: { $0.id == id }),
               !presets[index].isBuiltin else { return }
-        let captured = captureCurrentState(name: presets[index].name, icon: presets[index].icon)
+        let existing = presets[index]
+        let captured = captureCurrentState(
+            name: existing.name, icon: existing.icon,
+            includeResolution: existing.includesResolution,
+            includeBrightness: existing.includesBrightness,
+            includeArrangement: existing.includesArrangement
+        )
         presets[index].displays = captured.displays
         savePresets()
         // The preset now matches the current state by definition.
         activePresetID = id
+    }
+
+    /// Edits an existing user preset's identity and capture inclusions. Identity
+    /// (name/icon/color) updates directly; a capture is only dropped or
+    /// re-captured when its inclusion actually changed, so captures left alone
+    /// keep their stored values across a rename.
+    func editPreset(id: UUID, name: String, icon: String, colorName: String?,
+                    includeResolution: Bool, includeBrightness: Bool, includeArrangement: Bool) {
+        guard let index = presets.firstIndex(where: { $0.id == id }),
+              !presets[index].isBuiltin else { return }
+        presets[index].name = name
+        presets[index].icon = icon
+        presets[index].colorName = colorName
+        savePresets()
+        for (capture, want) in [(PresetCapture.resolution, includeResolution),
+                                (.brightness, includeBrightness),
+                                (.arrangement, includeArrangement)]
+        where presets[index].includes(capture) != want {
+            setCapture(id: id, capture, included: want)
+        }
+    }
+
+    /// Flips whether a preset controls one attribute. Turning it off drops the
+    /// stored value (nil, so apply skips it); turning it back on re-captures the
+    /// current live value for each of the preset's displays. A display that's
+    /// offline can't be re-captured, so its entry stays excluded.
+    func setCapture(id: UUID, _ capture: PresetCapture, included: Bool) {
+        guard let index = presets.firstIndex(where: { $0.id == id }),
+              !presets[index].isBuiltin else { return }
+        let displays = DisplayManagerAccessor.shared.displays
+        presets[index].displays = presets[index].displays.map { entry in
+            var e = entry
+            let live = displays.first(where: { $0.displayUUID == entry.displayUUID && $0.isOnline })
+            switch capture {
+            case .resolution:
+                if included, let live {
+                    let mode = live.currentDisplayMode
+                    e.width = mode?.width ?? live.pixelWidth
+                    e.height = mode?.height ?? live.pixelHeight
+                    e.isHiDPI = mode?.isHiDPI ?? false
+                } else if !included {
+                    e.width = nil; e.height = nil; e.isHiDPI = nil
+                }
+            case .brightness:
+                if included, let live {
+                    e.brightness = live.brightness / 100.0
+                } else if !included {
+                    e.brightness = nil
+                }
+            case .arrangement:
+                if included, let live {
+                    e.arrangementX = live.bounds.origin.x
+                    e.arrangementY = live.bounds.origin.y
+                } else if !included {
+                    e.arrangementX = nil; e.arrangementY = nil
+                }
+            }
+            return e
+        }
+        savePresets()
+        // What the preset controls changed; it no longer cleanly represents the
+        // last-applied state.
+        if activePresetID == id { activePresetID = nil }
     }
 
     // MARK: - Apply
@@ -97,7 +167,7 @@ final class PresetService: ObservableObject, @unchecked Sendable {
         var anyActionTaken = false
 
         for entry in preset.displays {
-            print("[PresetService] entry uuid=\(entry.displayUUID) target=\(entry.width)×\(entry.height) hiDPI=\(entry.isHiDPI)")
+            print("[PresetService] entry uuid=\(entry.displayUUID) target=\(entry.resolutionLabel)")
 
             guard let display = displays.first(where: { $0.displayUUID == entry.displayUUID }) else {
                 print("[PresetService]   -> no display matched UUID '\(entry.displayUUID)' – skipping")
@@ -110,17 +180,17 @@ final class PresetService: ObservableObject, @unchecked Sendable {
             let displayID = display.displayID
             print("[PresetService]   -> matched display '\(display.name)' (id=\(displayID)), \(display.availableModes.count) available modes")
 
-            // Set resolution — never change built-in display resolution via presets,
-            // but built-in brightness and arrangement below still apply.
+            // Set resolution — only when the preset includes it (width present) and
+            // it's not the built-in panel (never driven by presets). Brightness and
+            // arrangement below still apply regardless.
             if display.isBuiltin {
                 print("[PresetService]   -> built-in display, skipping resolution")
-            } else {
+            } else if let w = entry.width, let h = entry.height {
+                let hiDPI = entry.isHiDPI ?? false
                 let targetMode = display.availableModes.first(where: {
-                    $0.width == entry.width &&
-                    $0.height == entry.height &&
-                    $0.isHiDPI == entry.isHiDPI
+                    $0.width == w && $0.height == h && $0.isHiDPI == hiDPI
                 }) ?? display.availableModes.first(where: {
-                    $0.width == entry.width && $0.height == entry.height
+                    $0.width == w && $0.height == h
                 })
 
                 if let mode = targetMode {
@@ -137,7 +207,7 @@ final class PresetService: ObservableObject, @unchecked Sendable {
                         anyActionTaken = true
                     }
                 } else {
-                    print("[PresetService]   -> WARNING: no matching mode found for \(entry.width)×\(entry.height) hiDPI=\(entry.isHiDPI)")
+                    print("[PresetService]   -> WARNING: no matching mode found for \(w)×\(h) hiDPI=\(hiDPI)")
                     print("[PresetService]      available: \(display.availableModes.map { "\($0.width)×\($0.height)/\($0.isHiDPI)" }.joined(separator: ", "))")
                 }
             }
@@ -173,20 +243,25 @@ final class PresetService: ObservableObject, @unchecked Sendable {
 
     // MARK: - Capture
 
-    /// Snapshots all current online displays into a new preset.
-    func captureCurrentState(name: String, icon: String) -> DisplayPreset {
+    /// Snapshots all current online displays into a new preset. The include
+    /// flags decide which attributes the preset controls; an excluded attribute
+    /// is stored as nil and won't be touched on apply.
+    func captureCurrentState(name: String, icon: String,
+                             includeResolution: Bool = true,
+                             includeBrightness: Bool = true,
+                             includeArrangement: Bool = true) -> DisplayPreset {
         let displays = DisplayManagerAccessor.shared.displays
         let entries: [DisplayPresetEntry] = displays.compactMap { display in
             guard display.isOnline else { return nil }
             let mode = display.currentDisplayMode
             return DisplayPresetEntry(
                 displayUUID: display.displayUUID,
-                width: mode?.width ?? display.pixelWidth,
-                height: mode?.height ?? display.pixelHeight,
-                isHiDPI: mode?.isHiDPI ?? false,
-                brightness: display.brightness / 100.0,
-                arrangementX: display.bounds.origin.x,
-                arrangementY: display.bounds.origin.y
+                width: includeResolution ? (mode?.width ?? display.pixelWidth) : nil,
+                height: includeResolution ? (mode?.height ?? display.pixelHeight) : nil,
+                isHiDPI: includeResolution ? (mode?.isHiDPI ?? false) : nil,
+                brightness: includeBrightness ? display.brightness / 100.0 : nil,
+                arrangementX: includeArrangement ? display.bounds.origin.x : nil,
+                arrangementY: includeArrangement ? display.bounds.origin.y : nil
             )
         }
         return DisplayPreset(name: name, icon: icon, displays: entries)
@@ -196,14 +271,17 @@ final class PresetService: ObservableObject, @unchecked Sendable {
     func currentPresetMatch() -> UUID? {
         let displays = DisplayManagerAccessor.shared.displays
         for preset in presets {
+            // Match is resolution-defined; brightness/arrangement-only presets don't participate.
+            guard preset.includesResolution else { continue }
             let matches = preset.displays.allSatisfy { entry in
                 guard let display = displays.first(where: { $0.displayUUID == entry.displayUUID }),
                       display.isOnline else { return false }
                 // Built-in entries never drive resolution, so they don't gate matching
                 if display.isBuiltin { return true }
+                // Entry without a resolution doesn't gate on it
+                guard let w = entry.width, let h = entry.height else { return true }
                 let mode = display.currentDisplayMode
-                let modeMatch = mode?.width == entry.width && mode?.height == entry.height
-                return modeMatch
+                return mode?.width == w && mode?.height == h
             }
             if matches && !preset.displays.isEmpty { return preset.id }
         }

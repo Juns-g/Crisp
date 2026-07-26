@@ -4,12 +4,19 @@ import CoreGraphics
 struct DisplayPresetEntry: Codable, Identifiable {
     var id = UUID()
     var displayUUID: String       // matches physical display
-    var width: Int
-    var height: Int
-    var isHiDPI: Bool
+    // nil == attribute not included in this preset (won't be applied).
+    // Old presets always stored these keys, so they decode as "included".
+    var width: Int?
+    var height: Int?
+    var isHiDPI: Bool?
     var brightness: Double?       // optional brightness 0.0-1.0
     var arrangementX: Double?     // optional position
     var arrangementY: Double?
+
+    var resolutionLabel: String {
+        guard let w = width, let h = height else { return "—" }
+        return "\(w)×\(h)\((isHiDPI ?? false) ? " HiDPI" : "")"
+    }
 }
 
 struct DisplayPreset: Codable, Identifiable {
@@ -19,4 +26,31 @@ struct DisplayPreset: Codable, Identifiable {
     var colorName: String? = nil  // chip color key; nil = default
     var isBuiltin: Bool = false
     var displays: [DisplayPresetEntry]
+
+    // Which attributes this preset controls (derived from whether any entry stores one).
+    var includesResolution: Bool { displays.contains { $0.width != nil } }
+    var includesBrightness: Bool { displays.contains { $0.brightness != nil } }
+    var includesArrangement: Bool { displays.contains { $0.arrangementX != nil } }
+
+    func includes(_ capture: PresetCapture) -> Bool {
+        switch capture {
+        case .resolution: includesResolution
+        case .brightness: includesBrightness
+        case .arrangement: includesArrangement
+        }
+    }
+}
+
+/// One toggleable attribute a preset can control. Used by the preset row's
+/// ⋯ menu to drop or re-add an attribute after the preset already exists.
+enum PresetCapture: String, CaseIterable, Identifiable {
+    case resolution, brightness, arrangement
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .resolution: "Resolution"
+        case .brightness: "Brightness"
+        case .arrangement: "Arrangement"
+        }
+    }
 }
