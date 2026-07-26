@@ -157,7 +157,7 @@ struct DisplayModeListView: View {
                 errorMessage = nil
             } else {
                 withAnimation {
-                    errorMessage = "Unable to switch to \(mode.resolutionString), please try again"
+                    errorMessage = String(localized: "Unable to switch to \(mode.resolutionString), please try again")
                 }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 3_000_000_000)

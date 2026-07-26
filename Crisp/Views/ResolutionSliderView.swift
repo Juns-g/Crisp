@@ -130,7 +130,7 @@ struct ResolutionSliderView: View {
                 errorMessage = nil
             } else {
                 syncSliderToCurrentMode()
-                errorMessage = "Switch failed, please try again"
+                errorMessage = String(localized: "Switch failed, please try again")
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     errorMessage = nil

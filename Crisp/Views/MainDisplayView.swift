@@ -38,7 +38,7 @@ struct MainDisplayView: View {
                             among: displayManager.displays
                         )
                         if !success {
-                            errorMessage = "Failed to set main display"
+                            errorMessage = String(localized: "Failed to set main display")
                             Task { @MainActor in
                                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                                 errorMessage = nil

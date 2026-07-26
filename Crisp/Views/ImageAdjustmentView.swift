@@ -142,7 +142,7 @@ struct ImageAdjustmentView: View {
 
     private func adjustRow(
         icon: String,
-        label: String,
+        label: LocalizedStringKey,
         value: Binding<Double>,
         accent: Color = .blue
     ) -> some View {
@@ -179,7 +179,7 @@ struct ImageAdjustmentView: View {
     // MARK: - Action button builder
 
     private func actionButton(
-        title: String,
+        title: LocalizedStringKey,
         systemImage: String,
         isActive: Bool,
         action: @escaping () -> Void
@@ -233,7 +233,7 @@ struct ImageAdjustmentView: View {
 
 private struct AdjustRow: View {
     let icon: String
-    let label: String
+    let label: LocalizedStringKey
     @Binding var value: Double
     let accent: Color
     let commitAction: () -> Void

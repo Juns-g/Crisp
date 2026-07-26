@@ -70,8 +70,8 @@ struct HiDPIToggleRow: View {
     }
 
     private var subtitle: String? {
-        if reconnectNeeded { return "Reconnect the display to finish" }
-        if !isOn && overridesMissing { return "First enable asks for an administrator password" }
+        if reconnectNeeded { return String(localized: "Reconnect the display to finish") }
+        if !isOn && overridesMissing { return String(localized: "First enable asks for an administrator password") }
         return nil
     }
 

@@ -106,10 +106,17 @@ struct ExpandableRow: View {
     @Binding var isExpanded: Bool
     @State private var isHovered = false
 
+    /// Resolve the label key through NSLocalizedString so Text(String) displays
+    /// the localized value (Text(_ content: String) does NOT auto-localize,
+    /// unlike Text(_ key: LocalizedStringKey)).
+    private var localizedLabel: String {
+        NSLocalizedString(label, comment: "")
+    }
+
     var body: some View {
         HStack {
             MenuItemIcon(systemName: icon, color: iconColor)
-            Text(label).font(.body)
+            Text(localizedLabel).font(.body)
             Spacer()
             if let sub = subtitle, !sub.isEmpty {
                 Text(sub)
@@ -137,7 +144,7 @@ struct ExpandableRow: View {
             }
         }
         .onHover { isHovered = $0 }
-        .accessibilityLabel(isExpanded ? "\(label), expanded" : "\(label), collapsed")
+        .accessibilityLabel(isExpanded ? "\(localizedLabel), expanded" : "\(localizedLabel), collapsed")
         .accessibilityHint("Click to expand or collapse this section")
         .accessibilityAddTraits(.isButton)
     }
