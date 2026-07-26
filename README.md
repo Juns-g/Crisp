@@ -26,6 +26,10 @@ brew install --cask didriksg/tap/crisp
 
 Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/releases) and drag Crisp to Applications. The app is unsigned; on first launch, right-click Crisp.app and choose Open.
 
+## Support
+
+Crisp is free, and every feature stays free. If it saved you a BetterDisplay or Lunar license and you'd like to say thanks, you can [buy me a coffee](https://ko-fi.com/didriksg). Completely optional.
+
 ## Requirements
 
 - macOS 15 (Sequoia) or later; on macOS 26 the panel uses the native Liquid Glass backdrop
