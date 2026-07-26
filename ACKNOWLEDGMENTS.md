@@ -31,6 +31,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Contributions
+
+Physical display disconnect and reconnect (Apple Silicon) contributed by
+[@caicaiks](https://github.com/caicaiks).
+
 ## Translations
 
 Simplified Chinese (简体中文) localization contributed by
