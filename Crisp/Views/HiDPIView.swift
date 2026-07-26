@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Single HiDPI switch: flips between the builtin Native/HiDPI presets, and
 /// transparently installs the per-monitor override (admin prompt, one-time)
@@ -121,6 +122,15 @@ struct HiDPIToggleRow: View {
                 await PresetService.shared.applyPreset(native)
             }
             isLoading = false
+            // The first-time enable shows a system auth prompt that can steal key
+            // focus, leaving the switch drawn in its inactive (grey) style until
+            // the panel is reopened. Re-key the still-open panel so it redraws
+            // active in place. (isVisible guard: never resurrect a closed panel.)
+            await MainActor.run {
+                if let panel = NSApp.windows.first(where: { $0 is MenuPanel }), panel.isVisible {
+                    panel.makeKey()
+                }
+            }
             // Settle-check: once the mode change has had time to land, adopt
             // whatever is actually true (catches silent apply failures).
             try? await Task.sleep(nanoseconds: 5_000_000_000)

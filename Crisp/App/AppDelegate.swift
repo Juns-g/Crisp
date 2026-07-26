@@ -382,6 +382,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
                 Task { @MainActor in
                     guard let self, let p = self.panel else { return }
+                    // Don't dismiss while our own admin auth dialog is up: those
+                    // clicks land in SecurityAgent (outside the panel).
+                    if PanelOpenGuard.suppressAutoDismiss { return }
                     // Global monitors normally fire only for clicks landing in
                     // OTHER apps (= outside the panel). But during the dark
                     // mode crossfade the system's snapshot overlay intercepts
@@ -438,6 +441,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func windowDidResignKey(_ notification: Notification) {
         if (notification.object as? MenuPanel) === panel {
+            // Don't dismiss while our own admin auth dialog is up: it steals key
+            // as it appears (the HiDPI override install prompt).
+            if PanelOpenGuard.suppressAutoDismiss { return }
             // Same overlay caveat as the click monitor: during the crossfade
             // the snapshot window can steal key while the user is clicking
             // INSIDE the panel; don't treat that as clicking away.

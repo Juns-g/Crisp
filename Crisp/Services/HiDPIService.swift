@@ -133,6 +133,17 @@ final class HiDPIService: @unchecked Sendable {
         guard let appleScript = NSAppleScript(source: script) else {
             return "Failed to create AppleScript"
         }
+        // The auth dialog steals key and swallows the user's clicks, which would
+        // otherwise trip the panel's auto-dismiss. Suppress that here. The
+        // dismiss events queue while the main thread is blocked below and only
+        // fire once it unblocks, so keep suppression alive briefly afterward.
+        PanelOpenGuard.suppressAutoDismiss = true
+        defer {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                PanelOpenGuard.suppressAutoDismiss = false
+            }
+        }
         appleScript.executeAndReturnError(&error)
         if let error = error {
             let msg = error[NSAppleScript.errorMessage] as? String ?? "Unknown error"
