@@ -344,7 +344,7 @@ struct CaptureToggleRow: View {
             HStack(spacing: 8) {
                 MenuItemIcon(systemName: icon, color: color)
                     .accessibilityHidden(true)
-                Text(label)
+                Text(LocalizedStringKey(label))
                     .font(.body)
                 Spacer()
             }
