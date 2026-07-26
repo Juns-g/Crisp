@@ -113,23 +113,33 @@ private struct DisconnectedDisplayRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            MenuItemIcon(systemName: "rectangle.slash", color: .secondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(record.name).font(.body).lineLimit(1)
-                Text("\(record.width)×\(record.height)")
-                    .font(.caption2).foregroundColor(.secondary)
+            // The display is inactive, so dim its icon + name; it brightens as the
+            // row is hovered, cueing that a click brings it back.
+            HStack(spacing: 8) {
+                MenuItemIcon(systemName: "rectangle.slash", color: .secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(record.name).font(.body).lineLimit(1)
+                    Text(verbatim: "\(record.width)×\(record.height)")
+                        .font(.caption2).foregroundColor(.secondary)
+                }
             }
+            .opacity(isHovered ? 1 : 0.6)
+
             Spacer()
+
             if busy {
                 ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
             } else {
+                // Liquid-Glass accent capsule; the whole row is the tap target, so
+                // this reads as the affordance and deepens with the row on hover.
                 Text("Reconnect")
                     .font(.caption).fontWeight(.medium)
-                    .foregroundColor(isHovered ? .accentColor : .secondary)
-                Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(isHovered ? .accentColor : .secondary)
-                    .accessibilityHidden(true)
+                    .foregroundColor(.accentColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule().fill(Color.accentColor.opacity(isHovered ? 0.22 : 0.12))
+                    )
             }
         }
         .padding(.horizontal, 12)
