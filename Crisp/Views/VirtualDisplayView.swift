@@ -136,7 +136,7 @@ struct VirtualDisplayView: View {
             let ok = await service.create(config: config)
             activatingID = nil
             if !ok {
-                createError = "Failed to activate virtual display. Please try again."
+                createError = String(localized: "Failed to activate virtual display. Please try again.")
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     createError = nil
@@ -155,7 +155,7 @@ struct VirtualDisplayView: View {
             if ok {
                 withAnimation(.panelResize) { editingID = nil }
             } else {
-                createError = "Failed to update virtual display. Please try again."
+                createError = String(localized: "Failed to update virtual display. Please try again.")
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     createError = nil
@@ -173,7 +173,7 @@ struct VirtualDisplayView: View {
             if success {
                 withAnimation(.panelResize) { showCreateForm = false }
             } else {
-                createError = "Failed to create virtual display. Please try again."
+                createError = String(localized: "Failed to create virtual display. Please try again.")
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     createError = nil
@@ -328,7 +328,7 @@ struct CreateVirtualDisplayForm: View {
         self._nameFocused = nameFocused
         self.onCancel = onCancel
         self.onConfirm = onConfirm
-        _name = State(initialValue: editing?.name ?? "Virtual Display")
+        _name = State(initialValue: editing?.name ?? String(localized: "Virtual Display"))
         _autoCreate = State(initialValue: editing?.autoCreate ?? true)
         // Match the config's size to a preset; a non-preset size (e.g. a custom
         // aspect ratio) selects "Custom" and prefills the width/height fields.
@@ -381,9 +381,9 @@ struct CreateVirtualDisplayForm: View {
 
                 if selectedPreset == customTag {
                     HStack(spacing: 6) {
-                        customField(text: $customWidth, placeholder: "Width")
+                        customField(text: $customWidth, placeholder: String(localized: "Width"))
                         Text("×").foregroundColor(.secondary)
-                        customField(text: $customHeight, placeholder: "Height")
+                        customField(text: $customHeight, placeholder: String(localized: "Height"))
                         Spacer()
                     }
                 }
@@ -429,8 +429,10 @@ struct CreateVirtualDisplayForm: View {
     }
 
     private var confirmTitle: String {
-        if isCreating { return editing == nil ? "Creating…" : "Saving…" }
-        return editing == nil ? "Create" : "Save"
+        if isCreating {
+            return editing == nil ? String(localized: "Creating…") : String(localized: "Saving…")
+        }
+        return editing == nil ? String(localized: "Create") : String(localized: "Save")
     }
 
     /// The chosen resolution: a preset, or the validated custom width×height.
@@ -468,7 +470,7 @@ struct CreateVirtualDisplayForm: View {
         guard !isCreating, let res = resolution else { return }
         let config = VirtualDisplayService.VirtualDisplayConfig(
             id: editing?.id ?? UUID(),
-            name: name.isEmpty ? "Virtual Display" : name,
+            name: name.isEmpty ? String(localized: "Virtual Display") : name,
             width: res.width,
             height: res.height,
             refreshRate: editing?.refreshRate ?? 60,

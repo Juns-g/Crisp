@@ -3,6 +3,11 @@ options:
   bundleIdPrefix: com.crisp
   deploymentTarget:
     macOS: "15.0"
+  developmentLanguage: en
+  knownRegions:
+    - en
+    - zh-Hans
+    - Base
 
 targets:
   Crisp:

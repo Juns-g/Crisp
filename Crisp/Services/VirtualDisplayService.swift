@@ -112,7 +112,7 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
         )
         descriptor.maxPixelsWide = UInt32(w)
         descriptor.maxPixelsHigh = UInt32(h)
-        descriptor.name = config.name.isEmpty ? "Crisp Virtual" : config.name
+        descriptor.name = config.name.isEmpty ? String(localized: "Crisp Virtual") : config.name
         descriptor.vendorID = 0xEEEE  // non-zero required — 0 causes CGVirtualDisplay(descriptor:) to return nil
         // Identity must be both UNIQUE per config (else a second virtual display
         // collides with the first, which WindowServer mirrors/rejects) and STABLE

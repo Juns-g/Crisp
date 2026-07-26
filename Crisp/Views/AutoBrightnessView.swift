@@ -36,7 +36,7 @@ struct AutoBrightnessView: View {
 
     private var statusText: String {
         builtinUnavailable
-            ? "No built-in display detected"
-            : "Follows the built-in display's brightness"
+            ? String(localized: "No built-in display detected")
+            : String(localized: "Follows the built-in display's brightness")
     }
 }

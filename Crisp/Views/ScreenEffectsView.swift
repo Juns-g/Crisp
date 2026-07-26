@@ -70,6 +70,12 @@ private struct EffectCircleButton: View {
     var onIcon: Color = .black
     let action: () -> Void
 
+    /// Resolve the label key through NSLocalizedString; Text(String) does not
+    /// auto-localize unlike Text(LocalizedStringKey).
+    private var localizedLabel: String {
+        NSLocalizedString(label, comment: "")
+    }
+
     var body: some View {
         Button {
             // Instant state flip, like the native Control Center circles.
@@ -85,7 +91,7 @@ private struct EffectCircleButton: View {
                         .foregroundColor(isOn ? onIcon : .primary.opacity(0.85))
                 }
                 VStack(spacing: 1) {
-                    Text(label)
+                    Text(localizedLabel)
                         .font(.caption)
                         .foregroundColor(.primary)
                     Text(isOn ? "On" : "Off")
@@ -96,7 +102,7 @@ private struct EffectCircleButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(InstantPressStyle())
-        .accessibilityLabel("\(label), \(isOn ? "on" : "off")")
+        .accessibilityLabel(isOn ? "\(localizedLabel), on" : "\(localizedLabel), off")
         .accessibilityAddTraits(.isButton)
     }
 }

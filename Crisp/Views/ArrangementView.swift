@@ -207,7 +207,7 @@ struct ArrangementView: View {
                 displayManager.refreshDisplays()
             } else {
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    dragError = "Failed to arrange displays. Please try again."
+                    dragError = String(localized: "Failed to arrange displays. Please try again.")
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     withAnimation { self.dragError = nil }
