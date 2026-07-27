@@ -1,6 +1,12 @@
 # Crisp
 
-A native macOS menu bar app for managing external displays: HiDPI resolutions, brightness, arrangement, color, and presets. A free, open-source alternative to BetterDisplay and Lunar: all the core display-management features, zero cost.
+Crisp is a free, open-source alternative to BetterDisplay and Lunar: a lightweight, native macOS menu bar app for managing external displays. It's built to feel like an expanded version of the Mac's built-in display menu: the controls you already use, plus the ones it's missing.
+
+The headline feature is proper display scaling for external monitors. macOS only offers sharp, scaled resolutions on its own Retina displays, so most monitors below 4K (like 1080p and 1440p) look either blurry when you scale them up or too small at native resolution. Crisp adds the HiDPI (Retina-style) scaled resolutions macOS leaves out, so everything looks sharp and scaled right. It also handles brightness for external displays (DDC), display arrangement, color, and presets, all from the menu bar.
+
+No Pro tier, no license key. Crisp keeps every feature free, including a few that BetterDisplay and Lunar charge for: disconnecting displays, color adjustments, and auto-brightness that follows your built-in screen.
+
+Fully localized in English and Simplified Chinese (简体中文).
 
 https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 
@@ -8,16 +14,15 @@ https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 
 ## Features
 
-- **HiDPI on any display**: enable Retina-style scaled resolutions on external monitors, including automatic HiDPI setup for 2K+ displays
+- **Sharp, Retina-quality scaling on any display**: HiDPI scaled resolutions that make external monitors crisp instead of blurry or undersized, with automatic HiDPI setup for 1440p and larger displays
 - **Brightness everywhere**: hardware DDC control for external monitors with software (gamma) fallback, smooth fades, brightness-key routing to the display under the cursor, and true darkness below the hardware floor
 - **Presets**: save named display configurations (resolution, brightness, arrangement) with custom icons and colors, apply with one click, update in place
 - **Display arrangement**: drag-to-arrange canvas, main display switching
 - **Disconnect displays**: turn physical displays off and back on from the menu, remembered across sleep/wake (Apple Silicon)
-- **Screen effects**: Dark Mode (with the system's animated transition), Night Shift, True Tone
+- **System toggles**: Dark Mode, Night Shift, and True Tone, one click from the menu bar
 - **Color**: ICC profile switching, gamma/contrast/gain image adjustment
 - **Virtual displays**: create HiDPI virtual screens
 - **Extras**: combined brightness slider, auto brightness following the built-in display, notch hiding, launch at login
-- **Languages**: English and Simplified Chinese (简体中文)
 
 
 ## Install
@@ -26,7 +31,7 @@ https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 brew install --cask didriksg/tap/crisp
 ```
 
-Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/releases) and drag Crisp to Applications. The app is unsigned; on first launch, right-click Crisp.app and choose Open.
+Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/releases) and drag Crisp to Applications. The app isn't notarized, so on first launch macOS blocks it: open **System Settings > Privacy & Security**, scroll down, and click **Open Anyway**. (Homebrew installs skip this.)
 
 ## Support
 
@@ -49,7 +54,7 @@ xcodegen generate   # generates Crisp.xcodeproj from project.yml
 open Crisp.xcodeproj
 ```
 
-`./build.sh` produces a distributable DMG (unsigned; right-click, then Open to bypass Gatekeeper). No Xcode? See [docs/BUILDING.md](docs/BUILDING.md) for a Command Line Tools-only build.
+For a distributable DMG (Command Line Tools only, no full Xcode) and the fast edit-compile-run dev loop, see [docs/BUILDING.md](docs/BUILDING.md).
 
 ## Origin
 

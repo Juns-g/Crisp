@@ -50,6 +50,14 @@ struct PresetRow: View {
     @State private var isEditing = false
     @FocusState private var nameFocused: Bool
 
+    /// Resolutions this preset will set, joined across displays. Shown as a hover
+    /// tooltip (.help) so the row stays compact and menu-like. nil when the preset
+    /// controls no resolution (brightness/arrangement-only), so no tooltip appears.
+    private var resolutionSummary: String? {
+        let labels = preset.displays.compactMap { $0.width != nil ? $0.resolutionLabel : nil }
+        return labels.isEmpty ? nil : labels.joined(separator: ", ")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if isEditing {
@@ -66,6 +74,11 @@ struct PresetRow: View {
                 rowContent
                     .transition(.opacity)
             }
+        }
+        // Collapse the inline edit form when the panel closes, so it reopens
+        // fresh like the rest of the panel (fires while hidden).
+        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
+            isEditing = false
         }
     }
 
@@ -120,6 +133,7 @@ struct PresetRow: View {
             Task { await PresetService.shared.applyPreset(preset) }
         }
         .onHover { isHovered = $0 }
+        .help(resolutionSummary ?? "")
         .contextMenu { rowActions }
         .disabled(PresetService.shared.isApplying)
     }

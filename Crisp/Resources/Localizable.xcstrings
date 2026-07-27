@@ -1441,12 +1441,12 @@
         }
       }
     },
-    "Follows the built-in display's brightness" : {
+    "External displays follow the built-in display's brightness" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跟随内置显示器的亮度"
+            "value" : "外接显示器跟随内置显示器的亮度"
           }
         }
       }

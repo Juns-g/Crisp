@@ -107,6 +107,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var screenObserver: NSObjectProtocol?
     private var clickMonitor: Any?
     private var clickInterceptor: Any?
+    // The NSMenu currently tracking (a SwiftUI Menu / context menu), captured so an
+    // outside-panel click can cancel it the way native menus dismiss on click-away.
+    private var trackingMenu: NSMenu?
 
     // One-time migration of legacy `fd.*` UserDefaults keys into the `crisp.*`
     // namespace. Declared above `displayManager` on purpose: stored-property
@@ -189,6 +192,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     guard let self, self.isPanelShown, let p = self.panel else { return }
                     self.positionPanel(p)
                 }
+            }
+        }
+
+        // A SwiftUI `Menu` (row ⋯ buttons, context menus) opens an AppKit menu in
+        // its own window outside the panel frame. Suppress the panel's outside-click
+        // / resign-key dismissal while any menu tracks, so clicking a menu item that
+        // spilled past the panel edge doesn't close the panel out from under it.
+        NotificationCenter.default.addObserver(
+            forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let menu = note.object as? NSMenu
+            Task { @MainActor in
+                PanelOpenGuard.isMenuTracking = true
+                self?.trackingMenu = menu
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                // Outlast the outside-click monitor's own async main-actor hop
+                // (which fired on the item's mouse-down) so it still sees tracking.
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                PanelOpenGuard.isMenuTracking = false
+                self?.trackingMenu = nil
             }
         }
 
@@ -416,8 +444,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 Task { @MainActor in
                     guard let self, let p = self.panel else { return }
                     // Don't dismiss while our own admin auth dialog is up: those
-                    // clicks land in SecurityAgent (outside the panel).
-                    if PanelOpenGuard.suppressAutoDismiss { return }
+                    // clicks land in SecurityAgent (outside the panel). Same for a
+                    // tracking menu whose items spill outside the panel frame, or an
+                    // in-panel confirmation alert awaiting a choice.
+                    // A menu is tracking: an outside-panel click should dismiss the
+                    // MENU the way native menus do, but keep the panel open. Clicks
+                    // on the menu itself go to our own menu window and never reach
+                    // this global monitor, so selecting an item (even one spilled
+                    // past the panel edge) is unaffected.
+                    if PanelOpenGuard.isMenuTracking {
+                        if !p.frame.contains(NSEvent.mouseLocation) {
+                            self.trackingMenu?.cancelTracking()
+                        }
+                        return
+                    }
+                    if PanelOpenGuard.suppressAutoDismiss
+                        || PanelOpenGuard.isConfirmationActive { return }
                     // Global monitors normally fire only for clicks landing in
                     // OTHER apps (= outside the panel). But during the dark
                     // mode crossfade the system's snapshot overlay intercepts
@@ -480,8 +522,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) {
         if (notification.object as? MenuPanel) === panel {
             // Don't dismiss while our own admin auth dialog is up: it steals key
-            // as it appears (the HiDPI override install prompt).
-            if PanelOpenGuard.suppressAutoDismiss { return }
+            // as it appears (the HiDPI override install prompt). Same for a
+            // tracking menu or an in-panel confirmation alert, which take key.
+            if PanelOpenGuard.suppressAutoDismiss || PanelOpenGuard.isMenuTracking
+                || PanelOpenGuard.isConfirmationActive { return }
             // Same overlay caveat as the click monitor: during the crossfade
             // the snapshot window can steal key while the user is clicking
             // INSIDE the panel; don't treat that as clicking away.

@@ -164,8 +164,12 @@ final class BrightnessService: @unchecked Sendable {
 
     // MARK: - Public API
 
+    /// `animated: true` glides the built-in slider to the freshly-read value
+    /// instead of snapping — used by the ~1s poll so an ambient-sensor auto-adjust
+    /// reads as smooth motion. Instant (default) on load/wake where the slider
+    /// should show the real value immediately.
     @MainActor
-    func refreshBrightness(for display: DisplayInfo) async {
+    func refreshBrightness(for display: DisplayInfo, animated: Bool = false) async {
         let isBuiltin = display.isBuiltin
         let displayID = display.displayID
 
@@ -176,7 +180,20 @@ final class BrightnessService: @unchecked Sendable {
                 }
             }
             if let b = brightness {
-                display.brightness = b
+                // macOS already moved the backlight; only the displayed value needs
+                // to catch up. Glide it (no hardware write) so the knob doesn't jump
+                // between polls. Deadband avoids a perpetual 60Hz timer on sensor
+                // jitter; sub-0.5% moves are imperceptible, so just set them.
+                if animated, abs(b - display.brightness) >= 0.5 {
+                    animator(for: displayID).animate(
+                        from: display.brightness, to: b,
+                        steps: max(8, Int(1.0 / 0.016)), duration: 1.0
+                    ) { [weak display] value, _ in
+                        display?.brightness = value
+                    }
+                } else {
+                    display.brightness = b
+                }
             }
         } else {
             // First check if DDC is already known to be unavailable; if so skip the

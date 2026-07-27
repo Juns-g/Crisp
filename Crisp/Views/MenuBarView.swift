@@ -28,6 +28,14 @@ enum PanelOpenGuard {
     /// admin auth dialog for installing a HiDPI override) so clicking/typing in
     /// that dialog doesn't dismiss the panel out from under it.
     static var suppressAutoDismiss = false
+    /// True while an AppKit menu (a SwiftUI `Menu`, e.g. a row's ⋯) is tracking.
+    /// Those popups render in their own window outside the panel frame, so a click
+    /// on a menu item reads as an outside-click; suppress dismissal while tracking.
+    static var isMenuTracking = false
+    /// True while an in-panel confirmation alert (e.g. delete) is presented, so an
+    /// outside-click / resign-key leaves the panel and the pending choice intact
+    /// instead of tearing them down mid-decision.
+    static var isConfirmationActive = false
 }
 
 /// The content view remounts on every panel open, resetting @State. Remembering
@@ -540,7 +548,7 @@ struct MenuBarView: View {
             // opens, so poll forever but only touch hardware when shown.
             while !Task.isCancelled {
                 pollExternalState()
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
         .onAppear {
@@ -560,7 +568,9 @@ struct MenuBarView: View {
            Date().timeIntervalSince(last) < 3 { return }
         CoreBrightnessService.shared.refresh()
         for display in visibleDisplays {
-            Task { await BrightnessService.shared.refreshBrightness(for: display) }
+            // animated: glide the built-in slider to sensor-driven changes instead
+            // of snapping every poll (external displays ignore the flag).
+            Task { await BrightnessService.shared.refreshBrightness(for: display, animated: true) }
         }
     }
 }

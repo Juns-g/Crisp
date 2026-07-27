@@ -124,6 +124,20 @@ struct VirtualDisplayView: View {
                 Text("Are you sure you want to delete this virtual display configuration?")
             }
         }
+        // Keep the panel alive while the confirmation is up so an outside-click
+        // doesn't tear it down mid-decision. onDisappear guards against the flag
+        // sticking true if the view unmounts while a config is still pending.
+        .onChange(of: configToDelete) { _, newValue in
+            PanelOpenGuard.isConfirmationActive = (newValue != nil)
+        }
+        .onDisappear { PanelOpenGuard.isConfirmationActive = false }
+        // Collapse the inline create/edit forms when the panel closes, so it
+        // reopens fresh like the rest of the panel (fires while hidden).
+        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
+            showCreateForm = false
+            editingID = nil
+            createError = nil
+        }
     }
 
     /// Re-creates the live CGVirtualDisplay for a config that is off (e.g. after

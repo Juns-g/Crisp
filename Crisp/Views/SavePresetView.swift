@@ -51,6 +51,11 @@ struct SavePresetView: View {
                 .transition(.opacity)
             }
         }
+        // Collapse the create form when the panel closes, so it reopens fresh
+        // like the rest of the panel (fires while hidden).
+        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
+            isShowingForm = false
+        }
     }
 }
 
@@ -157,7 +162,9 @@ struct SavePresetForm: View {
                             .foregroundColor(.secondary)
                         // Plain HStack, not LazyVGrid: lazy containers reposition
                         // their items mid-flight during animated panel resizes.
-                        HStack(spacing: 4) {
+                        // Sized to fit the 242pt inner width (8×26 + 7×3 = 229) so
+                        // expanding the picker doesn't force the fixed-308 panel wider.
+                        HStack(spacing: 3) {
                             ForEach(iconOptions, id: \.symbol) { option in
                                 IconOptionButton(
                                     symbol: option.symbol,
@@ -370,7 +377,7 @@ struct IconOptionButton: View {
             Image(systemName: symbol)
                 .font(.system(size: 13))
                 .foregroundColor(isSelected ? .white : (isHovered ? .primary : .secondary))
-                .frame(width: 28, height: 28)
+                .frame(width: 26, height: 26)
                 .background(
                     RoundedRectangle(cornerRadius: 5)
                         .fill(isSelected ? tint : (isHovered ? Color.primary.opacity(0.08) : Color.clear))

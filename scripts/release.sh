@@ -27,6 +27,14 @@ DMG="$ROOT/Crisp.dmg"
 TAP_REPO="didriksg/homebrew-tap"
 TAP_CASK="Casks/crisp.rb"
 
+# A real release must ship complete translations; the dry run (CI on every PR)
+# skips this so adding an English string doesn't block contributors — the
+# maintainer fills the gaps before publishing.
+if [ "$PUBLISH" = true ]; then
+    echo "==> Checking translation completeness…"
+    python3 "$ROOT/scripts/check-translations.py" Crisp/Resources/Localizable.xcstrings
+fi
+
 rm -rf "$BUILD"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "==> Compiling universal binary (arm64 + x86_64)…"

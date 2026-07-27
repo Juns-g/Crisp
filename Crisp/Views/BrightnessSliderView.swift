@@ -146,8 +146,8 @@ struct BrightnessSliderView: View {
         ddcStatus = BrightnessService.shared.isDDCAvailable(for: display.displayID)
     }
 
-    /// One brightness-key increment (16 steps across the range), same as native.
-    private var brightnessStep: Double { 100.0 / 16.0 }
+    /// Brightness change per tap (and per hold-repeat) of the sun buttons.
+    private var brightnessStep: Double { 10.0 }
 
     private func step(_ delta: Double) {
         let target = max(0, min(100, display.brightness + delta))
@@ -185,7 +185,7 @@ struct CombinedBrightnessView: View {
             }
 
             HStack(spacing: 8) {
-                BrightnessStepButton(systemName: "sun.min.fill") { stepAll(-100.0 / 16.0) }
+                BrightnessStepButton(systemName: "sun.min.fill") { stepAll(-10.0) }
 
                 Slider(value: $combinedBrightness, in: 0...100) { editing in
                     isDragging = editing
@@ -211,7 +211,7 @@ struct CombinedBrightnessView: View {
                     }
                 }
 
-                BrightnessStepButton(systemName: "sun.max.fill") { stepAll(100.0 / 16.0) }
+                BrightnessStepButton(systemName: "sun.max.fill") { stepAll(10.0) }
             }
         }
         .padding(.horizontal, 12)

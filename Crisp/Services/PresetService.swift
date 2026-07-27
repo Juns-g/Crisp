@@ -113,8 +113,9 @@ final class PresetService: ObservableObject, @unchecked Sendable {
                     e.width = mode?.width ?? live.pixelWidth
                     e.height = mode?.height ?? live.pixelHeight
                     e.isHiDPI = mode?.isHiDPI ?? false
+                    e.refreshRate = mode?.refreshRate
                 } else if !included {
-                    e.width = nil; e.height = nil; e.isHiDPI = nil
+                    e.width = nil; e.height = nil; e.isHiDPI = nil; e.refreshRate = nil
                 }
             case .brightness:
                 if included, let live {
@@ -180,12 +181,11 @@ final class PresetService: ObservableObject, @unchecked Sendable {
             let displayID = display.displayID
             print("[PresetService]   -> matched display '\(display.name)' (id=\(displayID)), \(display.availableModes.count) available modes")
 
-            // Set resolution — only when the preset includes it (width present) and
-            // it's not the built-in panel (never driven by presets). Brightness and
-            // arrangement below still apply regardless.
-            if display.isBuiltin {
-                print("[PresetService]   -> built-in display, skipping resolution")
-            } else if let w = entry.width, let h = entry.height {
+            // Set resolution — only when the preset includes it (width present).
+            // The built-in panel is driven too: a preset restores whatever mode was
+            // live when it was captured, so an unchanged built-in resolves to the
+            // alreadyActive no-op below. Brightness and arrangement apply regardless.
+            if let w = entry.width, let h = entry.height {
                 let hiDPI = entry.isHiDPI ?? false
                 let targetMode = display.availableModes.first(where: {
                     $0.width == w && $0.height == h && $0.isHiDPI == hiDPI
@@ -265,6 +265,7 @@ final class PresetService: ObservableObject, @unchecked Sendable {
                 width: includeResolution ? (mode?.width ?? display.pixelWidth) : nil,
                 height: includeResolution ? (mode?.height ?? display.pixelHeight) : nil,
                 isHiDPI: includeResolution ? (mode?.isHiDPI ?? false) : nil,
+                refreshRate: includeResolution ? mode?.refreshRate : nil,
                 brightness: includeBrightness ? display.brightness / 100.0 : nil,
                 arrangementX: includeArrangement ? display.bounds.origin.x : nil,
                 arrangementY: includeArrangement ? display.bounds.origin.y : nil
@@ -282,8 +283,6 @@ final class PresetService: ObservableObject, @unchecked Sendable {
             let matches = preset.displays.allSatisfy { entry in
                 guard let display = displays.first(where: { $0.displayUUID == entry.displayUUID }),
                       display.isOnline else { return false }
-                // Built-in entries never drive resolution, so they don't gate matching
-                if display.isBuiltin { return true }
                 // Entry without a resolution doesn't gate on it
                 guard let w = entry.width, let h = entry.height else { return true }
                 let mode = display.currentDisplayMode
