@@ -12,6 +12,7 @@ https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 - **Brightness everywhere**: hardware DDC control for external monitors with software (gamma) fallback, smooth fades, brightness-key routing to the display under the cursor, and true darkness below the hardware floor
 - **Presets**: save named display configurations (resolution, brightness, arrangement) with custom icons and colors, apply with one click, update in place
 - **Display arrangement**: drag-to-arrange canvas, main display switching
+- **Disconnect displays**: turn physical displays off and back on from the menu, remembered across sleep/wake (Apple Silicon)
 - **Screen effects**: Dark Mode (with the system's animated transition), Night Shift, True Tone
 - **Color**: ICC profile switching, gamma/contrast/gain image adjustment
 - **Virtual displays**: create HiDPI virtual screens
