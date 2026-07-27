@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-15
+    # macOS 26 SDK required: the panel backdrop uses NSGlassEffectView (macOS 26),
+    # which must exist at compile time even though it's #available-gated at runtime.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
