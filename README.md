@@ -4,7 +4,7 @@ A native macOS menu bar app for managing external displays: HiDPI resolutions, b
 
 https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 
-<p align="center"><img src="docs/screenshot.png?v=3" width="406" alt="Crisp menu bar panel"></p>
+<p align="center"><img src="docs/screenshot.png?v=4" width="406" alt="Crisp menu bar panel"></p>
 
 ## Features
 
