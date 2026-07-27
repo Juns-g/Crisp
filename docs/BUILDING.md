@@ -1,8 +1,12 @@
 # Building without Xcode
 
-The full .app bundle requires Xcode (`xcodegen generate`, then archive, or
-`./build.sh` for a DMG). But the binary itself compiles with just the Command
-Line Tools:
+**TL;DR:** run `./dev.sh` — it compiles, swaps the binary into the installed
+`/Applications/Crisp.app`, syncs the version from `project.yml`, re-signs, and
+relaunches. The rest of this doc explains what it does.
+
+You can build the full .app in Xcode (`xcodegen generate`, then archive), or a
+full DMG with `./scripts/release.sh vX.Y.Z` (no Xcode needed). But for the fast
+dev loop, the binary alone compiles with just the Command Line Tools:
 
 ```sh
 swiftc -O -swift-version 5 -strict-concurrency=minimal -parse-as-library \

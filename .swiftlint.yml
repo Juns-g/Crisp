@@ -1,0 +1,33 @@
+# SwiftLint config. Runs in CI only: SwiftLint needs a full toolchain to load
+# SourceKit, which the Command Line Tools-only local build doesn't have (dev.sh
+# builds fine without it, so linting stays a CI concern). See .github/workflows/ci.yml.
+
+disabled_rules:
+  - todo                               # `ponytail:` / TODO notes are intentional here
+  - redundant_optional_initialization  # `= nil` on optionals is a deliberate style choice
+
+excluded:
+  - scripts        # generate-icon.swift is a one-off tool
+  - build
+
+# Rules that default to error severity — keep them as warnings so an unverified
+# baseline can't hard-fail. Tighten later.
+force_cast: warning
+force_try: warning
+
+line_length:
+  warning: 140
+  ignores_comments: true
+  ignores_urls: true
+
+identifier_name:
+  min_length:
+    warning: 1        # short locals (w, h, b, t, a) are idiomatic in this code
+
+# The larger view/service files predate linting; generous caps keep noise down.
+type_body_length:
+  warning: 700
+file_length:
+  warning: 1400
+function_body_length:
+  warning: 150

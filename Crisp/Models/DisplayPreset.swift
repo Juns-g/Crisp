@@ -9,6 +9,10 @@ struct DisplayPresetEntry: Codable, Identifiable {
     var width: Int?
     var height: Int?
     var isHiDPI: Bool?
+    // ponytail: captured alongside resolution but not yet applied or matched on;
+    // here so the future "Refresh rate" toggle can use it (and old presets that
+    // predate the toggle already carry it). nil for pre-existing presets.
+    var refreshRate: Double? = nil
     var brightness: Double?       // optional brightness 0.0-1.0
     var arrangementX: Double?     // optional position
     var arrangementY: Double?
