@@ -16,6 +16,7 @@ https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 - **Color**: ICC profile switching, gamma/contrast/gain image adjustment
 - **Virtual displays**: create HiDPI virtual screens
 - **Extras**: combined brightness slider, auto brightness following the built-in display, notch hiding, launch at login
+- **Languages**: English and Simplified Chinese (简体中文)
 
 
 ## Install

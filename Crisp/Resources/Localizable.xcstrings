@@ -1,6 +1,26 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@, disconnected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，已断开"
+          }
+        }
+      }
+    },
+    "Reconnect this display" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新连接此显示器"
+          }
+        }
+      }
+    },
     "Disconnect Display" : {
       "localizations" : {
         "zh-Hans" : {

@@ -55,6 +55,13 @@ cp "$ICONS/icon_512.png"  "$ICONSET/icon_512x512.png"
 cp "$ICONS/icon_1024.png" "$ICONSET/icon_512x512@2x.png"
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
+echo "==> Compiling localizations from the String Catalog…"
+# The CLT ship no xcstringstool, so generate <lang>.lproj/Localizable.strings
+# ourselves; without this the bundle has zero localizations and ships en-only.
+LANGS=$(python3 "$ROOT/scripts/xcstrings-compile.py" Crisp/Resources/Localizable.xcstrings "$APP/Contents/Resources")
+LOC_XML=""; for l in $LANGS; do LOC_XML="${LOC_XML}<string>${l}</string>"; done
+echo "    languages: $LANGS"
+
 echo "==> Writing Info.plist / PkgInfo…"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -70,6 +77,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleDevelopmentRegion</key><string>en</string>
+	<key>CFBundleLocalizations</key><array>${LOC_XML}</array>
 	<key>CFBundleShortVersionString</key><string>${VERSION}</string>
 	<key>CFBundleVersion</key><string>${VERSION}</string>
 	<key>LSMinimumSystemVersion</key><string>15.0</string>
