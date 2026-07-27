@@ -79,9 +79,11 @@ final class PhysicalDisplayToggleService: ObservableObject {
         disconnected.contains { $0.uuid == uuid }
     }
 
-    /// True if disconnecting `display` right now would leave zero active displays.
+    /// True if disconnecting `display` right now would leave no *viewable* screen.
+    /// Virtual displays are excluded from the count on purpose: they are headless,
+    /// so leaving only a virtual display still blacks out the physical machine.
     func wouldLeaveNoActiveDisplay(_ displayID: CGDirectDisplayID) -> Bool {
-        CGDisplayIsActive(displayID) != 0 && activeDisplayCount() <= 1
+        CGDisplayIsActive(displayID) != 0 && physicalActiveDisplayCount() <= 1
     }
 
     /// All display IDs known to the window server, INCLUDING ones disabled via
@@ -94,10 +96,16 @@ final class PhysicalDisplayToggleService: ObservableObject {
         return Array(ids.prefix(Int(count)))
     }
 
-    private func activeDisplayCount() -> Int {
+    /// Count of active displays that are real physical screens, excluding virtual
+    /// displays managed by VirtualDisplayService (a virtual display is active in
+    /// CGGetActiveDisplayList but is not a viewable screen).
+    private func physicalActiveDisplayCount() -> Int {
         var count: UInt32 = 0
-        CGGetActiveDisplayList(0, nil, &count)
-        return Int(count)
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return 0 }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return 0 }
+        let virtual = VirtualDisplayService.shared
+        return ids.prefix(Int(count)).filter { !virtual.isVirtualDisplay($0) }.count
     }
 
     private func uuid(for displayID: CGDirectDisplayID) -> String {
