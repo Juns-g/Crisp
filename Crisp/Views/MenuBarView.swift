@@ -239,7 +239,10 @@ struct UpdateRow: View {
 /// update row — the genre standard for free apps. Never a popup or launch-time
 /// nag, and every feature stays free.
 struct SupportRow: View {
-    @State private var expanded = false
+    // Owned by the parent (SettingsView) so its panel-close handler can collapse
+    // it; a private @State here would survive the reset and reopen still expanded,
+    // unlike every other submenu.
+    @Binding var expanded: Bool
 
     private let kofi = "https://ko-fi.com/didriksg"
     private let afdian = "https://ifdian.net/a/didriksg"
@@ -567,6 +570,10 @@ struct MenuBarView: View {
 struct SettingsView: View {
     @ObservedObject private var settings = SettingsService.shared
     @ObservedObject private var presetService = PresetService.shared
+    // SettingsView stays mounted (only height-clipped) across panel opens, so the
+    // support submenu's expansion must be reset explicitly on close like every
+    // other section, or it reopens still expanded.
+    @State private var showSupport = false
     @EnvironmentObject var displayManager: DisplayManager
 
     private var builtinPresets: [DisplayPreset] {
@@ -663,9 +670,12 @@ struct SettingsView: View {
             // Optional support link, tucked next to the version stamp where
             // "about" info lives. Muted, but with a link affordance so it doesn't
             // read as static text — no popup, no launch nag; every feature stays free.
-            SupportRow()
+            SupportRow(expanded: $showSupport)
         }
         .padding(.vertical, 6)
+        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
+            showSupport = false
+        }
     }
 }
 
