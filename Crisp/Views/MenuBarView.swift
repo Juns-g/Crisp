@@ -239,21 +239,59 @@ struct UpdateRow: View {
 /// update row — the genre standard for free apps. Never a popup or launch-time
 /// nag, and every feature stays free.
 struct SupportRow: View {
-    @State private var isHovered = false
+    @State private var expanded = false
 
-    /// Mainland China can't complete Ko-fi's PayPal/Stripe checkout, so route
-    /// those supporters to Afdian (WeChat/Alipay) and everyone else to Ko-fi.
-    private var supportURL: URL? {
-        let china = Locale.current.region?.identifier == "CN"
-        return URL(string: china
-            ? "https://ifdian.net/a/didriksg"
-            : "https://ko-fi.com/didriksg")
+    private let kofi = "https://ko-fi.com/didriksg"
+    private let afdian = "https://ifdian.net/a/didriksg"
+
+    /// A supporter's payment region can't be detected reliably in a sideloaded
+    /// app (no App Store storefront; Locale.current.region is only a formatting
+    /// hint mainland users often switch away), so the submenu lists both and lets
+    /// them pick. Mainland China can't complete Ko-fi's PayPal/Stripe checkout
+    /// (needs Afdian's WeChat/Alipay), so the hint only ORDERS the list, surfacing
+    /// the likely option first; neither is ever hidden.
+    private var prefersChinese: Bool {
+        Locale.current.region?.identifier == "CN"
+            || Bundle.main.preferredLocalizations.first?.hasPrefix("zh-Hans") == true
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            ExpandableRow(
+                icon: "heart.fill",
+                iconColor: .pink,
+                label: "Support Crisp",
+                isExpanded: $expanded
+            )
+
+            VStack(spacing: 0) {
+                if expanded {
+                    if prefersChinese {
+                        SupportLinkRow(title: "爱发电 (Afdian)", url: afdian)
+                        SupportLinkRow(title: "Ko-fi", url: kofi)
+                    } else {
+                        SupportLinkRow(title: "Ko-fi", url: kofi)
+                        SupportLinkRow(title: "爱发电 (Afdian)", url: afdian)
+                    }
+                }
+            }
+            .padding(.leading, 8)
+            .curtainReveal(expanded)
+        }
+    }
+}
+
+/// One external-link row inside the Support submenu: a label with the ↗ affordance
+/// that opens the platform's page in the browser. Brand names are verbatim so they
+/// are never localized or number-grouped.
+private struct SupportLinkRow: View {
+    let title: String
+    let url: String
+    @State private var isHovered = false
+
+    var body: some View {
         HStack {
-            MenuItemIcon(systemName: "heart.fill", color: .pink)
-            Text("Support Crisp")
+            Text(verbatim: title)
                 .font(.body)
             Spacer()
             Image(systemName: "arrow.up.forward")
@@ -266,15 +304,14 @@ struct SupportRow: View {
         .menuRowHover(isHovered)
         .contentShape(Rectangle())
         .onTapGesture {
-            guard PanelOpenGuard.allowsActivation, let url = supportURL else { return }
-            NSWorkspace.shared.open(url)
+            guard let link = URL(string: url) else { return }
+            NSWorkspace.shared.open(link)
         }
         .onHover { hovering in
             isHovered = hovering
             if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
         }
-        .accessibilityLabel("Support Crisp")
-        .accessibilityHint("Opens a page where you can buy me a coffee")
+        .accessibilityLabel(Text(verbatim: title))
         .accessibilityAddTraits(.isButton)
     }
 }
