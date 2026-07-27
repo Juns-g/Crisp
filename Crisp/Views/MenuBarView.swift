@@ -379,11 +379,11 @@ struct MenuBarView: View {
                         isExpanded: $showVirtualDisplays
                     )
 
-                    // Nest entries a modest amount under the "Virtual Displays"
-                    // header: enough to read as children, not the earlier 32 (too
-                    // far) or 0 (reads as flat siblings).
+                    // Nest one level under the "Virtual Displays" header using the
+                    // same +8 step the header itself sits at under Tools, so the
+                    // tree indents uniformly (12 → 20 → 28) instead of jumping.
                     VirtualDisplayView()
-                        .padding(.leading, 20)
+                        .padding(.leading, 8)
                         .curtainReveal(showVirtualDisplays)
 
                     // Arrange Displays (Phase 4): shown whenever more than one

@@ -204,7 +204,7 @@ struct VirtualDisplayRow: View {
                 Text(config.name)
                     .font(.body)
                     .lineLimit(1)
-                Text("\(config.width)×\(config.height)")
+                Text(verbatim: "\(config.width)×\(config.height)")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }

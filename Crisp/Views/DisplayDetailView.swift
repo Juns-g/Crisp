@@ -115,8 +115,12 @@ struct DisplayDetailView: View {
             NotchView(display: display)
 
         }
-        .padding(.leading, 32)
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+        .padding(.leading, 4)
+        // Region background: a full-width shaded band behind the whole expanded
+        // detail so its start and end are obvious. Color.primary adapts to mode
+        // (darkens in light, lifts in dark); no rounded corners/inset, so it reads
+        // as a grouped band, not a floating card.
+        .background(Color.primary.opacity(0.08))
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             // Reopen fresh, like a native menu (this view persists across opens, so
             // its sections stay expanded until reset).
