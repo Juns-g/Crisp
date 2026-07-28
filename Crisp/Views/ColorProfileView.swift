@@ -5,6 +5,7 @@ import SwiftUI
 /// checkmark on the active profile.
 struct ColorProfileView: View {
     @ObservedObject var display: DisplayInfo
+    @Binding var activeProfileName: String
     @State private var profiles: [ICCProfile] = []
     @State private var isLoading: Bool = false
     @State private var selectedPath: URL?
@@ -109,6 +110,8 @@ struct ColorProfileView: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 applyError = nil
             }
+        } else if activeProfileName != profile.name {
+            activeProfileName = profile.name
         }
     }
 }
