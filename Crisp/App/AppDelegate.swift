@@ -105,6 +105,9 @@ final class MenuPanel: NSPanel {
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var wakeObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
+    /// Debounces panel re-anchoring across the storm of screen-param changes a
+    /// display connect/disconnect fires (see screenObserver).
+    private var repositionWorkItem: DispatchWorkItem?
     private var clickMonitor: Any?
     private var clickInterceptor: Any?
     // The NSMenu currently tracking (a SwiftUI Menu / context menu), captured so an
@@ -185,13 +188,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.isPanelShown, let p = self.panel else { return }
-                self.positionPanel(p)
-                // Reconfiguration settles in phases; anchor once more after.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, self.isPanelShown, self.panel != nil else { return }
+                // A display connect/disconnect fires a storm of these, and the
+                // geometry is garbage mid-flight: a just-connected virtual display
+                // can transiently read as NSScreen.main, spiking maxContentHeight
+                // (the panel balloons past its cap) and the x/anchor clamp (the
+                // panel offsets). Debounce so we re-anchor ONCE, after the storm
+                // settles, instead of sampling the volatile mid-reconfig state.
+                self.repositionWorkItem?.cancel()
+                let work = DispatchWorkItem { [weak self] in
                     guard let self, self.isPanelShown, let p = self.panel else { return }
                     self.positionPanel(p)
                 }
+                self.repositionWorkItem = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
             }
         }
 
@@ -222,8 +232,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Pre-warm the panel while hidden so the very first open, like every
         // reopen, appears at its final, settled size (fittingSize is only an
-        // estimate; real layout can differ by a few points).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+        // estimate; real layout can differ by a few points). Warm on the very
+        // next runloop turn, not a 1s timer: a runloop turn is <16ms, but the
+        // menu-bar icon isn't clickable until well after that, so the warm-up
+        // (Liquid Glass materialize bloom + first layout) reliably finishes
+        // hidden. On the 1s timer, a fast first click landed mid-warm and the
+        // bloom + estimate reflow played on screen.
+        DispatchQueue.main.async { [weak self] in
             self?.warmPanel()
         }
 

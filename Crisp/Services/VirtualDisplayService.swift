@@ -57,6 +57,11 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
 
     private let configsKey = "crisp.VirtualDisplayConfigs"
 
+    /// Vendor ID stamped on every Crisp virtual display's descriptor. Also the
+    /// race-free signature we filter on: CGDisplayVendorNumber reports it the
+    /// instant WindowServer brings the display online.
+    static let crispVirtualVendorID: UInt32 = 0xEEEE
+
     // MARK: - Queries
 
     func isActive(_ configID: UUID) -> Bool {
@@ -65,7 +70,12 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
 
     /// Returns true if `displayID` is a virtual display managed by this service.
     func isVirtualDisplay(_ displayID: CGDirectDisplayID) -> Bool {
-        activeDisplayObjects.values.contains { $0.displayID == displayID }
+        // Match by our stamped vendor ID first: it's live from CG the moment the
+        // display is online, so a freshly created one is filtered on the very
+        // first refresh instead of flashing as a top-level display in the gap
+        // before activeDisplayObjects records it. The object set is a backstop.
+        if CGDisplayVendorNumber(displayID) == Self.crispVirtualVendorID { return true }
+        return activeDisplayObjects.values.contains { $0.displayID == displayID }
     }
 
     // MARK: - Create / Destroy
@@ -113,7 +123,7 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
         descriptor.maxPixelsWide = UInt32(w)
         descriptor.maxPixelsHigh = UInt32(h)
         descriptor.name = config.name.isEmpty ? String(localized: "Crisp Virtual") : config.name
-        descriptor.vendorID = 0xEEEE  // non-zero required — 0 causes CGVirtualDisplay(descriptor:) to return nil
+        descriptor.vendorID = Self.crispVirtualVendorID  // non-zero required — 0 causes CGVirtualDisplay(descriptor:) to return nil
         // Identity must be both UNIQUE per config (else a second virtual display
         // collides with the first, which WindowServer mirrors/rejects) and STABLE
         // across recreations (macOS keys per-display settings, including the
