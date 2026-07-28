@@ -1,11 +1,10 @@
 import SwiftUI
 
-/// Color profile selection as a native dropdown menu (NSPopUpButton-backed),
-/// exactly like the profile menu in the system Displays panel: opens instantly,
-/// checkmark on the active profile.
+/// Color profile selection as a native checkmarked list (same style as the
+/// resolution and preset lists), grouped into Recommended / All Profiles like
+/// the system Displays panel; checkmark on the active profile.
 struct ColorProfileView: View {
     @ObservedObject var display: DisplayInfo
-    @Binding var activeProfileName: String
     @State private var profiles: [ICCProfile] = []
     @State private var isLoading: Bool = false
     @State private var selectedPath: URL?
@@ -13,54 +12,54 @@ struct ColorProfileView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Profile")
-                    .font(.body)
-                Spacer()
-                if isLoading {
+            if isLoading {
+                HStack(spacing: 6) {
                     ProgressView()
                         .scaleEffect(0.6)
                         .frame(width: 14, height: 14)
-                } else {
-                    Picker("", selection: $selectedPath) {
-                        if !recommendedProfiles.isEmpty {
-                            Section("Recommended") {
-                                ForEach(recommendedProfiles) { profile in
-                                    Text(profile.name).tag(Optional(profile.path))
-                                }
-                            }
-                        }
-                        if !otherProfiles.isEmpty {
-                            Section("All Profiles") {
-                                ForEach(otherProfiles) { profile in
-                                    Text(profile.name).tag(Optional(profile.path))
-                                }
-                            }
+                    Text("Loading profiles…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.leading, 24)
+                .padding(.vertical, 6)
+            } else {
+                if !recommendedProfiles.isEmpty {
+                    groupHeader("Recommended")
+                    ForEach(recommendedProfiles) { profile in
+                        CheckmarkRow(label: profile.name, isSelected: profile.path == selectedPath) {
+                            select(profile)
                         }
                     }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .controlSize(.small)
-                    .frame(maxWidth: 220)
-                    .onChange(of: selectedPath) { oldValue, newValue in
-                        guard let url = newValue, oldValue != newValue,
-                              let profile = profiles.first(where: { $0.path == url }) else { return }
-                        applyProfile(profile, revertTo: oldValue)
+                }
+                if !otherProfiles.isEmpty {
+                    groupHeader("All Profiles")
+                    ForEach(otherProfiles) { profile in
+                        CheckmarkRow(label: profile.name, isSelected: profile.path == selectedPath) {
+                            select(profile)
+                        }
                     }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
 
             if let error = applyError {
                 Text(error)
                     .font(.caption)
                     .foregroundColor(.red)
-                    .padding(.horizontal, 12)
+                    .padding(.leading, 24)
                     .padding(.bottom, 4)
             }
         }
         .task { await loadProfiles() }
+    }
+
+    private func groupHeader(_ title: String) -> some View {
+        Text(LocalizedStringKey(title))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .padding(.leading, 24)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
     }
 
     // MARK: - Grouping
@@ -79,6 +78,13 @@ struct ColorProfileView: View {
 
     // MARK: - Actions
 
+    private func select(_ profile: ICCProfile) {
+        guard profile.path != selectedPath else { return }
+        let previous = selectedPath
+        selectedPath = profile.path
+        applyProfile(profile, revertTo: previous)
+    }
+
     @MainActor
     private func loadProfiles() async {
         isLoading = true
@@ -88,8 +94,8 @@ struct ColorProfileView: View {
         let currentURL = svc.currentProfileURL(for: displayID)
         profiles = loaded
         // Snap to the enumerated entry by file path: the device registry URL
-        // and FileManager's can differ in percent-encoding, and the Picker
-        // shows an empty selection unless the tag matches exactly.
+        // and FileManager's can differ in percent-encoding, and the selection
+        // shows as unset unless the path matches exactly.
         if let cur = currentURL,
            let match = loaded.first(where: { $0.path.path == cur.path }) {
             selectedPath = match.path
@@ -110,8 +116,6 @@ struct ColorProfileView: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 applyError = nil
             }
-        } else if activeProfileName != profile.name {
-            activeProfileName = profile.name
         }
     }
 }

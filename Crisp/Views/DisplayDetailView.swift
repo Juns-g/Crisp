@@ -5,11 +5,10 @@ import SwiftUI
 struct DisplayDetailView: View {
     @ObservedObject var display: DisplayInfo
     @EnvironmentObject var displayManager: DisplayManager
-    @State private var showModeList: Bool = false
     @State private var showPreset: Bool = false
     @State private var showColorProfile: Bool = false
     @State private var showImageAdjustment: Bool = false
-    @State private var activeProfileName: String = ""
+    @State private var colorSpaceName: String = ""
     @State private var presetName: String = ""
 
     var body: some View {
@@ -17,31 +16,8 @@ struct DisplayDetailView: View {
 
             // Brightness slider is inline at the top level (avoid duplication); HiDPI toggle moved to Settings
 
-            // Display mode list toggle row
-            ExpandableRow(
-                icon: "rectangle.on.rectangle",
-                label: "Display Mode",
-                subtitle: {
-                    var parts: [String] = []
-                    if let mode = display.currentDisplayMode {
-                        parts.append(mode.resolutionString)
-                    }
-                    if display.currentDisplayMode?.isHiDPI == true {
-                        parts.append("HiDPI")
-                    }
-                    return parts.joined(separator: " · ")
-                }(),
-                isExpanded: $showModeList
-            )
-
-            VStack(spacing: 0) {
-                if showModeList {
-                    DisplayModeListView(display: display)
-                        .padding(.leading, 8)
-                        .transition(.opacity)
-                }
-            }
-            .clipped()
+            // Resolution + Refresh Rate, each a top-level one-click section
+            DisplayModeSection(display: display)
 
             SectionDivider()
 
@@ -59,7 +35,6 @@ struct DisplayDetailView: View {
                 VStack(spacing: 0) {
                     if showPreset {
                         DisplayPresetView(displayID: display.displayID, activeName: $presetName)
-                            .padding(.leading, 8)
                             .transition(.opacity)
                     }
                 }
@@ -73,17 +48,13 @@ struct DisplayDetailView: View {
                     icon: "paintpalette.fill",
                     iconColor: .purple,
                     label: "Color Profile",
-                    subtitle: activeProfileName,
+                    subtitle: colorSpaceName,
                     isExpanded: $showColorProfile
                 )
 
                 VStack(spacing: 0) {
                     if showColorProfile {
-                        ColorProfileView(
-                            display: display,
-                            activeProfileName: $activeProfileName
-                        )
-                            .padding(.leading, 8)
+                        ColorProfileView(display: display)
                             .transition(.opacity)
                     }
                 }
@@ -127,16 +98,15 @@ struct DisplayDetailView: View {
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             // Reopen fresh, like a native menu (this view persists across opens, so
             // its sections stay expanded until reset).
-            showModeList = false
             showPreset = false
             showColorProfile = false
             showImageAdjustment = false
         }
         .task(id: display.displayID) {
-            activeProfileName = ""
+            colorSpaceName = ""
             presetName = ""
             guard !Task.isCancelled else { return }
-            activeProfileName = ColorProfileService.shared.currentColorSpaceName(for: display.displayID)
+            colorSpaceName = ColorProfileService.shared.currentColorSpaceName(for: display.displayID)
             let svc = DisplayPresetService.shared
             if let idx = svc.activePresetIndex(for: display.displayID) {
                 presetName = svc.presets(for: display.displayID)
@@ -145,3 +115,4 @@ struct DisplayDetailView: View {
         }
     }
 }
+

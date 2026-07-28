@@ -1,13 +1,16 @@
 import SwiftUI
 
-/// Resolution and refresh-rate selection as native dropdown menus,
-/// like the system Displays panel: one row per setting, NSMenu-backed pickers.
-struct DisplayModeListView: View {
+/// Resolution and refresh-rate selection as native checkmarked lists, each a
+/// top-level expandable row like the System Settings display menu: resolution is
+/// one click away (not nested under a "Display Mode" popup), and refresh rate is
+/// its own section, shown only when the current resolution offers more than one.
+struct DisplayModeSection: View {
     @ObservedObject var display: DisplayInfo
-    @State private var isSwitching: Bool = false
+    @State private var showResolution: Bool = false
+    @State private var showRefresh: Bool = false
+    @State private var pendingResolutionID: String?
+    @State private var pendingRefreshID: Int32?
     @State private var errorMessage: String?
-    @State private var selectedGroupID: String = ""
-    @State private var selectedModeID: Int32 = 0
 
     private var currentMode: DisplayMode? { display.currentDisplayMode }
 
@@ -46,67 +49,38 @@ struct DisplayModeListView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if resolutionGroups.isEmpty {
-                Text("No display modes available")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-            } else {
-                HStack {
-                    Text("Resolution")
-                        .font(.body)
-                    Spacer()
-                    if isSwitching {
-                        ProgressView()
-                            .scaleEffect(0.6)
-                            .frame(width: 14, height: 14)
-                    }
-                    Picker("", selection: $selectedGroupID) {
-                        ForEach(resolutionGroups) { group in
-                            Text(group.menuLabel).tag(group.id)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .controlSize(.small)
-                    .frame(maxWidth: 190, alignment: .trailing)
-                    .disabled(isSwitching)
-                    .onChange(of: selectedGroupID) { _, newValue in
-                        guard let group = resolutionGroups.first(where: { $0.id == newValue }),
-                              group.id != currentGroup?.id else { return }
-                        // Keep the refresh rate when the new resolution offers it
-                        let target = group.modes.first { $0.refreshRate == currentMode?.refreshRate } ?? group.bestMode
-                        switchTo(target)
-                    }
+            // Resolution: its own top-level row, list opens in one click.
+            ExpandableRow(
+                icon: "rectangle.on.rectangle",
+                label: "Resolution",
+                subtitle: currentGroup?.menuLabel,
+                isExpanded: $showResolution
+            )
+            VStack(spacing: 0) {
+                if showResolution {
+                    resolutionList
+                        .transition(.opacity)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
+            }
+            .clipped()
 
-                if let group = currentGroup, group.hasMultipleRates {
-                    HStack {
-                        Text("Refresh Rate")
-                            .font(.body)
-                        Spacer()
-                        Picker("", selection: $selectedModeID) {
-                            ForEach(group.modes) { mode in
-                                Text(mode.refreshRateString).tag(mode.id)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
-                        .controlSize(.small)
-                        .frame(maxWidth: 130, alignment: .trailing)
-                        .disabled(isSwitching)
-                        .onChange(of: selectedModeID) { _, newValue in
-                            guard newValue != currentMode?.id,
-                                  let mode = group.modes.first(where: { $0.id == newValue }) else { return }
-                            switchTo(mode)
-                        }
+            // Refresh Rate: a sibling section, not nested under resolution.
+            // Only shown when the current resolution actually offers a choice.
+            if let group = currentGroup, group.hasMultipleRates {
+                ExpandableRow(
+                    icon: "speedometer",
+                    iconColor: .teal,
+                    label: "Refresh Rate",
+                    subtitle: currentMode?.refreshRateString,
+                    isExpanded: $showRefresh
+                )
+                VStack(spacing: 0) {
+                    if showRefresh {
+                        refreshList(group)
+                            .transition(.opacity)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
                 }
+                .clipped()
             }
 
             if let msg = errorMessage {
@@ -124,19 +98,68 @@ struct DisplayModeListView: View {
                 .transition(.opacity)
             }
         }
-        .task(id: currentMode?.id) { syncSelection() }
+        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
+            showResolution = false
+            showRefresh = false
+        }
     }
 
-    private func syncSelection() {
-        selectedGroupID = currentGroup?.id ?? ""
-        selectedModeID = currentMode?.id ?? 0
+    // MARK: - Lists
+
+    @ViewBuilder
+    private var resolutionList: some View {
+        if resolutionGroups.isEmpty {
+            Text("No display modes available")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(resolutionGroups) { group in
+                    CheckmarkRow(
+                        label: group.menuLabel,
+                        isSelected: group.id == currentGroup?.id,
+                        isPending: group.id == pendingResolutionID
+                    ) {
+                        selectResolution(group)
+                    }
+                }
+            }
+        }
+    }
+
+    private func refreshList(_ group: ResolutionGroup) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(group.modes) { mode in
+                CheckmarkRow(
+                    label: mode.refreshRateString,
+                    isSelected: mode.id == currentMode?.id,
+                    isPending: mode.id == pendingRefreshID
+                ) {
+                    selectRefresh(mode)
+                }
+            }
+        }
     }
 
     // MARK: - Actions
 
-    private func switchTo(_ mode: DisplayMode) {
-        guard !isSwitching else { return }
-        isSwitching = true
+    private func selectResolution(_ group: ResolutionGroup) {
+        guard group.id != currentGroup?.id, pendingResolutionID == nil else { return }
+        // Keep the current refresh rate when the new resolution offers it.
+        let target = group.modes.first { $0.refreshRate == currentMode?.refreshRate } ?? group.bestMode
+        pendingResolutionID = group.id
+        switchTo(target) { pendingResolutionID = nil }
+    }
+
+    private func selectRefresh(_ mode: DisplayMode) {
+        guard mode.id != currentMode?.id, pendingRefreshID == nil else { return }
+        pendingRefreshID = mode.id
+        switchTo(mode) { pendingRefreshID = nil }
+    }
+
+    private func switchTo(_ mode: DisplayMode, done: @escaping () -> Void) {
         let displayID = display.displayID
         Task { @MainActor in
             var success = await ResolutionService.shared.setDisplayMode(mode, for: displayID)
@@ -164,9 +187,55 @@ struct DisplayModeListView: View {
                     withAnimation { errorMessage = nil }
                 }
             }
-            isSwitching = false
-            syncSelection()
+            done()
         }
+    }
+}
+
+// MARK: - Checkmark row
+
+/// One selectable line in a native display-menu list (resolution, refresh rate,
+/// preset): a leading checkmark column, the label, and a hover highlight. The
+/// checkmark slot becomes a spinner while an async switch is pending.
+struct CheckmarkRow: View {
+    let label: String
+    let isSelected: Bool
+    var isPending: Bool = false
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ZStack {
+                if isPending {
+                    ProgressView()
+                        .scaleEffect(0.5)
+                        .frame(width: 16, height: 16)
+                } else {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.accentColor)
+                        .opacity(isSelected ? 1 : 0)
+                }
+            }
+            .frame(width: 16)
+            Text(label)
+                .font(.body)
+                .fontWeight(isSelected ? .semibold : .regular)
+            Spacer()
+        }
+        .padding(.leading, 24)
+        .padding(.trailing, 12)
+        .padding(.vertical, 5)
+        .menuRowHover(isHovered)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard PanelOpenGuard.allowsActivation, !isSelected, !isPending else { return }
+            action()
+        }
+        .onHover { isHovered = $0 }
+        .accessibilityLabel(isSelected ? "\(label), selected" : label)
+        .accessibilityAddTraits(.isButton)
     }
 }
 

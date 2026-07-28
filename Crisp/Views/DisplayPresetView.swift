@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Reference-mode preset picker, mirroring the System Settings "Preset" menu
-/// for displays that have presets (XDR builtin panels).
+/// for displays that have presets (XDR builtin panels). A native checkmarked
+/// list (same style as the resolution list), not a nested popup.
 struct DisplayPresetView: View {
     let displayID: CGDirectDisplayID
     /// The parent row's subtitle; updated here so it refreshes on switch.
@@ -10,32 +11,27 @@ struct DisplayPresetView: View {
     @State private var selectedIndex: Int?
 
     var body: some View {
-        HStack {
-            Text("Preset")
-                .font(.body)
-            Spacer()
-            Picker("", selection: $selectedIndex) {
-                ForEach(presets) { preset in
-                    Text(preset.name).tag(Optional(preset.index))
-                }
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .controlSize(.small)
-            .frame(maxWidth: 220)
-            .onChange(of: selectedIndex) { oldValue, newValue in
-                guard let index = newValue, oldValue != nil, oldValue != newValue else { return }
-                if DisplayPresetService.shared.setActivePreset(index: index, for: displayID),
-                   let name = presets.first(where: { $0.index == index })?.name {
-                    activeName = name
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(presets) { preset in
+                CheckmarkRow(
+                    label: preset.name,
+                    isSelected: preset.index == selectedIndex
+                ) {
+                    select(preset)
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
         .onAppear {
             presets = DisplayPresetService.shared.presets(for: displayID)
             selectedIndex = DisplayPresetService.shared.activePresetIndex(for: displayID)
+        }
+    }
+
+    private func select(_ preset: DisplayPresetService.Preset) {
+        guard preset.index != selectedIndex else { return }
+        if DisplayPresetService.shared.setActivePreset(index: preset.index, for: displayID) {
+            selectedIndex = preset.index
+            activeName = preset.name
         }
     }
 }
