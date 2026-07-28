@@ -177,7 +177,7 @@ struct ExpandableRow: View {
                     .truncationMode(.tail)
             }
             Image(systemName: "chevron.right")
-                .font(.caption)
+                .font(.system(size: 12, weight: .regular))
                 .foregroundColor(.secondary)
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 .accessibilityHidden(true)
@@ -717,7 +717,7 @@ struct DisplayRowView: View {
             }
             Spacer()
             Image(systemName: "chevron.right")
-                .font(.caption)
+                .font(.system(size: 12, weight: .regular))
                 .foregroundColor(.secondary)
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 .accessibilityHidden(true)

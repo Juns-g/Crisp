@@ -18,11 +18,14 @@ struct VirtualDisplayView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if service.configs.isEmpty && !showCreateForm {
+                // Centered secondary text is the native empty-state idiom ("No
+                // Recent Items"); a label-column indent here reads as an orphaned
+                // row floating mid-panel with no icon to anchor it.
                 Text("No virtual displays yet")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 10)
             } else {
                 ForEach(service.configs) { config in
                     if editingID == config.id {

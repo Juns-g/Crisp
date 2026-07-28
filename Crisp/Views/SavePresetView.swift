@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreGraphics
 
 // MARK: - SavePresetView
 
@@ -6,7 +7,7 @@ import SwiftUI
 /// named preset. Collapsed, it's a single "New Preset" row; expanded, the row
 /// is replaced by a bounded card with its own Cancel / Save buttons.
 struct SavePresetView: View {
-    @State private var isShowingForm = false
+    @Binding var isShowingForm: Bool
     @State private var isHovered = false
     @FocusState private var nameFocused: Bool
 
@@ -99,6 +100,22 @@ struct SavePresetForm: View {
 
     private var nothingSelected: Bool {
         !includeResolution && !includeBrightness && !includeArrangement
+    }
+
+    /// Stored resolution shown inline only when a single display carries it (clean
+    /// and unambiguous). Several displays stay subtitle-less like the Arrangement
+    /// row; their per-display specifics live in the arrangement balloon.
+    private var resolutionDetail: String? {
+        guard let editing else { return nil }
+        let labels = editing.displays.compactMap { $0.width != nil ? $0.resolutionLabel : nil }
+        return labels.count == 1 ? labels[0] : nil
+    }
+
+    /// Stored brightness, same single-display-only inline treatment as resolution.
+    private var brightnessDetail: String? {
+        guard let editing else { return nil }
+        let vals = editing.displays.compactMap(\.brightness)
+        return vals.count == 1 ? "\(Int((vals[0] * 100).rounded()))%" : nil
     }
 
     /// The swatch currently picked in the Color picker; the icon button previews it live.
@@ -219,11 +236,22 @@ struct SavePresetForm: View {
                     .fontWeight(.semibold)
                     .foregroundColor(.secondary)
                 CaptureToggleRow(icon: "rectangle.on.rectangle", color: .blue,
-                                 label: "Resolution", isOn: $includeResolution)
+                                 label: "Resolution", detail: resolutionDetail, isOn: $includeResolution)
                 CaptureToggleRow(icon: "sun.max.fill", color: .orange,
-                                 label: "Brightness", isOn: $includeBrightness)
+                                 label: "Brightness", detail: brightnessDetail, isOn: $includeBrightness)
                 CaptureToggleRow(icon: "display.2", color: .indigo,
                                  label: "Arrangement", isOn: $includeArrangement)
+                // Editing an arrangement-bearing preset: show the saved layout as a
+                // small diagram (raw x/y coordinates aren't legible; a picture is).
+                if includeArrangement, let editing, editing.includesArrangement {
+                    PresetArrangementThumbnail(preset: editing,
+                                               includeResolution: includeResolution,
+                                               includeBrightness: includeBrightness)
+                        .frame(height: 72)
+                        .padding(.top, 18) // headroom for the hover name callout
+                        .padding(.leading, 34)
+                        .padding(.trailing, 4)
+                }
             }
 
             if let err = saveError {
@@ -344,6 +372,10 @@ struct CaptureToggleRow: View {
     let icon: String
     let color: Color
     let label: String
+    /// When editing a preset, the stored value for this capture (e.g. "1512×982
+    /// HiDPI", "72%"), shown under the label so you can see what's saved. Hidden
+    /// while the capture is toggled off (it's being dropped) and when creating.
+    var detail: String? = nil
     @Binding var isOn: Bool
 
     var body: some View {
@@ -351,8 +383,17 @@ struct CaptureToggleRow: View {
             HStack(spacing: 8) {
                 MenuItemIcon(systemName: icon, color: color)
                     .accessibilityHidden(true)
-                Text(LocalizedStringKey(label))
-                    .font(.body)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(LocalizedStringKey(label))
+                        .font(.body)
+                    if isOn, let detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
                 Spacer()
             }
         }
@@ -389,5 +430,126 @@ struct IconOptionButton: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .accessibilityLabel(label)
+    }
+}
+
+// MARK: - PresetArrangementThumbnail
+
+/// Static, non-interactive schematic of a preset's saved display arrangement:
+/// outlined rectangles at their saved relative positions. Not the arranger, no
+/// wallpaper or drag, just a legible stand-in for the raw x/y coordinates.
+struct PresetArrangementThumbnail: View {
+    let preset: DisplayPreset
+    var includeResolution: Bool = true
+    var includeBrightness: Bool = true
+    @EnvironmentObject private var displayManager: DisplayManager
+    @State private var hoveredID: Int?
+
+    var body: some View {
+        GeometryReader { geo in
+            let items = layout(in: geo.size)
+            ZStack(alignment: .topLeading) {
+                ForEach(items) { item in
+                    thumbnail(for: item.display)
+                        .frame(width: item.rect.width, height: item.rect.height)
+                        .contentShape(Rectangle())
+                        .onHover { hovering in
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.72)) {
+                                if hovering { hoveredID = item.id }
+                                else if hoveredID == item.id { hoveredID = nil }
+                            }
+                        }
+                        .overlay(alignment: .top) {
+                            // Same hover callout as the arranger; connected displays
+                            // only (offline fallbacks have no name to show).
+                            if hoveredID == item.id, let display = item.display {
+                                DisplayNameBadge(name: display.name, detail: detail(for: display))
+                                    .transition(.scale(scale: 0.85, anchor: .bottom).combined(with: .opacity))
+                            }
+                        }
+                        .offset(x: item.rect.minX, y: item.rect.minY)
+                        .zIndex(hoveredID == item.id ? 2 : 0)
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+        }
+        // Bounded canvas, echoing the real arranger's dark rounded stage.
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.black.opacity(0.18))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+        )
+    }
+
+    /// The arranger's own wallpaper thumbnail for a connected display; a neutral
+    /// rounded panel when the preset's display isn't currently attached.
+    @ViewBuilder
+    private func thumbnail(for display: DisplayInfo?) -> some View {
+        if let display {
+            DisplayThumbnailView(display: display, isDragged: false)
+        } else {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color.primary.opacity(0.12))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.4), lineWidth: 1))
+        }
+    }
+
+    /// This display's saved resolution · brightness for the hover balloon, limited
+    /// to the captures that are currently on. nil when the preset stores neither.
+    private func detail(for display: DisplayInfo) -> String? {
+        guard let e = preset.displays.first(where: { $0.displayUUID == display.displayUUID }) else { return nil }
+        var parts: [String] = []
+        if includeResolution, e.width != nil { parts.append(e.resolutionLabel) }
+        if includeBrightness, let b = e.brightness { parts.append("\(Int((b * 100).rounded()))%") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private struct Placed: Identifiable {
+        let id: Int
+        let rect: CGRect
+        let display: DisplayInfo?
+    }
+
+    /// Saved origins + each display's live point-size (for correct wallpaper aspect),
+    /// scaled to fit `size`. Falls back to the stored resolution when a display is offline.
+    private func layout(in size: CGSize) -> [Placed] {
+        let raw: [(screen: CGRect, display: DisplayInfo?)] = preset.displays.compactMap { e in
+            guard let x = e.arrangementX, let y = e.arrangementY else { return nil }
+            let live = displayManager.displays.first { $0.displayUUID == e.displayUUID }
+            let sz = live.map { CGDisplayBounds($0.displayID).size } ?? pointSize(e)
+            return (CGRect(x: x, y: y, width: sz.width, height: sz.height), live)
+        }
+        guard !raw.isEmpty else { return [] }
+        let screens = raw.map(\.screen)
+        let minX = screens.map(\.minX).min()!, minY = screens.map(\.minY).min()!
+        let maxX = screens.map(\.maxX).max()!, maxY = screens.map(\.maxY).max()!
+        let totalW = max(maxX - minX, 1), totalH = max(maxY - minY, 1)
+        let padding: CGFloat = 8
+        let availW = max(size.width - padding * 2, 1), availH = max(size.height - padding * 2, 1)
+        let scale = min(availW / totalW, availH / totalH)
+        let offX = padding + (availW - totalW * scale) / 2
+        let offY = padding + (availH - totalH * scale) / 2
+        return raw.enumerated().map { i, item in
+            let r = item.screen
+            return Placed(
+                id: i,
+                rect: CGRect(x: offX + (r.minX - minX) * scale,
+                             y: offY + (r.minY - minY) * scale,
+                             width: r.width * scale, height: r.height * scale),
+                display: item.display
+            )
+        }
+    }
+
+    /// Point footprint from the stored logical resolution (already in points), or a
+    /// default 16:10 box when a preset saved arrangement without resolution.
+    private func pointSize(_ e: DisplayPresetEntry) -> CGSize {
+        guard let w = e.width, let h = e.height else {
+            return CGSize(width: 1440, height: 900) // ponytail: default box, arrangement-only preset
+        }
+        return CGSize(width: CGFloat(w), height: CGFloat(h))
     }
 }

@@ -309,8 +309,11 @@ private func overlapExtents(_ a: CGRect, _ b: CGRect) -> (x: CGFloat, y: CGFloat
 
 /// The dark name callout the native Arrange Displays sheet floats above a
 /// display when you hover it: a rounded bubble with a downward tail.
-private struct DisplayNameBadge: View {
+struct DisplayNameBadge: View {
     let name: String
+    /// Optional second line: the preset preview shows a display's resolution ·
+    /// brightness here. nil in the arranger, which shows just the name.
+    var detail: String? = nil
     /// Measured height of the whole callout (bubble + tail), used to lift it so
     /// the tail tip lands on the thumbnail's top edge.
     @State private var height: CGFloat = 0
@@ -319,15 +322,23 @@ private struct DisplayNameBadge: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text(name)
-                .font(.caption)
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous).fill(fill)
-                )
+            VStack(spacing: 1) {
+                Text(name)
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous).fill(fill)
+            )
             BadgeTail()
                 .fill(fill)
                 .frame(width: 12, height: 6)
@@ -363,7 +374,7 @@ private struct BadgeTail: Shape {
 
 // MARK: - Display Thumbnail
 
-private struct DisplayThumbnailView: View {
+struct DisplayThumbnailView: View {
     let display: DisplayInfo
     let isDragged: Bool
 

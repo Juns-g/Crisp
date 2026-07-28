@@ -81,7 +81,7 @@ private struct EffectCircleButton: View {
             // Instant state flip, like the native Control Center circles.
             action()
         } label: {
-            VStack(spacing: 8) {
+            VStack(spacing: 5) {
                 ZStack {
                     Circle()
                         .fill(isOn ? AnyShapeStyle(onFill) : AnyShapeStyle(Color.primary.opacity(0.12)))
