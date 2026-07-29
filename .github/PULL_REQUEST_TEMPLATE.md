@@ -10,3 +10,4 @@
 ## Checklist
 - [ ] Builds locally (`./dev.sh`, or `./scripts/release.sh v0.0.0-ci` for the full release build)
 - [ ] Added/updated `Crisp/Resources/Localizable.xcstrings` for any new user-facing strings
+- [ ] Screenshot or short clip for any UI change
