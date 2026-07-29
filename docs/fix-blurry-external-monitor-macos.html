@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why is my external monitor blurry or tiny on a Mac? (free fix)</title>
+<meta name="description" content="A 1080p or 1440p monitor looks blurry or too small on macOS because macOS hides HiDPI scaled resolutions on non-Retina displays. Crisp is a free, open-source menu bar app that adds sharp HiDPI scaling to any external monitor, a free BetterDisplay and Lunar alternative.">
+<meta name="keywords" content="blurry external monitor mac, 1440p looks blurry macbook, external monitor too small macos, enable HiDPI macOS, retina scaling external display, free BetterDisplay alternative, Lunar alternative, DDC brightness mac">
+<link rel="canonical" href="https://didriksg.github.io/Crisp/fix-blurry-external-monitor-macos.html">
+<link rel="alternate" hreflang="en" href="https://didriksg.github.io/Crisp/fix-blurry-external-monitor-macos.html">
+<link rel="alternate" hreflang="zh-Hans" href="https://didriksg.github.io/Crisp/mac-hidpi.html">
+<link rel="alternate" hreflang="x-default" href="https://didriksg.github.io/Crisp/fix-blurry-external-monitor-macos.html">
+<meta property="og:title" content="Why is my external monitor blurry or tiny on a Mac? (free fix)">
+<meta property="og:description" content="macOS only offers sharp scaled resolutions on its own Retina displays. Crisp is a free, open-source app that adds HiDPI scaling, DDC brightness, presets and more to any external monitor.">
+<meta property="og:image" content="https://didriksg.github.io/Crisp/screenshot.png">
+<meta property="og:type" content="article">
+<link rel="icon" href="icon.png">
+<style>
+  :root {
+    --bg: #0d0d10;
+    --panel: #17171c;
+    --border: #2a2a32;
+    --text: #f0f0f2;
+    --muted: #9a9aa5;
+    --accent: #3b82f6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 0 24px 64px; }
+  .hero { text-align: center; padding: 64px 0 24px; }
+  .hero img.icon { width: 96px; height: 96px; }
+  .eyebrow { color: var(--accent); font-size: 14px; font-weight: 600; margin-top: 20px; letter-spacing: 0.02em; }
+  h1 { font-size: 32px; font-weight: 700; letter-spacing: -0.01em; margin-top: 10px; line-height: 1.3; }
+  article { margin-top: 8px; }
+  article h2 { font-size: 22px; margin: 48px 0 16px; letter-spacing: -0.01em; }
+  article p { color: #d5d5db; margin: 16px 0; }
+  article ul { margin: 16px 0; padding-left: 22px; color: #d5d5db; }
+  article li { margin: 8px 0; }
+  article strong { color: var(--text); }
+  .lead { color: var(--muted); font-size: 17px; margin-top: 18px; }
+  .shot { display: block; margin: 28px auto; max-width: 406px; width: 100%; border-radius: 12px; border: 1px solid var(--border); }
+  pre {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; margin: 18px 0; overflow-x: auto;
+    font: 14px/1.7 ui-monospace, "SF Mono", Menlo, monospace; color: #d5d5db;
+  }
+  pre .prompt { color: var(--accent); }
+  code { font: 13.5px ui-monospace, "SF Mono", Menlo, monospace; color: #d5d5db; }
+  .note { color: var(--muted); font-size: 14px; }
+  .cta {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 24px; margin: 48px 0 0; text-align: center;
+  }
+  .cta h3 { font-size: 18px; margin-bottom: 6px; }
+  .cta p { color: var(--muted); font-size: 14.5px; margin-bottom: 18px; }
+  .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 10px 20px; border-radius: 10px;
+    text-decoration: none; font-weight: 600; font-size: 15px;
+    border: 1px solid var(--border); color: var(--text); background: var(--bg);
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn:hover { filter: brightness(1.15); }
+  footer {
+    border-top: 1px solid var(--border); margin-top: 56px; padding-top: 24px;
+    color: var(--muted); font-size: 14px; text-align: center;
+  }
+  footer a { color: var(--muted); }
+  @media (max-width: 520px) { h1 { font-size: 26px; } article h2 { font-size: 20px; } }
+</style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <img class="icon" src="icon.png" alt="Crisp icon">
+    <p class="eyebrow">macOS display tips</p>
+    <h1>Why is my external monitor blurry or tiny on a Mac?</h1>
+  </section>
+
+  <article>
+    <p class="lead">You plug a 1080p or 1440p monitor into your Mac and everything is either microscopic at native resolution or fuzzy the moment you scale it up. It isn't the monitor, and it isn't a bad cable. It's how macOS handles external displays.</p>
+
+    <h2>What's actually happening</h2>
+    <p>A MacBook's built-in Retina screen has a very high pixel density (around 220 PPI). macOS renders it at 2x and scales down, so the interface is both sharp and comfortably sized. For most external monitors, macOS <strong>does not offer that same HiDPI (Retina-style) scaled mode</strong>, which leaves you with two bad options:</p>
+    <ul>
+      <li><strong>Native resolution:</strong> perfectly sharp, but the UI is drawn at physical pixel size, so on a 27" 1440p display everything looks tiny and cramped.</li>
+      <li><strong>A lower scaled resolution:</strong> the UI gets bigger, but you're now driving the panel off its native resolution, so the whole image goes soft.</li>
+    </ul>
+    <p>What you actually want is a <strong>"looks like 1920×1080, rendered at 2x"</strong> HiDPI mode: big and sharp, exactly like the built-in display. macOS hides that option for external monitors. Paid apps like BetterDisplay and Lunar can unlock it, but they put parts of it behind a Pro tier.</p>
+
+    <h2>The fix: Crisp (free and open source)</h2>
+    <p>Crisp is a free, open-source (MIT) macOS menu bar app that adds the HiDPI scaled resolutions macOS leaves out. It's designed to feel like an expanded version of the built-in Display menu, so it lives in the menu bar and you never have to dig through System Settings.</p>
+    <img class="shot" src="screenshot.png" alt="Crisp menu bar panel">
+
+    <h2>How to enable HiDPI on an external monitor</h2>
+    <p><strong>1. Install it.</strong> Homebrew is the cleanest path and triggers no security warnings:</p>
+    <pre><span class="prompt">$</span> brew install --cask didriksg/tap/crisp</pre>
+    <p class="note">Prefer a direct download? Grab the DMG from GitHub Releases. It's unsigned, so on first launch right-click Crisp.app and choose Open, or run <code>xattr -dr com.apple.quarantine /Applications/Crisp.app</code> once.</p>
+    <p><strong>2. Turn on HiDPI.</strong> Click the menu bar icon, expand the external display, and enable HiDPI. Displays at 2K and above get their scaled resolutions configured automatically. The first time you enable it for a given monitor, macOS asks for your admin password once (it writes to a protected system folder); every switch after that is password-free.</p>
+    <p><strong>3. Pick a scaled resolution.</strong> On a 27" 1440p monitor, the "looks like 1920×1080" option (rendered at 2x) is usually the sweet spot between sharpness and screen real estate.</p>
+
+    <h2>What else Crisp does</h2>
+    <ul>
+      <li><strong>Brightness on any monitor:</strong> hardware DDC control (with a software/gamma fallback), brightness keys routed to the display under your cursor, and dimming below the hardware floor.</li>
+      <li><strong>Presets:</strong> save resolution, brightness, and arrangement as a set with custom icons, and apply in one click.</li>
+      <li><strong>Arrangement:</strong> drag-to-arrange canvas and one-click main display switching.</li>
+      <li><strong>Disconnect displays:</strong> turn a physical display off and back on from the menu (Apple Silicon, remembered across sleep/wake).</li>
+      <li><strong>System toggles:</strong> Dark Mode, Night Shift, and True Tone from the menu bar.</li>
+      <li><strong>Color:</strong> ICC profile switching plus gamma and contrast adjustment.</li>
+      <li><strong>More:</strong> virtual HiDPI displays, notch hiding, auto brightness that follows your built-in screen, launch at login.</li>
+    </ul>
+
+    <h2>Crisp vs BetterDisplay and Lunar</h2>
+    <p>The feature overlap is large; the difference is the price. <strong>Crisp is completely free with no Pro tier and no license key.</strong> Features that BetterDisplay and Lunar charge for, disconnecting displays, color adjustments, and auto-brightness that follows your built-in screen, are free in Crisp. It's open source (MIT), so you can read the code or build it yourself.</p>
+    <p class="note">Requires macOS 15 (Sequoia) or later; on macOS 26 the panel uses the native Liquid Glass backdrop. Localized in English and Simplified Chinese.</p>
+  </article>
+
+  <div class="cta">
+    <h3>Try Crisp</h3>
+    <p>Free, open source, no in-app purchases. Sharp HiDPI on any external monitor.</p>
+    <div class="actions">
+      <a class="btn primary" href="https://github.com/didriksg/Crisp/releases/latest/download/Crisp.dmg">Download for macOS</a>
+      <a class="btn" href="https://github.com/didriksg/Crisp">View on GitHub</a>
+    </div>
+  </div>
+
+  <footer>
+    <p>Crisp is a free, open-source macOS display manager, an alternative to BetterDisplay and Lunar.</p>
+    <p><a href="index.html">← Home</a> · <a href="mac-hidpi.html">中文</a> · <a href="https://github.com/didriksg/Crisp">View on GitHub</a></p>
+  </footer>
+</main>
+</body>
+</html>
