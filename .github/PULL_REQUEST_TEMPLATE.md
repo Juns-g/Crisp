@@ -1,6 +1,7 @@
 <!-- Thanks for contributing to Crisp! Keep this short. -->
 
 ## What & why
+<!-- If this closes an issue, add: Fixes #123 -->
 
 
 ## How tested
