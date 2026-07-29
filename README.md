@@ -12,6 +12,14 @@ https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 
 <p align="center"><img src="docs/screenshot.png?v=4" width="406" alt="Crisp menu bar panel"></p>
 
+## Install
+
+```sh
+brew install --cask didriksg/tap/crisp
+```
+
+Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/releases) and drag Crisp to Applications. The app isn't notarized, so on first launch macOS blocks it: open **System Settings > Privacy & Security**, scroll down, and click **Open Anyway**. (Homebrew installs skip this.)
+
 ## Features
 
 - **Sharp, Retina-quality scaling on any display**: HiDPI scaled resolutions that make external monitors crisp instead of blurry or undersized, with automatic HiDPI setup for 1440p and larger displays
@@ -23,15 +31,6 @@ https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 - **Color**: ICC profile switching, gamma/contrast/gain image adjustment
 - **Virtual displays**: create HiDPI virtual screens
 - **Extras**: combined brightness slider, auto brightness following the built-in display, notch hiding, launch at login
-
-
-## Install
-
-```sh
-brew install --cask didriksg/tap/crisp
-```
-
-Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/releases) and drag Crisp to Applications. The app isn't notarized, so on first launch macOS blocks it: open **System Settings > Privacy & Security**, scroll down, and click **Open Anyway**. (Homebrew installs skip this.)
 
 ## Support
 
