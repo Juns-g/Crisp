@@ -26,6 +26,9 @@ publish (`scripts/release.sh v1.3.0 docs/RELEASE_NOTES_1.3.0.md --publish`).
   displays, or a chosen subset. (#8)
 - Color profile picker lists only display-safe profiles, scoped to each
   display, as a checkmarked list.
+- Smooth scaling (opt-in, per external display): a slider spanning a dense
+  HiDPI resolution ladder to fine-tune how large everything looks, beyond the
+  handful of default scaled steps. (#9)
 
 ## Changed
 

@@ -73,6 +73,25 @@ final class HiDPIService: @unchecked Sendable {
         }
     }
 
+    // MARK: - Smooth Scaling
+
+    /// Enables (or re-injects) smooth scaling for a display by injecting the dense HiDPI
+    /// ladder into its override plist, then re-probing. The privileged write (admin prompt)
+    /// is skipped when the on-disk plist already carries exactly these modes, so re-enabling
+    /// after a toggle does not re-prompt; reading the plist for that check needs no admin.
+    /// Overwrites in place, so it also upgrades a display already on the coarse plist.
+    /// Returns nil on success (including the no-write case) or an error string.
+    func enableSmoothScaling(vendor: UInt32, product: UInt32,
+                             nativeWidth: Int, nativeHeight: Int) -> String? {
+        let target = generateSmoothScaledModes(nativeWidth: nativeWidth, nativeHeight: nativeHeight)
+        if overridePlistMatches(vendor: vendor, product: product, scaledModes: target) {
+            // Already installed; re-probe (no admin) in case the modes need re-enumerating.
+            triggerDisplayReenumeration(vendor: vendor, product: product)
+            return nil
+        }
+        return writeScaledModesPlist(vendor: vendor, product: product, scaledModes: target)
+    }
+
     // MARK: - Plist Override
 
     private func enableHiDPIPlist(vendor: UInt32, product: UInt32,
@@ -83,7 +102,7 @@ final class HiDPIService: @unchecked Sendable {
     }
 
     /// Writes the override plist with the given scale-resolutions entries via admin auth,
-    /// then re-probes so macOS re-enumerates modes.
+    /// then re-probes so macOS re-enumerates modes. Shared by normal HiDPI and smooth scaling.
     private func writeScaledModesPlist(vendor: UInt32, product: UInt32, scaledModes: [Data]) -> String? {
         let dirPath = overrideDir(vendor: vendor).path
         let plistPath = overridePlistURL(vendor: vendor, product: product).path
@@ -212,6 +231,19 @@ final class HiDPIService: @unchecked Sendable {
             .appendingPathComponent(String(format: "DisplayProductID-%x", product))
     }
 
+    /// True when the on-disk override plist's scale-resolutions already equals `scaledModes`
+    /// (order-independent). Lets callers skip the privileged rewrite, and its admin prompt,
+    /// when nothing would change. Reading /Library/Displays needs no privileges.
+    private func overridePlistMatches(vendor: UInt32, product: UInt32, scaledModes: [Data]) -> Bool {
+        let url = overridePlistURL(vendor: vendor, product: product)
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let dict = obj as? [String: Any],
+              let existing = dict["scale-resolutions"] as? [Data]
+        else { return false }
+        return Set(existing) == Set(scaledModes)
+    }
+
     private func generateScaledModes(nativeWidth: Int, nativeHeight: Int) -> [Data] {
         // Coarse HiDPI ladder matching macOS's usual scaled set: native as HiDPI plus
         // a few standard steps. Used for normal HiDPI enablement. Each entry is the
@@ -224,6 +256,27 @@ final class HiDPIService: @unchecked Sendable {
             logical.append((w, h))
         }
         return logical.map { encodeScaledMode(backingW: $0.0 * 2, backingH: $0.1 * 2) }
+    }
+
+    /// Dense HiDPI "looks like" ladder for smooth scaling: native plus `steps` logical
+    /// sizes from `minScale`×native up toward native, each injected as a 2×-backed HiDPI
+    /// mode. Deduped (rounding can collide adjacent steps), even dimensions, floored at
+    /// 800×600. This is what lets the smooth-scaling slider feel continuous: it snaps
+    /// across these. Injecting many modes also lengthens the System Settings list, so
+    /// this is only used for displays the user opts into smooth scaling for.
+    func generateSmoothScaledModes(nativeWidth: Int, nativeHeight: Int,
+                                   steps: Int = 12, minScale: Double = 0.5) -> [Data] {
+        var logical: [(Int, Int)] = [(nativeWidth, nativeHeight)]  // native as HiDPI
+        for i in 0..<max(steps, 1) {
+            let scale = minScale + (1.0 - minScale) * Double(i) / Double(steps)
+            let w = Int((Double(nativeWidth) * scale).rounded()) & ~1
+            let h = Int((Double(nativeHeight) * scale).rounded()) & ~1
+            guard w >= 800, h >= 600 else { continue }
+            logical.append((w, h))
+        }
+        var seen = Set<Int>()
+        let unique = logical.filter { seen.insert(($0.0 << 16) | $0.1).inserted }
+        return unique.map { encodeScaledMode(backingW: $0.0 * 2, backingH: $0.1 * 2) }
     }
 
     /// Encodes a backing (pixel) resolution as the 8-byte big-endian entry the

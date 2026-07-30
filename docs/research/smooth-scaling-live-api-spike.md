@@ -1,21 +1,8 @@
-# Smooth scaling: research + decision record (issue #9)
+# Smooth scaling: live private-API spike (B1)
 
-Decision record for issue #9 (smooth resolution scaling), covering three spikes.
-
-## Outcome / status
-
-**Smooth scaling was cut from 1.3.0.** On Apple Silicon / macOS 26 neither
-viable-looking path works: no private API scales live and blink-free (B1), and
-the override-plist ladder (Option A) can't be made dense because macOS only
-enumerates standard scaled sizes. The one approach that could deliver it,
-virtual-display + hardware-mirror oversampling (B2), is a separate medium-scope
-feature with real color-management, flicker, and crash-safety risks.
-
-**Planned for 1.4.0 as an opt-in beta/experimental feature**, built on the B2
-approach, and only after running the throwaway probe
-(`scratchpad/mirror-probe/probe.swift`, not in-repo) on a spare display to
-confirm it's blink-free and doesn't regress color/DDC. See the B2 section for
-the full mechanism, collision matrix, and cleanup design.
+Decision record for issue #9 (smooth resolution scaling). Captures why 1.3.0
+ships the override-plist ladder (Option A) and does not attempt a live,
+blink-free private-API path (Option B).
 
 ## Question
 
@@ -80,36 +67,41 @@ first override registration; skipping it for already-registered modes would trim
 per-step slider latency. It will not remove the blink (the modeset transaction
 blinks regardless), but it is a cheap, low-risk win. Tracked in faz.
 
-## Update: Option A (override-plist ladder) is also insufficient on Apple Silicon
+## Correction: Option A (override-plist ladder) works, but needs a display reconnect
 
-Empirical test on the real target hardware (M4 Max, macOS 26, external AOC
-Q27G3XMN 2560x1440, vendor 0x5e3 / product 0xb326) overturns the assumption
-that Option A at least yields a *denser discrete* ladder:
+An earlier revision of this doc claimed Option A "cannot build a dense ladder on
+Apple Silicon" because a test on the AOC Q27G3XMN (2560x1440) injected 13
+backings but enumerated only 3 (the standard 720p/900p/1080p HiDPI sizes). That
+conclusion was WRONG. The enumeration ran after IOServiceRequestProbe but before
+the display had actually re-read the override plist, so only macOS's default
+HiDPI sizes were present at that moment. "The same probe surfaced the 3
+immediately, so it's not a timing issue" was a bad inference: those 3 are macOS
+defaults, not our injected modes.
 
-We injected 13 backing resolutions into the display's override plist. macOS
-enumerated only 3 of them:
+After a physical display reconnect (unplug/replug or sleep/wake), all 12
+injectable dense sizes enumerate correctly on the same hardware, confirmed via
+CGDisplayCopyAllDisplayModes:
+1280x720, 1386x780, 1492x840, 1600x900, 1706x960, 1812x1020, 1920x1080,
+2026x1140, 2132x1200, 2240x1260, 2346x1320, 2452x1380 (the 13th, native-as-HiDPI
+at 5120x2880 backing, is correctly rejected because the panel can't do it). So
+the dense ladder is real on Apple Silicon; IOServiceRequestProbe alone is just
+insufficient to surface newly injected modes, exactly the reconnect caveat the
+HiDPI enable path (HiDPIView.reconnectNeeded) already documents.
 
-- 2560x1440 backing -> looks like 1280x720  (kept)
-- 3200x1800 backing -> looks like 1600x900  (kept)
-- 3840x2160 backing -> looks like 1920x1080 (kept)
-- 2772x1560, 2984x1680, 3412x1920, 3624x2040, 4052x2280, 4264x2400,
-  4480x2520, 4692x2640, 4904x2760 -> all silently dropped
-- 5120x2880 (native as HiDPI) -> dropped (panel can't)
+Two real caveats remain, both inherent, not fixable by a different injection
+mechanism:
+- First enable needs a display reconnect for the injected sizes to appear.
+- Every dense stop except 1280x720 is fractionally downscaled (backing not an
+  integer multiple of the panel), so it is soft. On a 2560x1440 panel only
+  1280x720 HiDPI (2560x1440 backing) is pixel-perfect, and native 2560x1440
+  (non-HiDPI) is the sharpest overall. Smooth scaling is therefore a size-
+  granularity feature, not a sharpness feature; sharp AND high-density needs a
+  4K/5K panel where the "looks like" size is an integer 2x of the panel.
+- Each switch is still a real modeset (blinks); that is the B1 limitation.
 
-The three survivors are exactly 2x standard 16:9 resolutions (720p/900p/1080p).
-Every non-standard backing was rejected. Verified by decoding the on-disk plist
-(13 entries present) against a CGDisplayCopyAllDisplayModes enumeration (only
-the 3 standard sizes appear as HiDPI). The same probe surfaced the 3 standard
-ones immediately, so this is selective rejection, not a reconnect/probe timing
-issue.
-
-Conclusion: macOS on Apple Silicon whitelists standard scaled HiDPI sizes and
-rejects arbitrary injected backings, so the override-plist mechanism cannot
-build a dense/smooth ladder on this hardware at all, only ~4 usable stops. This
-is why the "smooth scaling" slider was no smoother than the existing resolution
-picker, and why increasing the injected step count changes nothing. Genuine
-smooth scaling requires owning the framebuffer (virtual display + mirror /
-oversampling), tracked as the next spike.
+Outcome: Option A (dense ladder + slider) is restored and ships in 1.3.0. The
+virtual-display path (B2 below) remains the future 1.4.0 upgrade for continuous,
+blink-free scaling.
 
 ## Spike B2: virtual-display + hardware-mirror (oversampling) — CONDITIONAL GO
 
