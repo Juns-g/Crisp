@@ -8,7 +8,7 @@ struct DisplayDetailView: View {
     @State private var showPreset: Bool = false
     @State private var showColorProfile: Bool = false
     @State private var showImageAdjustment: Bool = false
-    @State private var colorSpaceName: String = ""
+    @State private var activeProfileName: String = ""
     @State private var presetName: String = ""
 
     var body: some View {
@@ -48,13 +48,13 @@ struct DisplayDetailView: View {
                     icon: "paintpalette.fill",
                     iconColor: .purple,
                     label: "Color Profile",
-                    subtitle: colorSpaceName,
+                    subtitle: activeProfileName,
                     isExpanded: $showColorProfile
                 )
 
                 VStack(spacing: 0) {
                     if showColorProfile {
-                        ColorProfileView(display: display)
+                        ColorProfileView(display: display, activeProfileName: $activeProfileName)
                             .transition(.opacity)
                     }
                 }
@@ -103,10 +103,10 @@ struct DisplayDetailView: View {
             showImageAdjustment = false
         }
         .task(id: display.displayID) {
-            colorSpaceName = ""
+            activeProfileName = ""
             presetName = ""
             guard !Task.isCancelled else { return }
-            colorSpaceName = ColorProfileService.shared.currentColorSpaceName(for: display.displayID)
+            activeProfileName = ColorProfileService.shared.currentColorSpaceName(for: display.displayID)
             let svc = DisplayPresetService.shared
             if let idx = svc.activePresetIndex(for: display.displayID) {
                 presetName = svc.presets(for: display.displayID)

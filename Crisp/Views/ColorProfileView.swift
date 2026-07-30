@@ -5,6 +5,8 @@ import SwiftUI
 /// the system Displays panel; checkmark on the active profile.
 struct ColorProfileView: View {
     @ObservedObject var display: DisplayInfo
+    /// The parent row's subtitle; updated here so it refreshes immediately on switch.
+    @Binding var activeProfileName: String
     @State private var profiles: [ICCProfile] = []
     @State private var isLoading: Bool = false
     @State private var selectedPath: URL?
@@ -24,20 +26,11 @@ struct ColorProfileView: View {
                 .padding(.leading, 24)
                 .padding(.vertical, 6)
             } else {
-                if !recommendedProfiles.isEmpty {
-                    groupHeader("Recommended")
-                    ForEach(recommendedProfiles) { profile in
-                        CheckmarkRow(label: profile.name, isSelected: profile.path == selectedPath) {
-                            select(profile)
-                        }
-                    }
-                }
-                if !otherProfiles.isEmpty {
-                    groupHeader("All Profiles")
-                    ForEach(otherProfiles) { profile in
-                        CheckmarkRow(label: profile.name, isSelected: profile.path == selectedPath) {
-                            select(profile)
-                        }
+                // Flat list, like macOS's display color dropdown — no Recommended /
+                // All grouping. The list is already scoped to this display.
+                ForEach(profiles) { profile in
+                    CheckmarkRow(label: profile.name, isSelected: profile.path == selectedPath) {
+                        select(profile)
                     }
                 }
             }
@@ -53,29 +46,6 @@ struct ColorProfileView: View {
         .task { await loadProfiles() }
     }
 
-    private func groupHeader(_ title: String) -> some View {
-        Text(LocalizedStringKey(title))
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .padding(.leading, 24)
-            .padding(.top, 6)
-            .padding(.bottom, 2)
-    }
-
-    // MARK: - Grouping
-
-    private var recommendedProfiles: [ICCProfile] {
-        let keywords = ["sRGB", "P3", "Display", "LCD", "Apple", "Color LCD"]
-        return profiles.filter { p in
-            keywords.contains { p.name.localizedCaseInsensitiveContains($0) }
-        }
-    }
-
-    private var otherProfiles: [ICCProfile] {
-        let recommended = Set(recommendedProfiles.map(\.path))
-        return profiles.filter { !recommended.contains($0.path) }
-    }
-
     // MARK: - Actions
 
     private func select(_ profile: ICCProfile) {
@@ -89,8 +59,9 @@ struct ColorProfileView: View {
     private func loadProfiles() async {
         isLoading = true
         let displayID = display.displayID
+        let displayUUID = display.displayUUID
         let svc = ColorProfileService.shared
-        let loaded = await svc.enumerateProfiles()
+        let loaded = await svc.enumerateProfiles(for: displayUUID)
         let currentURL = svc.currentProfileURL(for: displayID)
         profiles = loaded
         // Snap to the enumerated entry by file path: the device registry URL
@@ -116,6 +87,8 @@ struct ColorProfileView: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 applyError = nil
             }
+        } else if activeProfileName != profile.name {
+            activeProfileName = profile.name
         }
     }
 }
