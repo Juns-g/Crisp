@@ -103,6 +103,14 @@ Outcome: Option A (dense ladder + slider) is restored and ships in 1.3.0. The
 virtual-display path (B2 below) remains the future 1.4.0 upgrade for continuous,
 blink-free scaling.
 
+Planned 1.4.0 cleanup (reduce UI bloat): retire the global "HiDPI" on/off toggle
+in Settings and fold HiDPI enablement into a single per-display "Scaling"
+control (HiDPI on/off + optional slider), once smooth scaling graduates from
+beta. Today they overlap: the global toggle is the simple bulk coarse-ladder
+enable, smooth scaling is the per-display dense-ladder enable. Two entry points
+for the same override plist is the bloat to remove; the blocker is not making a
+beta feature load-bearing for basic HiDPI before it is stable.
+
 ## Spike B2: virtual-display + hardware-mirror (oversampling) — CONDITIONAL GO
 
 The only remaining path: create a `CGVirtualDisplay` we control, hardware-mirror
