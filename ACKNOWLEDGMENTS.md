@@ -33,8 +33,8 @@ SOFTWARE.
 
 ## Contributions
 
-Physical display disconnect and reconnect (Apple Silicon) contributed by
-[@caicaiks](https://github.com/caicaiks).
+- [@caicaiks](https://github.com/caicaiks) ([#4](https://github.com/didriksg/Crisp/pull/4))
+- [@shaw-baobao](https://github.com/shaw-baobao) ([#11](https://github.com/didriksg/Crisp/pull/11))
 
 ## Translations
 
