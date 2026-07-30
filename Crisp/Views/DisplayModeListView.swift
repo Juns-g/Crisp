@@ -6,11 +6,14 @@ import SwiftUI
 /// its own section, shown only when the current resolution offers more than one.
 struct DisplayModeSection: View {
     @ObservedObject var display: DisplayInfo
+    @ObservedObject private var settings = SettingsService.shared
     @State private var showResolution: Bool = false
     @State private var showRefresh: Bool = false
     @State private var pendingResolutionID: String?
     @State private var pendingRefreshID: Int32?
     @State private var errorMessage: String?
+    @State private var sliderIndex: Double = 0
+    @State private var smoothBusy: Bool = false
 
     private var currentMode: DisplayMode? { display.currentDisplayMode }
 
@@ -71,6 +74,12 @@ struct DisplayModeSection: View {
                 )
                 refreshList(group)
                     .curtainReveal(showRefresh)
+            }
+
+            // Smooth scaling: opt-in dense HiDPI ladder driven by a slider. External
+            // displays only (built-ins already scale smoothly via System Settings).
+            if !display.isBuiltin {
+                smoothScalingSection
             }
 
             if let msg = errorMessage {
@@ -178,6 +187,148 @@ struct DisplayModeSection: View {
                 }
             }
             done()
+        }
+    }
+
+    // MARK: - Smooth scaling
+
+    private var smoothEnabled: Bool {
+        settings.smoothScalingDisplayUUIDs.contains(display.displayUUID)
+    }
+
+    /// Unique HiDPI logical sizes (the dense ladder once enabled), one representative
+    /// mode each (highest refresh), ascending: left = Larger Text, right = More Space.
+    private var smoothModes: [DisplayMode] {
+        var seen = Set<String>()
+        return display.availableModes
+            .filter { $0.isHiDPI }
+            .sorted { $0.refreshRate > $1.refreshRate }
+            .filter { seen.insert("\($0.width)x\($0.height)").inserted }
+            .sorted { $0.width == $1.width ? $0.height < $1.height : $0.width < $1.width }
+    }
+
+    @ViewBuilder
+    private var smoothScalingSection: some View {
+        Toggle(isOn: Binding(get: { smoothEnabled }, set: { setSmoothScaling($0) })) {
+            HStack(spacing: 6) {
+                MenuItemIcon(systemName: "slider.horizontal.below.rectangle", color: .blue)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Smooth scaling")
+                        .font(.body)
+                    if !smoothEnabled {
+                        Text("First enable asks for an administrator password")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                Spacer()
+                if smoothBusy {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 16, height: 16)
+                }
+            }
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+
+        if smoothEnabled {
+            smoothSlider
+        }
+    }
+
+    @ViewBuilder
+    private var smoothSlider: some View {
+        let modes = smoothModes
+        if modes.count >= 2 {
+            VStack(alignment: .leading, spacing: 2) {
+                Slider(
+                    value: $sliderIndex,
+                    in: 0...Double(modes.count - 1),
+                    step: 1,
+                    onEditingChanged: { editing in
+                        if !editing { applySmooth(modes) }
+                    }
+                )
+                HStack(spacing: 0) {
+                    Text("Larger Text")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(looksLikeLabel(modes))
+                        .font(.caption2)
+                    Spacer()
+                    Text("More Space")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
+            .onAppear { sliderIndex = currentSmoothIndex(modes) }
+            .onChange(of: display.currentDisplayMode?.id) { _, _ in
+                if !smoothBusy { sliderIndex = currentSmoothIndex(modes) }
+            }
+        }
+    }
+
+    private func currentSmoothIndex(_ modes: [DisplayMode]) -> Double {
+        guard let cur = currentMode, cur.isHiDPI,
+              let idx = modes.firstIndex(where: { $0.width == cur.width && $0.height == cur.height })
+        else { return Double(max(modes.count - 1, 0)) }
+        return Double(idx)
+    }
+
+    private func looksLikeLabel(_ modes: [DisplayMode]) -> String {
+        let i = Int(sliderIndex.rounded())
+        guard modes.indices.contains(i) else { return "" }
+        return "\(modes[i].width) × \(modes[i].height)"
+    }
+
+    private func applySmooth(_ modes: [DisplayMode]) {
+        let i = Int(sliderIndex.rounded())
+        guard modes.indices.contains(i) else { return }
+        let target = modes[i]
+        // Keep the current refresh rate at that logical size when it is offered.
+        let mode = display.availableModes.first {
+            $0.isHiDPI && $0.width == target.width && $0.height == target.height &&
+            $0.refreshRate == currentMode?.refreshRate
+        } ?? target
+        guard mode.id != currentMode?.id else { return }
+        switchTo(mode) { }
+    }
+
+    private func setSmoothScaling(_ on: Bool) {
+        guard !smoothBusy else { return }
+        let uuid = display.displayUUID
+        let (nativeW, nativeH) = display.nativeResolution
+        smoothBusy = true
+        Task { @MainActor in
+            let err = on
+                ? HiDPIService.shared.enableSmoothScaling(
+                    vendor: display.vendorNumber, product: display.modelNumber,
+                    nativeWidth: nativeW, nativeHeight: nativeH)
+                : HiDPIService.shared.disableSmoothScaling(
+                    vendor: display.vendorNumber, product: display.modelNumber,
+                    nativeWidth: nativeW, nativeHeight: nativeH)
+            if let err {
+                withAnimation { errorMessage = err }
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    withAnimation { errorMessage = nil }
+                }
+            } else {
+                if on {
+                    settings.smoothScalingDisplayUUIDs.insert(uuid)
+                } else {
+                    settings.smoothScalingDisplayUUIDs.remove(uuid)
+                }
+                HiDPIService.shared.refreshModes(for: display)
+            }
+            smoothBusy = false
         }
     }
 }

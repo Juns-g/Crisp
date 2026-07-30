@@ -1620,6 +1620,36 @@
           }
         }
       }
+    },
+    "Smooth scaling" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "平滑缩放"
+          }
+        }
+      }
+    },
+    "Larger Text" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "较大文本"
+          }
+        }
+      }
+    },
+    "More Space" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更多空间"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
