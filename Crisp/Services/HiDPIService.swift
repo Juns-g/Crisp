@@ -73,14 +73,43 @@ final class HiDPIService: @unchecked Sendable {
         }
     }
 
+    // MARK: - Smooth Scaling
+
+    /// Enables (or re-injects) smooth scaling for a display: rewrites the override plist
+    /// with the dense HiDPI ladder and re-probes. Same privileged path as normal HiDPI,
+    /// just a denser scale-resolutions list, so it also works on a display already HiDPI-
+    /// enabled with the old coarse plist (it overwrites in place).
+    func enableSmoothScaling(vendor: UInt32, product: UInt32,
+                             nativeWidth: Int, nativeHeight: Int) -> String? {
+        writeScaledModesPlist(vendor: vendor, product: product,
+                              scaledModes: generateSmoothScaledModes(nativeWidth: nativeWidth,
+                                                                     nativeHeight: nativeHeight))
+    }
+
+    /// Disables smooth scaling by reverting the override plist to the coarse ladder. Keeps
+    /// normal HiDPI on (does not remove the plist); use disableHiDPI to turn HiDPI off.
+    func disableSmoothScaling(vendor: UInt32, product: UInt32,
+                              nativeWidth: Int, nativeHeight: Int) -> String? {
+        writeScaledModesPlist(vendor: vendor, product: product,
+                              scaledModes: generateScaledModes(nativeWidth: nativeWidth,
+                                                               nativeHeight: nativeHeight))
+    }
+
     // MARK: - Plist Override
 
     private func enableHiDPIPlist(vendor: UInt32, product: UInt32,
                                    nativeWidth: Int, nativeHeight: Int) -> String? {
+        writeScaledModesPlist(vendor: vendor, product: product,
+                              scaledModes: generateScaledModes(nativeWidth: nativeWidth,
+                                                               nativeHeight: nativeHeight))
+    }
+
+    /// Writes the override plist with the given scale-resolutions entries via admin auth,
+    /// then re-probes so macOS re-enumerates modes. Shared by normal HiDPI and smooth scaling.
+    private func writeScaledModesPlist(vendor: UInt32, product: UInt32, scaledModes: [Data]) -> String? {
         let dirPath = overrideDir(vendor: vendor).path
         let plistPath = overridePlistURL(vendor: vendor, product: product).path
 
-        let scaledModes = generateScaledModes(nativeWidth: nativeWidth, nativeHeight: nativeHeight)
         let plist: [String: Any] = [
             "scale-resolutions": scaledModes
         ]

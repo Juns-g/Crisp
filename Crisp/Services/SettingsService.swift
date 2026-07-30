@@ -47,6 +47,7 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
         static let colorPickerHistory     = "crisp.colorPickerHistory"
         static let brightnessKeyTarget    = "crisp.brightnessKeyTarget"
         static let brightnessKeySelected  = "crisp.brightnessKeySelectedDisplays"
+        static let smoothScalingDisplays  = "crisp.smoothScalingDisplays"
         // Per-display keys use prefix + displayID
         static let brightnessPrefix       = "crisp.brightness_"
         static let contrastPrefix         = "crisp.contrast_"
@@ -97,6 +98,15 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
     @Published var brightnessKeySelectedDisplayUUIDs: Set<String> = [] {
         didSet {
             defaults.set(Array(brightnessKeySelectedDisplayUUIDs), forKey: Keys.brightnessKeySelected)
+        }
+    }
+
+    /// Displays the user opted into smooth scaling for, keyed by DisplayInfo.displayUUID.
+    /// Smooth scaling injects a dense HiDPI ladder (which lengthens the resolution list),
+    /// so it is opt-in per display rather than forced on every HiDPI display.
+    @Published var smoothScalingDisplayUUIDs: Set<String> = [] {
+        didSet {
+            defaults.set(Array(smoothScalingDisplayUUIDs), forKey: Keys.smoothScalingDisplays)
         }
     }
 
@@ -170,5 +180,6 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
         brightnessKeyTarget = defaults.string(forKey: Keys.brightnessKeyTarget)
             .flatMap(BrightnessKeyTarget.init(rawValue:)) ?? .underCursor
         brightnessKeySelectedDisplayUUIDs = Set(defaults.stringArray(forKey: Keys.brightnessKeySelected) ?? [])
+        smoothScalingDisplayUUIDs = Set(defaults.stringArray(forKey: Keys.smoothScalingDisplays) ?? [])
     }
 }
