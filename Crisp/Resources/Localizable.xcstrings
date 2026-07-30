@@ -261,12 +261,12 @@
         }
       }
     },
-    "Brightness (Combined)" : {
+    "Combined" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "亮度（合并）"
+            "value" : "合并"
           }
         }
       }

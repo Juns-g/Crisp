@@ -169,20 +169,14 @@ struct CombinedBrightnessView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Image(systemName: "sun.max.fill")
-                    .foregroundColor(.yellow)
-                    .font(.caption)
-                    .accessibilityHidden(true)
-                Text("Brightness (Combined)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
-                Text("\(Int(combinedBrightness))%")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .monospacedDigit()
-            }
+            // Bold title matching the per-display name rows (DisplayRowView), so the
+            // combined control reads as another titled row rather than a separate
+            // widget. Aligned to the display titles' 14pt inset; the slider below
+            // keeps the sliders' 12pt inset.
+            Text("Combined")
+                .fontWeight(.semibold)
+                .lineLimit(1)
+                .padding(.horizontal, 14)
 
             HStack(spacing: 8) {
                 BrightnessStepButton(systemName: "sun.min.fill") { stepAll(-10.0) }
@@ -198,6 +192,7 @@ struct CombinedBrightnessView: View {
                         }
                     }
                 }
+                .tint(Color.accentColor)
                 .controlSize(.small)
                 .accessibilityLabel("Combined brightness")
                 .accessibilityValue("\(Int(combinedBrightness))%")
@@ -213,9 +208,20 @@ struct CombinedBrightnessView: View {
 
                 BrightnessStepButton(systemName: "sun.max.fill") { stepAll(10.0) }
             }
+            .padding(.horizontal, 12)
         }
-        .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .background {
+            // Track the displays' real brightness so the combined handle glides in
+            // exact sync with the per-display handles (they read the same source
+            // that setBrightnessSmooth updates per-frame). Invisible; skipped while
+            // dragging, when the drag itself is driving the displays.
+            ForEach(displays) { display in
+                BrightnessProbe(display: display) {
+                    if !isDragging { combinedBrightness = averageBrightness }
+                }
+            }
+        }
         .onAppear {
             combinedBrightness = averageBrightness
         }
@@ -223,9 +229,26 @@ struct CombinedBrightnessView: View {
 
     private func stepAll(_ delta: Double) {
         let target = max(0, min(100, combinedBrightness + delta))
-        combinedBrightness = target
+        // Fade every display with the tuned smooth transition (paces DDC/gamma,
+        // re-targets any in-flight fade). The handle is NOT moved here: it follows
+        // the displays' real brightness via BrightnessProbe, so it glides in exact
+        // sync with the per-display handles instead of lagging a separate ramp.
         for display in displays {
             BrightnessService.shared.setBrightnessSmooth(target, for: display)
         }
+    }
+}
+
+/// Invisible observer of one display's brightness. Lets an aggregate control (the
+/// combined slider) react to the displays' real per-frame fade without owning a
+/// separate animation. Zero-sized, so it adds nothing to layout.
+private struct BrightnessProbe: View {
+    @ObservedObject var display: DisplayInfo
+    let onChange: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: display.brightness) { _, _ in onChange() }
     }
 }
