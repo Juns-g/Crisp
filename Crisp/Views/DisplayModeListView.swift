@@ -196,13 +196,21 @@ struct DisplayModeSection: View {
         settings.smoothScalingDisplayUUIDs.contains(display.displayUUID)
     }
 
-    /// Unique HiDPI logical sizes (the dense ladder once enabled), one representative
-    /// mode each (highest refresh), ascending: left = Larger Text, right = More Space.
+    /// The "looks like" ladder for the slider: every HiDPI logical size plus the native
+    /// (max) resolution as the top "More Space" stop. On a standard panel the native mode
+    /// is non-HiDPI, and the HiDPI ladder can't reach it (native-as-HiDPI needs a backing
+    /// the panel/DCP won't enumerate), so without this the slider topped out below the
+    /// display's real maximum. One representative per logical size (prefer HiDPI, then
+    /// highest refresh), ascending: left = Larger Text, right = More Space.
     private var smoothModes: [DisplayMode] {
+        let (nativeW, nativeH) = display.nativeResolution
         var seen = Set<String>()
         return display.availableModes
-            .filter { $0.isHiDPI }
-            .sorted { $0.refreshRate > $1.refreshRate }
+            .filter { $0.isHiDPI || ($0.width == nativeW && $0.height == nativeH) }
+            .sorted {
+                if $0.isHiDPI != $1.isHiDPI { return $0.isHiDPI }
+                return $0.refreshRate > $1.refreshRate
+            }
             .filter { seen.insert("\($0.width)x\($0.height)").inserted }
             .sorted { $0.width == $1.width ? $0.height < $1.height : $0.width < $1.width }
     }
@@ -276,7 +284,7 @@ struct DisplayModeSection: View {
     }
 
     private func currentSmoothIndex(_ modes: [DisplayMode]) -> Double {
-        guard let cur = currentMode, cur.isHiDPI,
+        guard let cur = currentMode,
               let idx = modes.firstIndex(where: { $0.width == cur.width && $0.height == cur.height })
         else { return Double(max(modes.count - 1, 0)) }
         return Double(idx)
@@ -292,9 +300,9 @@ struct DisplayModeSection: View {
         let i = Int(sliderIndex.rounded())
         guard modes.indices.contains(i) else { return }
         let target = modes[i]
-        // Keep the current refresh rate at that logical size when it is offered.
+        // Keep the current refresh rate at that logical size and scaling kind when offered.
         let mode = display.availableModes.first {
-            $0.isHiDPI && $0.width == target.width && $0.height == target.height &&
+            $0.isHiDPI == target.isHiDPI && $0.width == target.width && $0.height == target.height &&
             $0.refreshRate == currentMode?.refreshRate
         } ?? target
         guard mode.id != currentMode?.id else { return }
