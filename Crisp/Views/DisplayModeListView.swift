@@ -20,6 +20,8 @@ struct DisplayModeSection: View {
 
     /// Group modes by (resolution + HiDPI), sorted by resolution descending.
     private var resolutionGroups: [ResolutionGroup] {
+        let (nativeW, nativeH) = display.nativeResolution
+
         let base = display.availableModes.filter {
             $0.width >= 1280 && $0.height >= 720
         }
@@ -30,14 +32,37 @@ struct DisplayModeSection: View {
             grouped[key, default: []].append(mode)
         }
 
-        return grouped.map { (_, modes) in
+        // Native label convention (matches System Settings): a non-HiDPI mode is
+        // "low resolution" only when a HiDPI mode of the same logical size also
+        // exists (so the retina twin is strictly better). The display's native mode
+        // is the "(Default)"; only tagged for external displays, since the built-in's
+        // native mode is a 1x physical size that macOS does not treat as the default.
+        let hiDPISizes = Set(base.filter { $0.isHiDPI }.map { "\($0.width)x\($0.height)" })
+
+        return grouped.map { (_, modes) -> ResolutionGroup in
             let sorted = modes.sorted { $0.refreshRate > $1.refreshRate }
+            let w = sorted[0].width, h = sorted[0].height, hidpi = sorted[0].isHiDPI
+            let isDefault = !display.isBuiltin && !hidpi && w == nativeW && h == nativeH
+            let isLowResolution = !hidpi && !isDefault && hiDPISizes.contains("\(w)x\(h)")
             return ResolutionGroup(
-                width: sorted[0].width,
-                height: sorted[0].height,
-                isHiDPI: sorted[0].isHiDPI,
+                width: w,
+                height: h,
+                isHiDPI: hidpi,
+                isDefault: isDefault,
+                isLowResolution: isLowResolution,
                 modes: sorted
             )
+        }
+        .filter { group in
+            // External: drop standalone 1x oddballs (non-HiDPI, no HiDPI twin, not
+            // the native default) that clutter the list, e.g. 2048x1152, 1344x756,
+            // and the off-aspect 4:3/5:4/portrait sizes. Keep native, the HiDPI
+            // ladder, the "(low resolution)" twins, and whatever is current. The
+            // built-in keeps everything (its big 1x modes are legitimate "more space"
+            // options macOS also offers).
+            if display.isBuiltin { return true }
+            if group.isHiDPI || group.isDefault || group.isLowResolution { return true }
+            return group.modes.contains { $0.id == currentMode?.id }
         }
         .sorted { lhs, rhs in
             if lhs.width != rhs.width { return lhs.width > rhs.width }
@@ -108,25 +133,58 @@ struct DisplayModeSection: View {
 
     @ViewBuilder
     private var resolutionList: some View {
-        if resolutionGroups.isEmpty {
+        let groups = resolutionGroups
+        if groups.isEmpty {
             Text("No display modes available")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
         } else {
+            // HiDPI is surfaced once as a section header instead of per-row. The
+            // native "(Default)" mode is neither HiDPI nor low-resolution, so it sits
+            // alone at the top; everything else splits into HiDPI / Non-HiDPI.
+            let defaults = groups.filter { $0.isDefault }
+            let hiDPI = groups.filter { $0.isHiDPI }
+            let lowRes = groups.filter { !$0.isHiDPI && !$0.isDefault }
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(resolutionGroups) { group in
-                    CheckmarkRow(
-                        label: group.menuLabel,
-                        isSelected: group.id == currentGroup?.id,
-                        isPending: group.id == pendingResolutionID
-                    ) {
-                        selectResolution(group)
-                    }
+                ForEach(defaults) { resolutionRow($0, label: $0.menuLabel) }
+                if !hiDPI.isEmpty {
+                    resolutionSectionHeader("HiDPI")
+                    ForEach(hiDPI) { resolutionRow($0, label: $0.resolutionString) }
+                }
+                if !lowRes.isEmpty {
+                    // "Non-HiDPI" (not "Low Resolution"): accurate for both the
+                    // external's soft 1x twins and the built-in's big 1x modes
+                    // (e.g. 3024x1964, high pixel count but non-Retina).
+                    resolutionSectionHeader("Non-HiDPI")
+                    ForEach(lowRes) { resolutionRow($0, label: $0.resolutionString) }
                 }
             }
         }
+    }
+
+    private func resolutionRow(_ group: ResolutionGroup, label: String) -> some View {
+        CheckmarkRow(
+            label: label,
+            isSelected: group.id == currentGroup?.id,
+            isPending: group.id == pendingResolutionID
+        ) {
+            selectResolution(group)
+        }
+    }
+
+    private func resolutionSectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption)
+            .fontWeight(.semibold)
+            .foregroundColor(.secondary)
+            .padding(.leading, 24)
+            .padding(.trailing, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
     }
 
     private func refreshList(_ group: ResolutionGroup) -> some View {
@@ -409,11 +467,20 @@ private struct ResolutionGroup: Identifiable {
     let width: Int
     let height: Int
     let isHiDPI: Bool
+    let isDefault: Bool
+    let isLowResolution: Bool
     let modes: [DisplayMode] // sorted by refresh rate descending
 
     var id: String { "\(width)x\(height)_\(isHiDPI)" }
-    var resolutionString: String { "\(width)×\(height)" }
-    var menuLabel: String { isHiDPI ? "\(resolutionString) (HiDPI)" : resolutionString }
+    var resolutionString: String { "\(width) × \(height)" }
+    /// Native System Settings wording: retina modes clean, the 1x twin "(low
+    /// resolution)", the display's native mode "(Default)". Every unmarked row is
+    /// therefore a HiDPI/retina mode; the "(low resolution)" tag flags the soft ones.
+    var menuLabel: String {
+        if isDefault { return "\(resolutionString) (Default)" }
+        if isLowResolution { return "\(resolutionString) (low resolution)" }
+        return resolutionString
+    }
     var hasMultipleRates: Bool { modes.count > 1 }
     var bestMode: DisplayMode { modes[0] }
 }

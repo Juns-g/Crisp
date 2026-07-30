@@ -32,6 +32,9 @@ publish (`scripts/release.sh v1.3.0 docs/RELEASE_NOTES_1.3.0.md --publish`).
 
 ## Changed
 
+- Resolution list now mirrors macOS System Settings: native-style labels
+  ("Default", "low resolution"), off-spec external modes (odd aspect ratios and
+  stray 1x sizes) hidden, and modes grouped under HiDPI / Non-HiDPI headers.
 - Combined brightness control restyled to match the per-display rows.
 - Smoother reveal animation for the resolution, preset, and image sections.
 - Spacing between stacked display sections in the menu.
