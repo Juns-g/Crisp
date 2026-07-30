@@ -265,7 +265,7 @@ final class HiDPIService: @unchecked Sendable {
     /// across these. Injecting many modes also lengthens the System Settings list, so
     /// this is only used for displays the user opts into smooth scaling for.
     func generateSmoothScaledModes(nativeWidth: Int, nativeHeight: Int,
-                                   steps: Int = 12, minScale: Double = 0.5) -> [Data] {
+                                   steps: Int = 20, minScale: Double = 0.5) -> [Data] {
         var logical: [(Int, Int)] = [(nativeWidth, nativeHeight)]  // native as HiDPI
         for i in 0..<max(steps, 1) {
             let scale = minScale + (1.0 - minScale) * Double(i) / Double(steps)
