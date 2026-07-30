@@ -33,7 +33,7 @@ SOFTWARE.
 
 ## Contributions
 
-- [@caicaiks](https://github.com/caicaiks) ([#4](https://github.com/didriksg/Crisp/pull/4))
+- [@caicaiks](https://github.com/caicaiks) ([#4](https://github.com/didriksg/Crisp/pull/4), [#13](https://github.com/didriksg/Crisp/pull/13))
 - [@shaw-baobao](https://github.com/shaw-baobao) ([#11](https://github.com/didriksg/Crisp/pull/11))
 
 ## Translations
