@@ -206,37 +206,52 @@ final class HiDPIService: @unchecked Sendable {
     }
 
     private func generateScaledModes(nativeWidth: Int, nativeHeight: Int) -> [Data] {
-        // Generate HiDPI modes: each entry is 8 bytes big-endian (backingW, backingH)
-        // For a 2560×1440 display, we want:
-        //   1920×1080 HiDPI (backing 3840×2160)
-        //   1600×900  HiDPI (backing 3200×1800)
-        //   1280×720  HiDPI (backing 2560×1440)
-        //   native as HiDPI (backing 5120×2880)
-        var resolutions: [(Int, Int)] = []
-
-        // Native resolution as HiDPI (2x backing)
-        resolutions.append((nativeWidth * 2, nativeHeight * 2))
-
-        // Scaled HiDPI modes
-        let scales: [Double] = [0.75, 0.625, 0.5]
-        for scale in scales {
-            let logicalW = Int((Double(nativeWidth) * scale).rounded()) & ~1
-            let logicalH = Int((Double(nativeHeight) * scale).rounded()) & ~1
-            guard logicalW >= 800, logicalH >= 600 else { continue }
-            resolutions.append((logicalW * 2, logicalH * 2))
+        // Coarse HiDPI ladder matching macOS's usual scaled set: native as HiDPI plus
+        // a few standard steps. Used for normal HiDPI enablement. Each entry is the
+        // backing (pixel) resolution = logical × 2.
+        var logical: [(Int, Int)] = [(nativeWidth, nativeHeight)]
+        for scale in [0.75, 0.625, 0.5] {
+            let w = Int((Double(nativeWidth) * scale).rounded()) & ~1
+            let h = Int((Double(nativeHeight) * scale).rounded()) & ~1
+            guard w >= 800, h >= 600 else { continue }
+            logical.append((w, h))
         }
+        return logical.map { encodeScaledMode(backingW: $0.0 * 2, backingH: $0.1 * 2) }
+    }
 
-        return resolutions.map { (backingW, backingH) in
-            var bytes = [UInt8](repeating: 0, count: 8)
-            bytes[0] = UInt8((backingW >> 24) & 0xFF)
-            bytes[1] = UInt8((backingW >> 16) & 0xFF)
-            bytes[2] = UInt8((backingW >> 8) & 0xFF)
-            bytes[3] = UInt8(backingW & 0xFF)
-            bytes[4] = UInt8((backingH >> 24) & 0xFF)
-            bytes[5] = UInt8((backingH >> 16) & 0xFF)
-            bytes[6] = UInt8((backingH >> 8) & 0xFF)
-            bytes[7] = UInt8(backingH & 0xFF)
-            return Data(bytes)
+    /// Dense HiDPI "looks like" ladder for smooth scaling: native plus `steps` logical
+    /// sizes from `minScale`×native up toward native, each injected as a 2×-backed HiDPI
+    /// mode. Deduped (rounding can collide adjacent steps), even dimensions, floored at
+    /// 800×600. This is what lets the smooth-scaling slider feel continuous: it snaps
+    /// across these. Injecting many modes also lengthens the System Settings list, so
+    /// this is only used for displays the user opts into smooth scaling for.
+    func generateSmoothScaledModes(nativeWidth: Int, nativeHeight: Int,
+                                   steps: Int = 12, minScale: Double = 0.5) -> [Data] {
+        var logical: [(Int, Int)] = [(nativeWidth, nativeHeight)]  // native as HiDPI
+        for i in 0..<max(steps, 1) {
+            let scale = minScale + (1.0 - minScale) * Double(i) / Double(steps)
+            let w = Int((Double(nativeWidth) * scale).rounded()) & ~1
+            let h = Int((Double(nativeHeight) * scale).rounded()) & ~1
+            guard w >= 800, h >= 600 else { continue }
+            logical.append((w, h))
         }
+        var seen = Set<Int>()
+        let unique = logical.filter { seen.insert(($0.0 << 16) | $0.1).inserted }
+        return unique.map { encodeScaledMode(backingW: $0.0 * 2, backingH: $0.1 * 2) }
+    }
+
+    /// Encodes a backing (pixel) resolution as the 8-byte big-endian entry the
+    /// `scale-resolutions` override plist expects: [backingW big-endian][backingH big-endian].
+    private func encodeScaledMode(backingW: Int, backingH: Int) -> Data {
+        var bytes = [UInt8](repeating: 0, count: 8)
+        bytes[0] = UInt8((backingW >> 24) & 0xFF)
+        bytes[1] = UInt8((backingW >> 16) & 0xFF)
+        bytes[2] = UInt8((backingW >> 8) & 0xFF)
+        bytes[3] = UInt8(backingW & 0xFF)
+        bytes[4] = UInt8((backingH >> 24) & 0xFF)
+        bytes[5] = UInt8((backingH >> 16) & 0xFF)
+        bytes[6] = UInt8((backingH >> 8) & 0xFF)
+        bytes[7] = UInt8(backingH & 0xFF)
+        return Data(bytes)
     }
 }
