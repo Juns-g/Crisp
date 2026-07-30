@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// Displays notch information and provides a toggle to cover the notch with a black overlay.
+/// Provides a toggle to cover the notch with a black overlay.
 /// Only visible for built-in displays that actually have a notch (safeAreaInsets.top > 0).
 struct NotchView: View {
     @ObservedObject var display: DisplayInfo
@@ -22,19 +22,6 @@ struct NotchView: View {
     var body: some View {
         if notchHeight > 0 {
             VStack(alignment: .leading, spacing: 0) {
-                // Info row
-                HStack {
-                    MenuItemIcon(systemName: "camera.aperture", color: .blue)
-                    Text("Notch")
-                        .font(.body)
-                    Text(String(format: "%.0f pt", notchHeight))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-
                 // Hide/show toggle
                 HStack {
                     MenuItemIcon(systemName: isHidingNotch ? "eye.slash" : "eye", color: .gray)
