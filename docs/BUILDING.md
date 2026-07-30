@@ -1,6 +1,6 @@
 # Building without Xcode
 
-**TL;DR:** run `./dev.sh` — it compiles, swaps the binary into the installed
+**TL;DR:** run `./dev.sh`, which compiles, swaps the binary into the installed
 `/Applications/Crisp.app`, syncs the version from `project.yml`, re-signs, and
 relaunches. The rest of this doc explains what it does.
 
