@@ -362,7 +362,7 @@ struct MenuBarView: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 // Display list: name row + inline brightness slider (modeled on the system displays panel)
-                ForEach(visibleDisplays) { display in
+                ForEach(Array(visibleDisplays.enumerated()), id: \.element.id) { index, display in
                     VStack(spacing: 0) {
                         DisplayRowView(
                             display: display,
@@ -384,6 +384,9 @@ struct MenuBarView: View {
                         DisplayDetailView(display: display)
                             .curtainReveal(expandedDisplayIDs.contains(display.displayID))
                     }
+                    // Breathing room between stacked display sections; the first
+                    // display sits flush to the top.
+                    .padding(.top, index == 0 ? 0 : 8)
                 }
 
                 // Displays the user disconnected (they no longer have their own row above).
