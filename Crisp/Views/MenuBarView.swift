@@ -567,10 +567,17 @@ struct MenuBarView: View {
         if let last = BrightnessService.shared.lastManualAdjustDate,
            Date().timeIntervalSince(last) < 3 { return }
         CoreBrightnessService.shared.refresh()
+        let autoBrightnessOn = AutoBrightnessService.shared.isEnabled
         for display in visibleDisplays {
-            // animated: glide the built-in slider to sensor-driven changes instead
-            // of snapping every poll (external displays ignore the flag).
-            Task { await BrightnessService.shared.refreshBrightness(for: display, animated: true) }
+            // Skip any display something else is actively driving, or the poll's DDC
+            // readback fights that writer. Built-in: driven live by the brightness
+            // subscription (polling it jittered the knob). Externals while auto-brightness
+            // is on: driven by AutoBrightnessService, and the readback trails the commanded
+            // glide, so polling yanked the slider back and it read as lag. Poll externals
+            // only when auto-brightness is off (Control Center / other-app DDC changes we
+            // don't subscribe to). (issue #12 follow-up)
+            if display.isBuiltin || autoBrightnessOn { continue }
+            Task { await BrightnessService.shared.refreshBrightness(for: display) }
         }
     }
 }

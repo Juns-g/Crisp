@@ -31,6 +31,28 @@ struct AutoBrightnessView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
+
+            // Relative vs absolute mapping. Shown only while tracking is on.
+            if service.isEnabled && !builtinUnavailable {
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Keep display offsets")
+                            .font(.callout)
+                        Text("External displays follow the built-in but keep the difference you set")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: $service.relativeMode)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .controlSize(.small)
+                }
+                .padding(.vertical, 7)
+                .padding(.trailing, 12)
+                // Align the label under the parent's title: 12 pad + 26 icon + 6 spacing.
+                .padding(.leading, 44)
+            }
         }
     }
 
