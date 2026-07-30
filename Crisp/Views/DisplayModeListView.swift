@@ -14,6 +14,7 @@ struct DisplayModeSection: View {
     @State private var errorMessage: String?
     @State private var sliderIndex: Double = 0
     @State private var smoothBusy: Bool = false
+    @State private var smoothWouldPrompt: Bool = true
 
     private var currentMode: DisplayMode? { display.currentDisplayMode }
 
@@ -224,7 +225,7 @@ struct DisplayModeSection: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Smooth scaling")
                         .font(.body)
-                    if !smoothEnabled {
+                    if !smoothEnabled && smoothWouldPrompt {
                         Text("First enable asks for an administrator password")
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -242,10 +243,20 @@ struct DisplayModeSection: View {
         .controlSize(.small)
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
+        .onAppear { refreshSmoothWouldPrompt() }
 
         if smoothEnabled {
             smoothSlider
         }
+    }
+
+    /// Whether enabling smooth scaling would show the admin prompt (override not yet
+    /// dense). Computed off the render path (on appear + after enable) to avoid a disk
+    /// read on every redraw.
+    private func refreshSmoothWouldPrompt() {
+        let (w, h) = display.nativeResolution
+        smoothWouldPrompt = HiDPIService.shared.smoothScalingWouldPrompt(
+            vendor: display.vendorNumber, product: display.modelNumber, nativeWidth: w, nativeHeight: h)
     }
 
     @ViewBuilder
@@ -338,6 +349,7 @@ struct DisplayModeSection: View {
             } else {
                 settings.smoothScalingDisplayUUIDs.insert(uuid)
                 HiDPIService.shared.refreshModes(for: display)
+                refreshSmoothWouldPrompt()
             }
             smoothBusy = false
         }

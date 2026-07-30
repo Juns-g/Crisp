@@ -92,6 +92,16 @@ final class HiDPIService: @unchecked Sendable {
         return writeScaledModesPlist(vendor: vendor, product: product, scaledModes: target)
     }
 
+    /// True when enabling smooth scaling would need a privileged write (admin prompt),
+    /// i.e. the on-disk override plist doesn't already carry the dense modes. Lets the UI
+    /// show the "asks for administrator password" hint only when it's actually true.
+    func smoothScalingWouldPrompt(vendor: UInt32, product: UInt32,
+                                  nativeWidth: Int, nativeHeight: Int) -> Bool {
+        !overridePlistMatches(vendor: vendor, product: product,
+                              scaledModes: generateSmoothScaledModes(nativeWidth: nativeWidth,
+                                                                     nativeHeight: nativeHeight))
+    }
+
     // MARK: - Plist Override
 
     private func enableHiDPIPlist(vendor: UInt32, product: UInt32,
