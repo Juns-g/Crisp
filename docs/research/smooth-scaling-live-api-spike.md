@@ -67,6 +67,37 @@ first override registration; skipping it for already-registered modes would trim
 per-step slider latency. It will not remove the blink (the modeset transaction
 blinks regardless), but it is a cheap, low-risk win. Tracked in faz.
 
+## Update: Option A (override-plist ladder) is also insufficient on Apple Silicon
+
+Empirical test on the real target hardware (M4 Max, macOS 26, external AOC
+Q27G3XMN 2560x1440, vendor 0x5e3 / product 0xb326) overturns the assumption
+that Option A at least yields a *denser discrete* ladder:
+
+We injected 13 backing resolutions into the display's override plist. macOS
+enumerated only 3 of them:
+
+- 2560x1440 backing -> looks like 1280x720  (kept)
+- 3200x1800 backing -> looks like 1600x900  (kept)
+- 3840x2160 backing -> looks like 1920x1080 (kept)
+- 2772x1560, 2984x1680, 3412x1920, 3624x2040, 4052x2280, 4264x2400,
+  4480x2520, 4692x2640, 4904x2760 -> all silently dropped
+- 5120x2880 (native as HiDPI) -> dropped (panel can't)
+
+The three survivors are exactly 2x standard 16:9 resolutions (720p/900p/1080p).
+Every non-standard backing was rejected. Verified by decoding the on-disk plist
+(13 entries present) against a CGDisplayCopyAllDisplayModes enumeration (only
+the 3 standard sizes appear as HiDPI). The same probe surfaced the 3 standard
+ones immediately, so this is selective rejection, not a reconnect/probe timing
+issue.
+
+Conclusion: macOS on Apple Silicon whitelists standard scaled HiDPI sizes and
+rejects arbitrary injected backings, so the override-plist mechanism cannot
+build a dense/smooth ladder on this hardware at all, only ~4 usable stops. This
+is why the "smooth scaling" slider was no smoother than the existing resolution
+picker, and why increasing the injected step count changes nothing. Genuine
+smooth scaling requires owning the framebuffer (virtual display + mirror /
+oversampling), tracked as the next spike.
+
 ## Residual uncertainty
 
 `CGSConfigureDisplayResolution`'s parameter layout is undocumented anywhere and
