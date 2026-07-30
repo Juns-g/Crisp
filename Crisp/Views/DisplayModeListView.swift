@@ -304,16 +304,23 @@ struct DisplayModeSection: View {
     private func setSmoothScaling(_ on: Bool) {
         guard !smoothBusy else { return }
         let uuid = display.displayUUID
+
+        // Disable is cheap: drop the opt-in and hide the slider, but leave the injected
+        // modes installed so flipping it back on does not ask for admin again (removing
+        // them would need admin). Turn HiDPI off entirely to clear them.
+        guard on else {
+            settings.smoothScalingDisplayUUIDs.remove(uuid)
+            return
+        }
+
         let (nativeW, nativeH) = display.nativeResolution
         smoothBusy = true
         Task { @MainActor in
-            let err = on
-                ? HiDPIService.shared.enableSmoothScaling(
-                    vendor: display.vendorNumber, product: display.modelNumber,
-                    nativeWidth: nativeW, nativeHeight: nativeH)
-                : HiDPIService.shared.disableSmoothScaling(
-                    vendor: display.vendorNumber, product: display.modelNumber,
-                    nativeWidth: nativeW, nativeHeight: nativeH)
+            // enableSmoothScaling only prompts when the on-disk plist is missing these
+            // modes, so re-enabling an already-installed display does not re-prompt.
+            let err = HiDPIService.shared.enableSmoothScaling(
+                vendor: display.vendorNumber, product: display.modelNumber,
+                nativeWidth: nativeW, nativeHeight: nativeH)
             if let err {
                 withAnimation { errorMessage = err }
                 Task { @MainActor in
@@ -321,11 +328,7 @@ struct DisplayModeSection: View {
                     withAnimation { errorMessage = nil }
                 }
             } else {
-                if on {
-                    settings.smoothScalingDisplayUUIDs.insert(uuid)
-                } else {
-                    settings.smoothScalingDisplayUUIDs.remove(uuid)
-                }
+                settings.smoothScalingDisplayUUIDs.insert(uuid)
                 HiDPIService.shared.refreshModes(for: display)
             }
             smoothBusy = false
