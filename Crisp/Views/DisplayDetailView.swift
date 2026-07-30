@@ -32,13 +32,8 @@ struct DisplayDetailView: View {
                     isExpanded: $showPreset
                 )
 
-                VStack(spacing: 0) {
-                    if showPreset {
-                        DisplayPresetView(displayID: display.displayID, activeName: $presetName)
-                            .transition(.opacity)
-                    }
-                }
-                .clipped()
+                DisplayPresetView(displayID: display.displayID, activeName: $presetName)
+                    .curtainReveal(showPreset)
             }
 
             // Color profile section; hidden when the display has presets,
@@ -68,14 +63,9 @@ struct DisplayDetailView: View {
                 isExpanded: $showImageAdjustment
             )
 
-            VStack(spacing: 0) {
-                if showImageAdjustment {
-                    ImageAdjustmentView(display: display)
-                        .padding(.leading, 8)
-                        .transition(.opacity)
-                }
-            }
-            .clipped()
+            ImageAdjustmentView(display: display, isExpanded: showImageAdjustment)
+                .padding(.leading, 8)
+                .curtainReveal(showImageAdjustment)
 
             SectionDivider()
 

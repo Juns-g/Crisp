@@ -56,13 +56,8 @@ struct DisplayModeSection: View {
                 subtitle: currentGroup?.menuLabel,
                 isExpanded: $showResolution
             )
-            VStack(spacing: 0) {
-                if showResolution {
-                    resolutionList
-                        .transition(.opacity)
-                }
-            }
-            .clipped()
+            resolutionList
+                .curtainReveal(showResolution)
 
             // Refresh Rate: a sibling section, not nested under resolution.
             // Only shown when the current resolution actually offers a choice.
@@ -74,13 +69,8 @@ struct DisplayModeSection: View {
                     subtitle: currentMode?.refreshRateString,
                     isExpanded: $showRefresh
                 )
-                VStack(spacing: 0) {
-                    if showRefresh {
-                        refreshList(group)
-                            .transition(.opacity)
-                    }
-                }
-                .clipped()
+                refreshList(group)
+                    .curtainReveal(showRefresh)
             }
 
             if let msg = errorMessage {
