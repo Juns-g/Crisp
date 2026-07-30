@@ -594,6 +594,7 @@ struct SettingsView: View {
     // support submenu's expansion must be reset explicitly on close like every
     // other section, or it reopens still expanded.
     @State private var showSupport = false
+    @State private var showBrightnessKeys = false
     @EnvironmentObject var displayManager: DisplayManager
 
     private var builtinPresets: [DisplayPreset] {
@@ -602,6 +603,15 @@ struct SettingsView: View {
 
     private var externalDisplays: [DisplayInfo] {
         displayManager.displays.filter { !$0.isBuiltin }
+    }
+
+    /// Localized display name for a brightness-key target (row subtitle + choices).
+    private func brightnessTargetName(_ target: BrightnessKeyTarget) -> String {
+        switch target {
+        case .underCursor: return String(localized: "Display under cursor")
+        case .allDisplays: return String(localized: "All connected displays")
+        case .selected:    return String(localized: "Selected displays only")
+        }
     }
 
     var body: some View {
@@ -623,6 +633,49 @@ struct SettingsView: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .padding(.horizontal, 12)
+
+            // Which displays the hardware brightness keys adjust. Expandable row +
+            // checkmark list, matching the Resolution / Color Profile idiom instead
+            // of a stock pop-up button.
+            ExpandableRow(
+                icon: "keyboard",
+                iconColor: .orange,
+                label: "Brightness Keys",
+                subtitle: brightnessTargetName(settings.brightnessKeyTarget),
+                isExpanded: $showBrightnessKeys
+            )
+            if showBrightnessKeys {
+                ForEach(BrightnessKeyTarget.allCases, id: \.self) { target in
+                    CheckmarkRow(
+                        label: brightnessTargetName(target),
+                        isSelected: settings.brightnessKeyTarget == target
+                    ) {
+                        settings.brightnessKeyTarget = target
+                    }
+                }
+                // "Selected displays only": a checklist of the current displays.
+                // Real toggles (not CheckmarkRow, which can't deselect) since this is
+                // multi-select. Membership is keyed by the stable displayUUID so it
+                // survives reconnects; built-in included, since "All" affects it too.
+                if settings.brightnessKeyTarget == .selected {
+                    ForEach(displayManager.displays) { display in
+                        Toggle(isOn: Binding(
+                            get: { settings.brightnessKeySelectedDisplayUUIDs.contains(display.displayUUID) },
+                            set: { isOn in
+                                if isOn { settings.brightnessKeySelectedDisplayUUIDs.insert(display.displayUUID) }
+                                else { settings.brightnessKeySelectedDisplayUUIDs.remove(display.displayUUID) }
+                            }
+                        )) {
+                            Text(display.name).font(.callout)
+                        }
+                        .toggleStyle(.checkbox)
+                        .controlSize(.small)
+                        .padding(.leading, 46)
+                        .padding(.trailing, 12)
+                        .padding(.vertical, 1)
+                    }
+                }
+            }
 
             // Launch at login
             Toggle(isOn: Binding(
@@ -695,6 +748,7 @@ struct SettingsView: View {
         .padding(.vertical, 6)
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             showSupport = false
+            showBrightnessKeys = false
         }
     }
 }

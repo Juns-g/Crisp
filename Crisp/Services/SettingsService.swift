@@ -2,6 +2,14 @@ import Foundation
 import CoreGraphics
 import Combine
 
+/// Which displays the hardware brightness keys act on.
+/// Persisted (raw value) via `SettingsService.brightnessKeyTarget`.
+enum BrightnessKeyTarget: String, CaseIterable, Codable {
+    case underCursor   // only the display under the pointer (current behaviour)
+    case allDisplays   // every connected display
+    case selected      // only a user-chosen subset (see brightnessKeySelectedDisplays)
+}
+
 /// Centralized settings persistence service.
 /// Simple settings use UserDefaults via @AppStorage-compatible keys.
 /// Complex configurations are stored as JSON in ~/Library/Application Support/Crisp/.
@@ -37,6 +45,8 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
         static let ddcCacheTTL            = "crisp.ddcCacheTTL"
         static let checkUpdatesOnLaunch   = "crisp.checkUpdatesOnLaunch"
         static let colorPickerHistory     = "crisp.colorPickerHistory"
+        static let brightnessKeyTarget    = "crisp.brightnessKeyTarget"
+        static let brightnessKeySelected  = "crisp.brightnessKeySelectedDisplays"
         // Per-display keys use prefix + displayID
         static let brightnessPrefix       = "crisp.brightness_"
         static let contrastPrefix         = "crisp.contrast_"
@@ -73,6 +83,20 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
     @Published var colorPickerHistory: [String] = [] {
         didSet {
             defaults.set(colorPickerHistory, forKey: Keys.colorPickerHistory)
+        }
+    }
+
+    /// Which displays the brightness keys act on. Default: the display under the cursor.
+    @Published var brightnessKeyTarget: BrightnessKeyTarget = .underCursor {
+        didSet { defaults.set(brightnessKeyTarget.rawValue, forKey: Keys.brightnessKeyTarget) }
+    }
+
+    /// Displays chosen for the `.selected` brightness-key mode, stored by stable
+    /// DisplayInfo.displayUUID (not the volatile CGDirectDisplayID, which macOS can
+    /// reassign across reconnects). Ignored unless brightnessKeyTarget == .selected.
+    @Published var brightnessKeySelectedDisplayUUIDs: Set<String> = [] {
+        didSet {
+            defaults.set(Array(brightnessKeySelectedDisplayUUIDs), forKey: Keys.brightnessKeySelected)
         }
     }
 
@@ -143,5 +167,8 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
         checkUpdatesOnLaunch = defaults.object(forKey: Keys.checkUpdatesOnLaunch) != nil
             ? defaults.bool(forKey: Keys.checkUpdatesOnLaunch) : true
         colorPickerHistory = defaults.stringArray(forKey: Keys.colorPickerHistory) ?? []
+        brightnessKeyTarget = defaults.string(forKey: Keys.brightnessKeyTarget)
+            .flatMap(BrightnessKeyTarget.init(rawValue:)) ?? .underCursor
+        brightnessKeySelectedDisplayUUIDs = Set(defaults.stringArray(forKey: Keys.brightnessKeySelected) ?? [])
     }
 }

@@ -179,6 +179,37 @@ final class BrightnessKeyService: @unchecked Sendable {
         // For key-up events always pass through — only consume key-down on external displays.
         guard isKeyDown else { return Unmanaged.passRetained(event) }
 
+        // Route by user preference. Read on the main actor — this callback runs on
+        // the main run loop (see class docs), so assumeIsolated is safe here.
+        switch MainActor.assumeIsolated({ SettingsService.shared.brightnessKeyTarget }) {
+        case .allDisplays:
+            let step = (keyCode == Self.nxKeytypeBrightnessUp) ? Self.brightnessStep : -Self.brightnessStep
+            Task { @MainActor in self.adjustDisplays(DisplayManagerAccessor.shared.displays, step: step) }
+            // Consume: we adjust every display (built-in included) ourselves, so
+            // macOS must not also bump the built-in on top.
+            return nil
+        case .selected:
+            // Adjust only the chosen displays that are currently attached. If none
+            // are attached, fall through to the under-cursor path so the key still
+            // does something instead of being dead.
+            let selected = MainActor.assumeIsolated { SettingsService.shared.brightnessKeySelectedDisplayUUIDs }
+            let anyAttached = MainActor.assumeIsolated {
+                DisplayManagerAccessor.shared.displays.contains { selected.contains($0.displayUUID) }
+            }
+            if anyAttached {
+                let step = (keyCode == Self.nxKeytypeBrightnessUp) ? Self.brightnessStep : -Self.brightnessStep
+                Task { @MainActor in
+                    let targets = DisplayManagerAccessor.shared.displays.filter { selected.contains($0.displayUUID) }
+                    self.adjustDisplays(targets, step: step)
+                }
+                return nil
+            }
+        case .underCursor:
+            break
+        }
+        // .underCursor (or .selected with none of the chosen displays attached):
+        // fall through to the under-cursor path below.
+
         // Determine which display is under the cursor.
         // NSEvent.mouseLocation and NSScreen.screens are safe to call on the main thread.
         // The tap runs on the main run loop so this is fine.
@@ -227,5 +258,23 @@ final class BrightnessKeyService: @unchecked Sendable {
 
         // Return nil to consume (suppress) the event so macOS doesn't also adjust built-in brightness.
         return nil
+    }
+
+    /// Applies the same relative step to each given display (built-in or external),
+    /// through BrightnessService's smooth fade (reusing its DDC/gamma/IOKit paths +
+    /// coalescing), and shows the brightness HUD on each display's own screen.
+    /// Backs the `.allDisplays` and `.selected` brightness-key modes.
+    @MainActor
+    private func adjustDisplays(_ displays: [DisplayInfo], step: Double) {
+        let screens = NSScreen.screens
+        for display in displays {
+            let newBrightness = max(0.0, min(100.0, display.brightness + step))
+            BrightnessService.shared.setBrightnessSmooth(newBrightness, for: display)
+            if let screen = screens.first(where: {
+                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == display.displayID
+            }) {
+                BrightnessHUDService.shared.show(brightness: newBrightness, on: screen)
+            }
+        }
     }
 }

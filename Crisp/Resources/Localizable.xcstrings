@@ -1,6 +1,46 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "All connected displays" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有已连接的显示器"
+          }
+        }
+      }
+    },
+    "Brightness Keys" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "亮度按键"
+          }
+        }
+      }
+    },
+    "Display under cursor" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "光标所在显示器"
+          }
+        }
+      }
+    },
+    "Selected displays only" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅所选显示器"
+          }
+        }
+      }
+    },
     "%@, disconnected" : {
       "localizations" : {
         "zh-Hans" : {
