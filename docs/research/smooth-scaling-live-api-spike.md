@@ -1,8 +1,21 @@
-# Smooth scaling: live private-API spike (B1)
+# Smooth scaling: research + decision record (issue #9)
 
-Decision record for issue #9 (smooth resolution scaling). Captures why 1.3.0
-ships the override-plist ladder (Option A) and does not attempt a live,
-blink-free private-API path (Option B).
+Decision record for issue #9 (smooth resolution scaling), covering three spikes.
+
+## Outcome / status
+
+**Smooth scaling was cut from 1.3.0.** On Apple Silicon / macOS 26 neither
+viable-looking path works: no private API scales live and blink-free (B1), and
+the override-plist ladder (Option A) can't be made dense because macOS only
+enumerates standard scaled sizes. The one approach that could deliver it,
+virtual-display + hardware-mirror oversampling (B2), is a separate medium-scope
+feature with real color-management, flicker, and crash-safety risks.
+
+**Planned for 1.4.0 as an opt-in beta/experimental feature**, built on the B2
+approach, and only after running the throwaway probe
+(`scratchpad/mirror-probe/probe.swift`, not in-repo) on a spare display to
+confirm it's blink-free and doesn't regress color/DDC. See the B2 section for
+the full mechanism, collision matrix, and cleanup design.
 
 ## Question
 
