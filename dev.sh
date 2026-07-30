@@ -2,7 +2,8 @@
 # Crisp — fast dev build & run (no Xcode needed, Command Line Tools only).
 #
 # Compiles the binary with swiftc, swaps it into the installed /Applications/Crisp.app,
-# syncs the version from project.yml, re-signs ad hoc, and relaunches. One command.
+# syncs the version from project.yml, re-signs (stable identity if present, else ad
+# hoc), and relaunches. One command.
 # For a release DMG (needs full Xcode) use ./build.sh instead. See docs/BUILDING.md.
 #
 # Override the target app with:  CRISP_APP=/path/to/Crisp.app ./dev.sh
@@ -40,7 +41,23 @@ cp Crisp-bin "$APP/Contents/MacOS/Crisp"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$APP/Contents/Info.plist"
 xattr -cr "$APP"
-codesign --force -s - --entitlements Crisp/Crisp.entitlements "$APP"
+# Sign with a stable self-signed identity when one exists, so macOS keeps the
+# Accessibility grant across rebuilds. Ad-hoc signing changes the code hash every
+# build, which invalidates the CGEventTap permission the brightness keys rely on,
+# forcing a re-grant after every deploy. Create the identity once: Keychain Access >
+# Certificate Assistant > Create a Certificate, name "Crisp Dev", Self Signed Root,
+# type Code Signing. Falls back to ad-hoc when it is absent.
+SIGN_ID="${CRISP_SIGN_ID:-Crisp Dev}"
+# No -v: a self-signed identity is reported "not trusted" and excluded by -v, but
+# codesign still signs with it fine, and that's all we need (a stable designated
+# requirement so TCC keeps the grant across rebuilds).
+if security find-identity -p codesigning 2>/dev/null | grep -qF "$SIGN_ID"; then
+    echo "==> Signing with identity: $SIGN_ID"
+    codesign --force -s "$SIGN_ID" --entitlements Crisp/Crisp.entitlements "$APP"
+else
+    echo "==> Signing ad hoc ($SIGN_ID not found; Accessibility will reset each build)"
+    codesign --force -s - --entitlements Crisp/Crisp.entitlements "$APP"
+fi
 
 echo "==> Launching..."
 open "$APP"
