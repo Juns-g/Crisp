@@ -1,6 +1,36 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "External displays follow the built-in but keep the difference you set" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "外接显示器跟随内置显示器，但保持你设置的亮度差异"
+          }
+        }
+      }
+    },
+    "Keep display offsets" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保持亮度偏移"
+          }
+        }
+      }
+    },
+    "Loading profiles…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载配置文件…"
+          }
+        }
+      }
+    },
     "All connected displays" : {
       "localizations" : {
         "zh-Hans" : {
