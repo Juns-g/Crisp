@@ -189,14 +189,24 @@ final class BrightnessKeyService: @unchecked Sendable {
             return Unmanaged.passRetained(event)
         }
 
-        let isBuiltin = CGDisplayIsBuiltin(screenNumber) != 0
-        if isBuiltin {
-            // Cursor on built-in display — let macOS handle it normally.
+        // Consume the key ONLY when we can synchronously confirm the cursor is on a
+        // currently-connected, controllable EXTERNAL display. Leaving clamshell mode
+        // (external unplugged, then lid opened) briefly leaves NSScreen reporting a
+        // stale external screen while Crisp's display list has already dropped it. The
+        // old code consumed the key on that stale screen, then no-op'd asynchronously on
+        // the vanished display, swallowing the press so the built-in stayed dead until
+        // macOS settled (~30s). Fail safe instead: if we can't confirm a live external,
+        // pass the key through so macOS drives the built-in immediately. (issue #12)
+        let displayID = screenNumber
+        let isControllableExternal = MainActor.assumeIsolated {
+            guard let display = DisplayManagerAccessor.shared.displays.first(where: { $0.displayID == displayID })
+            else { return false }
+            return !display.isBuiltin
+        }
+        guard isControllableExternal else {
             return Unmanaged.passRetained(event)
         }
 
-        // Cursor is on an external display — schedule brightness adjustment and consume.
-        let displayID = screenNumber
         let step = (keyCode == Self.nxKeytypeBrightnessUp) ? Self.brightnessStep : -Self.brightnessStep
 
         // All data captured here is Sendable (CGDirectDisplayID = UInt32, Double).
