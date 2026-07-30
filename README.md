@@ -10,7 +10,13 @@ Fully localized in English and Simplified Chinese (简体中文).
 
 https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 
-<p align="center"><img src="docs/screenshot.png?v=4" width="406" alt="Crisp menu bar panel"></p>
+## Install
+
+```sh
+brew install --cask didriksg/tap/crisp
+```
+
+Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/releases) and drag Crisp to Applications. The app isn't notarized, so on first launch macOS blocks it: open **System Settings > Privacy & Security**, scroll down, and click **Open Anyway**. (Homebrew installs skip this.)
 
 ## Features
 
@@ -24,18 +30,16 @@ https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 - **Virtual displays**: create HiDPI virtual screens
 - **Extras**: combined brightness slider, auto brightness following the built-in display, notch hiding, launch at login
 
-
-## Install
-
-```sh
-brew install --cask didriksg/tap/crisp
-```
-
-Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/releases) and drag Crisp to Applications. The app isn't notarized, so on first launch macOS blocks it: open **System Settings > Privacy & Security**, scroll down, and click **Open Anyway**. (Homebrew installs skip this.)
-
 ## Support
 
-Crisp is free, and every feature stays free. If it saved you a BetterDisplay or Lunar license and you'd like to say thanks, you can [buy me a coffee](https://ko-fi.com/didriksg) (in China, [爱发电](https://ifdian.net/a/didriksg)). Completely optional.
+Crisp is free, and every feature stays free. No Pro tier, no license key.
+
+If you'd like to help, my main running cost is the $99/yr Apple Developer Program, Apple's fee for signing and notarizing apps so they install cleanly. Sponsoring helps me cover it and keeps me building:
+
+- [GitHub Sponsors](https://github.com/sponsors/didriksg)
+- [爱发电](https://ifdian.net/a/didriksg)
+
+Completely optional. If Crisp saved you a BetterDisplay or Lunar license and you'd like to say thanks, it genuinely helps.
 
 ## Requirements
 
