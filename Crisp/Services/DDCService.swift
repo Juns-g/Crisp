@@ -347,8 +347,32 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         //  replyBuf[10] = checksum
         guard replyBuf.count >= 10 else { return nil }
 
+        // Validate the reply frame before trusting the payload. Many monitors ack the
+        // I2C read (readRet == success) but return stale EDID bytes or a null frame
+        // instead of a real VCP reply — especially over the Apple Silicon AV path.
+        // Reading bytes 6–9 from such garbage yields a bogus "max" (e.g. 8824 instead
+        // of 100), which then compresses the usable brightness range so the top of the
+        // slider does nothing. Require the DDC/CI reply signature and the VCP echo.
+        guard replyBuf[0] == 0x6E,      // source address
+              replyBuf[2] == 0x02,      // Get VCP Feature Reply opcode
+              replyBuf[3] == 0x00,      // result code: no error
+              replyBuf[4] == command    // echo of the VCP code we asked for
+        else {
+            #if DEBUG
+            print("[DDCService] ARM64 read VCP 0x\(String(command, radix: 16)): invalid reply frame, ignoring (bytes: \(replyBuf.prefix(6).map { String(format: "%02X", $0) }.joined(separator: " ")))")
+            #endif
+            return nil
+        }
+
         let maxVal = (UInt16(replyBuf[6]) << 8) | UInt16(replyBuf[7])
         let curVal = (UInt16(replyBuf[8]) << 8) | UInt16(replyBuf[9])
+        // A zero max is also invalid (would make every write 0); reject it.
+        guard maxVal > 0 else {
+            #if DEBUG
+            print("[DDCService] ARM64 read VCP 0x\(String(command, radix: 16)): reply reports max=0, ignoring")
+            #endif
+            return nil
+        }
         #if DEBUG
         print("[DDCService] ARM64 read VCP 0x\(String(command, radix: 16)): cur=\(curVal) max=\(maxVal)")
         #endif
@@ -568,8 +592,13 @@ final class DDCService: ObservableObject, @unchecked Sendable {
                     // DDC/CI VCP reply layout:
                     // [0x6E, 0x88, 0x02, errCode, VCPcode, type, max_hi, max_lo, cur_hi, cur_lo, chk]
                     let rb = replyRaw.bindMemory(to: UInt8.self)
+                    // Validate the reply frame before trusting the payload (see arm64Read):
+                    // a monitor can ack the transaction yet return stale/null bytes, whose
+                    // bogus "max" would compress the usable brightness range.
+                    guard rb[0] == 0x6E, rb[2] == 0x02, rb[3] == 0x00, rb[4] == command else { return }
                     let maxVal = (UInt16(rb[6]) << 8) | UInt16(rb[7])
                     let curVal = (UInt16(rb[8]) << 8) | UInt16(rb[9])
+                    guard maxVal > 0 else { return }
                     result = (current: curVal, max: maxVal)
                 }
             }

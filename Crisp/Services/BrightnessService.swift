@@ -218,14 +218,13 @@ final class BrightnessService: @unchecked Sendable {
                     self.ddcMaxBrightness[displayID] = result.max
                     self.ddcAvailableLock.unlock()
                     Task { @MainActor in display.brightness = brightness }
-                } else {
-                    // DDC read returned nil; mark unavailable
-                    self.ddcAvailableLock.lock()
-                    if self.ddcAvailable[displayID] == nil {
-                        self.ddcAvailable[displayID] = false
-                    }
-                    self.ddcAvailableLock.unlock()
                 }
+                // A failed/ignored read does NOT mean DDC is unavailable: many monitors
+                // accept brightness *writes* but never answer *reads* (they ack the I2C
+                // transaction with stale/null bytes, now rejected by DDCService). Leaving
+                // availability undetermined lets the write path decide — marking it false
+                // here would wrongly force the gamma/software fallback on a display whose
+                // hardware backlight control works fine, just showing a stale slider value.
             }
         }
     }
@@ -275,7 +274,16 @@ final class BrightnessService: @unchecked Sendable {
     private var pendingDDCPercent: [CGDirectDisplayID: Double] = [:]
     private var ddcPumpActive: Set<CGDirectDisplayID> = []
     private var ddcFailStreak: [CGDirectDisplayID: Int] = [:]
+    /// Timestamp of the last DDC brightness write per display, used to pace writes.
+    private var lastDDCWriteInstant: [CGDirectDisplayID: DispatchTime] = [:]
     private let ddcPumpLock = NSLock()
+
+    /// Minimum spacing between consecutive DDC brightness writes to one display.
+    /// The DDC/CI (MCCS) spec asks hosts to wait ~50ms after a "Set VCP Feature"
+    /// before the next message; writing faster (a fast slider drag fires ~60/sec)
+    /// floods the I2C bus and makes many panels visibly flicker. The coalescing
+    /// pump still applies the latest value — this just caps the cadence at ~20/sec.
+    private let minDDCWriteInterval: TimeInterval = 0.05
 
     /// DDC 0 on most monitors means "minimum backlight", which is still visibly bright.
     /// Below this percent we layer gamma dimming on top of the hardware write so the
@@ -302,11 +310,42 @@ final class BrightnessService: @unchecked Sendable {
 
     private func pumpDDCWrite(for displayID: CGDirectDisplayID) {
         ddcPumpLock.lock()
+        // Peek (don't consume yet): if we must wait to honour the pacing floor,
+        // a newer drag value may arrive during the wait and should supersede this
+        // one. Consuming only after the wait keeps "latest wins" intact.
+        guard pendingDDCPercent[displayID] != nil else {
+            ddcPumpActive.remove(displayID)
+            ddcPumpLock.unlock()
+            return
+        }
+        let last = lastDDCWriteInstant[displayID]
+        ddcPumpLock.unlock()
+
+        // Pace writes: if the previous write was under minDDCWriteInterval ago,
+        // wait out the remainder before issuing the next one. Without this the
+        // recursive pump fires writes back-to-back and floods the DDC/CI bus.
+        if let last {
+            let now = DispatchTime.now()
+            let elapsed = now.uptimeNanoseconds >= last.uptimeNanoseconds
+                ? Double(now.uptimeNanoseconds - last.uptimeNanoseconds) / 1_000_000_000
+                : minDDCWriteInterval
+            let remaining = minDDCWriteInterval - elapsed
+            if remaining > 0 {
+                queue.asyncAfter(deadline: .now() + remaining) { [weak self] in
+                    self?.pumpDDCWrite(for: displayID)
+                }
+                return
+            }
+        }
+
+        // Now consume the latest pending value (drops any intermediate drag steps).
+        ddcPumpLock.lock()
         guard let percent = pendingDDCPercent.removeValue(forKey: displayID) else {
             ddcPumpActive.remove(displayID)
             ddcPumpLock.unlock()
             return
         }
+        lastDDCWriteInstant[displayID] = .now()
         ddcPumpLock.unlock()
 
         // Denormalize percentage to display's native DDC range.
