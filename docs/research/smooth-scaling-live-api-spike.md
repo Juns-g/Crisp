@@ -98,6 +98,71 @@ picker, and why increasing the injected step count changes nothing. Genuine
 smooth scaling requires owning the framebuffer (virtual display + mirror /
 oversampling), tracked as the next spike.
 
+## Spike B2: virtual-display + hardware-mirror (oversampling) — CONDITIONAL GO
+
+The only remaining path: create a `CGVirtualDisplay` we control, hardware-mirror
+the physical panel from it, and scale the virtual's render size (oversampling).
+Spike verdict: architecturally sound and the mechanism already half-exists in
+Crisp, but it is NOT a clean win and should not be a default.
+
+Mechanism (all symbols present on macOS 26.5.1; most already used by Crisp):
+- Create virtual: `VirtualDisplayService.create` (already ships, accepts
+  arbitrary 640..8192 sizes, which is itself proof the DCP whitelist that blocks
+  Option A does not gate virtual displays).
+- Mirror physical from virtual: `MirrorService.enableMirror` (already written,
+  wraps `CGConfigureDisplayMirrorOfDisplay`; currently dead code, never
+  exercised).
+- Resize live: `CGConfigureDisplayWithDisplayMode` on the virtual's displayID
+  (`ResolutionService.applyModeSync`, already generic).
+- Size the virtual's `maxPixelsWide/High` cap generously up front to avoid
+  destroy/recreate on resize. `_CGVirtualDisplaySettingsRefreshDeadlineNone`
+  exists, hinting the API supports in-place live reconfiguration.
+
+Why blink-free is plausible: the physical's own `CGDisplayMode` is never
+touched by the mirror relationship, and the hardware-mirror path receives
+pre-composited frames, bypassing the DCP `verify_downscaling` pipe-budget gate
+that caused B1's blink (corroborated by smcleod.net's M4/M5 writeup). Arbitrary
+non-standard sizes should enumerate on the virtual (no EDID whitelist).
+
+The decisive caveat: the closest mature prior art (BetterDisplay) treats
+virtual-mirror as an inferior FALLBACK, not its flagship smooth-scaling path,
+specifically due to unresolved, field-reported flicker/fragility tied to
+wake-from-sleep, virtual disconnect, and color-profile mismatch between the
+virtual and physical (discussions #2318, #2129; their wiki advises "use flexible
+scaling instead"). So steady-state and transition flicker are real, separate
+risks from the live-resize blink, and are the reason to gate on empirical proof.
+
+Integration collisions with Crisp (medium scope, not free):
+- DDC brightness: LOW risk (EDID-based AVService matching; physical stays online
+  as a mirror target with unchanged identity).
+- Color profiles: REAL regression risk (pixels are pre-composited by the
+  virtual's pass; the physical's assigned ICC may be bypassed while mirroring).
+- Arrangement / set-as-main: REAL work; `ArrangementService` has no
+  mirror-awareness and needs the `resolvedTargetDisplayID` redirect that
+  `ResolutionService` already has.
+- displayUUID/persistence: LOW risk if consistently keyed on the physical, but
+  the UI now enumerates an extra virtual "display" per monitor that every
+  per-display surface must hide/repurpose. System Settings shows the extra
+  display unavoidably.
+
+Fragility/cleanup (hard requirement: never strand the user mirrored):
+- Teardown order: unmirror BEFORE releasing the virtual.
+- Crash safety GAP: no evidence the physical self-recovers if Crisp is SIGKILLed
+  mid-mirror. Mandatory mitigation: a launch-time self-healing check that detects
+  a stale mirror of a `0xEEEE` virtual and unmirrors it (same shape as
+  `VirtualDisplayService.virtualDisplayAlreadyExists` / `PhysicalDisplayToggleService.reconcile`).
+
+Top 3 risks: (1) production-observed flicker in the closest prior art in this
+exact mechanism; (2) color-management regression for ICC-profiled panels; (3)
+crash-safety gap vs the never-strand requirement.
+
+Recommendation: if pursued, ship as an explicit opt-in "Advanced/Experimental"
+per-display toggle, NOT a default, gated on running the throwaway probe first
+(scratchpad/mirror-probe/probe.swift: tests non-standard-size enumeration,
+per-switch blink, ~15s steady-state flicker, and DDC/color correctness while
+mirrored; SIGINT/TERM handler always unmirrors + tears down; refuses the main
+display). This is a separate, sizeable effort, not a 1.3.0 change.
+
 ## Residual uncertainty
 
 `CGSConfigureDisplayResolution`'s parameter layout is undocumented anywhere and
