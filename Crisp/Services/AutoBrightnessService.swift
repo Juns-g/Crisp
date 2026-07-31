@@ -56,6 +56,14 @@ final class AutoBrightnessService: ObservableObject, @unchecked Sendable {
         didSet {
             if relativeMode { needsRebaseline = true }
             savePrefs()
+            // Re-aim externals immediately on a user toggle instead of waiting for the
+            // next built-in change: disabling snaps them to the built-in's level, enabling
+            // re-pins offsets from the current levels (no movement).
+            if isEnabled && !isLoadingPrefs {
+                Task { @MainActor in
+                    await applyBrightness(builtin: readBuiltinBrightness(), force: true)
+                }
+            }
         }
     }
 
@@ -210,14 +218,16 @@ final class AutoBrightnessService: ObservableObject, @unchecked Sendable {
     }
 
     @MainActor
-    private func applyBrightness(builtin: Double?) async {
+    private func applyBrightness(builtin: Double?, force: Bool = false) async {
         builtinBrightness = builtin ?? 0
         hasPolled = true
 
         guard let builtin, builtin > 0 else { return }
 
-        // Only apply if builtin brightness changed more than 2% since last application.
-        guard abs(builtin - lastAppliedBrightness) >= 0.02 else { return }
+        // Only apply if builtin brightness changed more than 2% since last application,
+        // unless forced (the user just flipped relative<->absolute, so externals must
+        // re-aim now instead of waiting for the next built-in change).
+        guard force || abs(builtin - lastAppliedBrightness) >= 0.02 else { return }
 
         let builtinPct = builtin * 100.0
         // In relative mode, (re)pin offsets from the current levels on the first apply
