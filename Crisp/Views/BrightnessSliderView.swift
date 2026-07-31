@@ -64,6 +64,13 @@ struct BrightnessSliderView: View {
     @State private var localBrightness: Double = 50
     @State private var isDragging: Bool = false
     @State private var ddcStatus: Bool? = nil  // nil=unknown, true=DDC, false=Software
+    // Track-click vs drag: defer the first value change of an editing session. A click
+    // produces a single change (glide it on release); a drag produces a stream (write live).
+    @State private var dragConfirmed: Bool = false
+    @State private var deferredFirstChange: Bool = false
+    // While a click's fade runs, hold the thumb at the target instead of letting the
+    // display->slider sync pull it back down through the fade.
+    @State private var clickGliding: Bool = false
 
     var body: some View {
         VStack(spacing: 2) {
@@ -99,12 +106,39 @@ struct BrightnessSliderView: View {
 
                 // Native macOS slider, exactly as in the system Display panel.
                 Slider(value: $localBrightness, in: 0...100) { editing in
-                    isDragging = editing
-                    if !editing {
-                        Task { @MainActor in
-                            // Flush the final value; the coalescing writer already tracked the drag.
-                            await BrightnessService.shared.setBrightness(localBrightness, for: display)
-                            updateDDCStatus()
+                    if editing {
+                        isDragging = true
+                        dragConfirmed = false
+                        deferredFirstChange = false
+                    } else {
+                        isDragging = false
+                        if !dragConfirmed {
+                            // It was a click, not a drag. DDC external monitors physically flash
+                            // on every brightness write, so a multi-step fade just multiplies the
+                            // flicker — write those once, instantly. Built-in and software (gamma)
+                            // brightness fade smoothly with no flash, so glide those to the target
+                            // (the thumb is already there; hold it until the fade lands).
+                            if ddcStatus == true {
+                                display.brightness = localBrightness
+                                Task { @MainActor in
+                                    await BrightnessService.shared.setBrightness(localBrightness, for: display)
+                                    updateDDCStatus()
+                                }
+                            } else {
+                                clickGliding = true
+                                BrightnessService.shared.setBrightnessSmooth(localBrightness, for: display, duration: 0.2)
+                                Task { @MainActor in
+                                    try? await Task.sleep(nanoseconds: 600_000_000)  // fallback release
+                                    clickGliding = false
+                                    updateDDCStatus()
+                                }
+                            }
+                        } else {
+                            Task { @MainActor in
+                                // Flush the final value; the coalescing writer already tracked the drag.
+                                await BrightnessService.shared.setBrightness(localBrightness, for: display)
+                                updateDDCStatus()
+                            }
                         }
                     }
                 }
@@ -114,11 +148,24 @@ struct BrightnessSliderView: View {
                 .accessibilityValue("\(Int(localBrightness))%")
                 .onChange(of: localBrightness) { _, newValue in
                     guard isDragging else { return }
-                    // Apply immediately — the service chooses software or DDC internally,
-                    // and its coalescing writer keeps the I2C bus from flooding.
-                    display.brightness = newValue
-                    Task { @MainActor in
-                        await BrightnessService.shared.setBrightness(newValue, for: display)
+                    if dragConfirmed {
+                        // Apply immediately — the service chooses software or DDC internally,
+                        // and its coalescing writer keeps the I2C bus from flooding.
+                        display.brightness = newValue
+                        Task { @MainActor in
+                            await BrightnessService.shared.setBrightness(newValue, for: display)
+                        }
+                    } else if !deferredFirstChange {
+                        // First change: could be a click or the start of a drag. Defer the
+                        // write so a click can glide from the old value instead of jumping.
+                        deferredFirstChange = true
+                    } else {
+                        // Second change: it's a real drag. Go live from here.
+                        dragConfirmed = true
+                        display.brightness = newValue
+                        Task { @MainActor in
+                            await BrightnessService.shared.setBrightness(newValue, for: display)
+                        }
                     }
                 }
 
@@ -132,6 +179,13 @@ struct BrightnessSliderView: View {
             updateDDCStatus()
         }
         .onChange(of: display.brightness) { _, newValue in
+            // While a click-glide runs, hold the thumb at the target the click set and
+            // release once the fade reaches it, so the thumb never snaps back down through
+            // the fade (and the release timing tracks the actual DDC fade, not a guess).
+            if clickGliding {
+                if abs(newValue - localBrightness) < 0.75 { clickGliding = false }
+                return
+            }
             // External change (preset fade, brightness keys, another app).
             // NSSlider renders value changes discretely (withAnimation does not
             // interpolate control values), so smoothness comes from the 60Hz
