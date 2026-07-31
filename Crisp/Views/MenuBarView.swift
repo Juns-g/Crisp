@@ -23,7 +23,9 @@ struct MenuItemIcon: View {
             .foregroundColor(active ? .white : .primary)
             .frame(width: 26, height: 26)
             .background(Circle().fill(active ? color : Color.primary.opacity(0.12)))
-            .animation(.easeInOut(duration: 0.12), value: active)
+            // Same curve as the panel's section reveal, so a toggle that recolors its
+            // icon and glides a section open move together.
+            .animation(.panelResize, value: active)
     }
 }
 
@@ -69,9 +71,10 @@ extension Notification.Name {
 extension Animation {
     /// Duration shared by the SwiftUI spring and the panel window's mirror
     /// spring (MenuPanel.applyContentSize); change both by changing this.
-    static let panelResizeDuration: Double = 0.18
-    /// The one curve every panel size change shares (rows, footer, window):
-    /// the smooth spring Control Center panels use when a list expands.
+    static let panelResizeDuration: Double = 0.16
+    /// The one curve every panel size change shares (rows, footer, window, and
+    /// icon state fades): the smooth spring Control Center panels use when a list
+    /// expands.
     static let panelResize = Animation.smooth(duration: panelResizeDuration)
 }
 
@@ -404,11 +407,15 @@ struct MenuBarView: View {
                 // Displays the user disconnected (they no longer have their own row above).
                 ReconnectDisplaysSection()
 
-                // Combined brightness control (Phase 2)
-                if settings.showCombinedBrightness {
+                // Combined brightness control (Phase 2). Always laid out so the
+                // curtain can reveal it with the panel spring, gliding in like the
+                // other sections instead of popping to full height. Parent VStack is
+                // spacing:0, so a collapsed curtain leaves no gap.
+                VStack(spacing: 0) {
                     sectionDivider
                     CombinedBrightnessView(displays: displayManager.displays)
                 }
+                .curtainReveal(settings.showCombinedBrightness)
 
                 // Dark Mode / Night Shift / True Tone circular toggle row (modeled on the system displays panel).
                 // No divider above it: the native panel runs the effect row straight under the sliders.
@@ -633,7 +640,10 @@ struct SettingsView: View {
             AutoBrightnessView()
 
             // Show combined brightness
-            Toggle(isOn: $settings.showCombinedBrightness) {
+            Toggle(isOn: Binding(
+                get: { settings.showCombinedBrightness },
+                set: { newValue in withAnimation(.panelResize) { settings.showCombinedBrightness = newValue } }
+            )) {
                 HStack(spacing: 6) {
                     MenuItemIcon(systemName: "sun.min.fill", color: .yellow, active: settings.showCombinedBrightness)
                         .accessibilityHidden(true)
