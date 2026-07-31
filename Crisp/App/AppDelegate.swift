@@ -455,9 +455,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // release without a restart (the panel view mounts once, so its launch
         // .task can't). checkForUpdates() self-throttles to one network call per
         // hour, so opening the menu repeatedly costs nothing.
-        if SettingsService.shared.checkUpdatesOnLaunch {
-            Task { await UpdateService.shared.checkForUpdates() }
-        }
+        Task { await UpdateService.shared.checkForUpdates() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, self.isPanelShown else { return }
             CoreBrightnessService.shared.refresh()

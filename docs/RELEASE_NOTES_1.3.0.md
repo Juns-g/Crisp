@@ -61,6 +61,8 @@ publish (`scripts/release.sh v1.3.0 docs/RELEASE_NOTES_1.3.0.md --publish`).
 - Menu icons follow the native state rule: an icon carries its color only while
   its feature is active (the way Wi-Fi and Battery do), and sits as a faint gray
   chip otherwise.
+- Update checks now run automatically; the "Check for Updates at Launch" toggle
+  was removed (checks still self-throttle to once an hour).
 - Clicking a brightness slider's track glides to the value instead of jumping.
   Built-in and software-dimmed displays fade; DDC externals still step in one
   write, since each DDC write flashes the panel.

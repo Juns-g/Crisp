@@ -43,7 +43,6 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
         static let menuWidth              = "crisp.menuWidth"
         static let showCombinedBrightness = "crisp.showCombinedBrightness"
         static let ddcCacheTTL            = "crisp.ddcCacheTTL"
-        static let checkUpdatesOnLaunch   = "crisp.checkUpdatesOnLaunch"
         static let colorPickerHistory     = "crisp.colorPickerHistory"
         static let brightnessKeyTarget    = "crisp.brightnessKeyTarget"
         static let brightnessKeySelected  = "crisp.brightnessKeySelectedDisplays"
@@ -74,10 +73,6 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
 
     @Published var ddcCacheTTL: Double = 5.0 {
         didSet { defaults.set(ddcCacheTTL, forKey: Keys.ddcCacheTTL) }
-    }
-
-    @Published var checkUpdatesOnLaunch: Bool = true {
-        didSet { defaults.set(checkUpdatesOnLaunch, forKey: Keys.checkUpdatesOnLaunch) }
     }
 
     /// Recently sampled colors (hex strings, newest first, max 20).
@@ -174,8 +169,6 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
             ? defaults.bool(forKey: Keys.showCombinedBrightness) : true
         ddcCacheTTL = defaults.object(forKey: Keys.ddcCacheTTL) != nil
             ? defaults.double(forKey: Keys.ddcCacheTTL) : 5.0
-        checkUpdatesOnLaunch = defaults.object(forKey: Keys.checkUpdatesOnLaunch) != nil
-            ? defaults.bool(forKey: Keys.checkUpdatesOnLaunch) : true
         colorPickerHistory = defaults.stringArray(forKey: Keys.colorPickerHistory) ?? []
         brightnessKeyTarget = defaults.string(forKey: Keys.brightnessKeyTarget)
             .flatMap(BrightnessKeyTarget.init(rawValue:)) ?? .underCursor

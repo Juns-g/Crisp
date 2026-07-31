@@ -560,9 +560,7 @@ struct MenuBarView: View {
             expandedDisplayIDs.removeAll()
         }
         .task {
-            if settings.checkUpdatesOnLaunch {
-                await updateService.checkForUpdates()
-            }
+            await updateService.checkForUpdates()
         }
         .task {
             // Mirror changes made elsewhere (Control Center, brightness keys,
@@ -715,20 +713,6 @@ struct SettingsView: View {
                     MenuItemIcon(systemName: "power", color: .green, active: settings.launchAtLogin)
                         .accessibilityHidden(true)
                     Text("Launch at Login")
-                        .font(.body)
-                    Spacer()
-                }
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .padding(.horizontal, 12)
-
-            // Check for updates at launch
-            Toggle(isOn: $settings.checkUpdatesOnLaunch) {
-                HStack(spacing: 6) {
-                    MenuItemIcon(systemName: "arrow.clockwise.circle", color: .blue, active: settings.checkUpdatesOnLaunch)
-                        .accessibilityHidden(true)
-                    Text("Check for Updates at Launch")
                         .font(.body)
                     Spacer()
                 }
