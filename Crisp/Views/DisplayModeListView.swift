@@ -286,12 +286,20 @@ struct DisplayModeSection: View {
                 MenuItemIcon(systemName: "slider.horizontal.below.rectangle", color: .blue, active: smoothEnabled)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Smooth scaling")
-                        .font(.body)
-                    if !smoothEnabled && smoothWouldPrompt {
-                        Text("First enable asks for an administrator password")
-                            .font(.caption)
+                    HStack(spacing: 5) {
+                        Text("Smooth scaling")
+                            .font(.body)
+                        Text("Beta")
+                            .font(.system(size: 9, weight: .semibold))
                             .foregroundColor(.secondary)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.secondary.opacity(0.18)))
+                    }
+                    if let hint = smoothHint {
+                        Text(hint.text)
+                            .font(.caption)
+                            .foregroundColor(hint.warning ? .orange : .secondary)
                     }
                 }
                 Spacer()
@@ -311,6 +319,33 @@ struct DisplayModeSection: View {
         if smoothEnabled {
             smoothSlider
         }
+    }
+
+    /// Caption under the toggle, priority-ordered: reconnect hint (injected sizes not yet
+    /// enumerated) > admin-prompt hint (off, override missing) > the beta softness
+    /// expectation (on and settled). `warning` renders orange like the HiDPI toggle.
+    private var smoothHint: (text: String, warning: Bool)? {
+        if smoothReconnectNeeded { return (String(localized: "Reconnect the display to finish"), true) }
+        if !smoothEnabled && smoothWouldPrompt {
+            return (String(localized: "First enable asks for an administrator password"), false)
+        }
+        if smoothEnabled { return (String(localized: "Most sizes are scaled and look slightly soft"), false) }
+        return nil
+    }
+
+    /// Smooth scaling is on but its dense sub-native ladder hasn't enumerated yet (needs a
+    /// display reconnect / sleep-wake). A bare count won't do: macOS's default HiDPI ladder
+    /// already supplies a few of these sizes, so we require under half the injected
+    /// sub-native sizes to be present among the enumerated HiDPI modes.
+    private var smoothReconnectNeeded: Bool {
+        guard smoothEnabled, !smoothBusy else { return false }
+        let (w, h) = display.nativeResolution
+        let injected = HiDPIService.shared.smoothScaledLogicalSizes(nativeWidth: w, nativeHeight: h)
+            .filter { $0.width < w }  // native is a real mode, always present; ignore it
+        guard !injected.isEmpty else { return false }
+        let present = Set(display.availableModes.lazy.filter { $0.isHiDPI }.map { "\($0.width)x\($0.height)" })
+        let hits = injected.filter { present.contains("\($0.width)x\($0.height)") }.count
+        return Double(hits) / Double(injected.count) < 0.5
     }
 
     /// Whether enabling smooth scaling would show the admin prompt (override not yet

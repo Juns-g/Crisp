@@ -281,8 +281,17 @@ final class HiDPIService: @unchecked Sendable {
     /// usable range spans more pixels, so the slider stays equally smooth on any display.
     func generateSmoothScaledModes(nativeWidth: Int, nativeHeight: Int,
                                    minScale: Double = 0.5) -> [Data] {
-        // One stop per ~55 logical points of height: fine enough to feel continuous when
-        // dragging, coarse enough not to flood the System Settings resolution list.
+        smoothScaledLogicalSizes(nativeWidth: nativeWidth, nativeHeight: nativeHeight, minScale: minScale)
+            .map { encodeScaledMode(backingW: $0.width * 2, backingH: $0.height * 2) }
+    }
+
+    /// The logical (point) sizes smooth scaling injects: native plus a dense sub-native
+    /// ladder, one stop per ~55 points of height (fine enough to feel continuous when
+    /// dragging, coarse enough not to flood the System Settings list). Exposed so the UI
+    /// can tell whether these have enumerated yet: they only appear after the display
+    /// re-enumerates (physical reconnect / sleep-wake).
+    func smoothScaledLogicalSizes(nativeWidth: Int, nativeHeight: Int,
+                                  minScale: Double = 0.5) -> [(width: Int, height: Int)] {
         let stepHeight = 55.0
         let span = Double(nativeHeight) * (1.0 - minScale)
         let steps = max(1, Int((span / stepHeight).rounded()))
@@ -295,8 +304,8 @@ final class HiDPIService: @unchecked Sendable {
             logical.append((w, h))
         }
         var seen = Set<Int>()
-        let unique = logical.filter { seen.insert(($0.0 << 16) | $0.1).inserted }
-        return unique.map { encodeScaledMode(backingW: $0.0 * 2, backingH: $0.1 * 2) }
+        return logical.filter { seen.insert(($0.0 << 16) | $0.1).inserted }
+            .map { (width: $0.0, height: $0.1) }
     }
 
     /// Encodes a backing (pixel) resolution as the 8-byte big-endian entry the

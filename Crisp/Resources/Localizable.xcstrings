@@ -1650,6 +1650,26 @@
           }
         }
       }
+    },
+    "Beta" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "测试版"
+          }
+        }
+      }
+    },
+    "Most sizes are scaled and look slightly soft" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "多数尺寸经过缩放，会略显模糊"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
