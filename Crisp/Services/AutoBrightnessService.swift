@@ -115,11 +115,16 @@ final class AutoBrightnessService: ObservableObject, @unchecked Sendable {
         }
 
         // DisplayServices first: the only API that tracks the real brightness here.
+        // Trust its success code (== 0) and accept a value of 0 as a genuinely dark panel.
+        // Do NOT additionally require dsValue > 0 and fall through on a dark/failed read:
+        // the CoreDisplay fallback below is pinned at 1.0 on macOS 26, so falling through
+        // reported a bogus 100% and flipped externals UP to (100 - offset) when the built-in
+        // bottomed out. If DisplayServices is present but the read fails, report unavailable
+        // (nil) so externals hold, rather than emitting that bogus full-brightness reading.
         if let getBrightness = _DisplayServices_GetBrightness {
             var dsValue: Float = 0
-            if getBrightness(builtinID, &dsValue) == 0, dsValue > 0 {
-                return min(1.0, max(0.0, Double(dsValue)))
-            }
+            guard getBrightness(builtinID, &dsValue) == 0 else { return nil }
+            return min(1.0, max(0.0, Double(dsValue)))
         }
 
         // Fallback: CoreDisplay (stale on macOS 26, may work on older systems).

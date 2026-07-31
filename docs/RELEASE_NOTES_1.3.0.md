@@ -24,6 +24,9 @@ publish (`scripts/release.sh v1.3.0 docs/RELEASE_NOTES_1.3.0.md --publish`).
 - Turning off "Keep display offsets" now snaps the external displays to the
   built-in level right away, instead of waiting for the next built-in
   brightness change.
+- Auto Brightness no longer flips external displays bright when the built-in is
+  dimmed to its minimum. A dark-panel reading (0%) was being rejected and read
+  back as full brightness, driving the externals the wrong way.
 - HiDPI resolutions that share a size with a low-refresh timing (e.g. 1920×1080
   HiDPI on a 1440p/144Hz panel) now run at the panel's full refresh instead of
   dropping to 50Hz. macOS hides the full-refresh variant of such modes; Crisp
