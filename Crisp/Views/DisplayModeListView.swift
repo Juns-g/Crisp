@@ -402,7 +402,13 @@ struct DisplayModeSection: View {
     private func looksLikeLabel(_ modes: [DisplayMode]) -> String {
         let i = Int(sliderIndex.rounded())
         guard modes.indices.contains(i) else { return "" }
-        return "\(modes[i].width) × \(modes[i].height)"
+        let m = modes[i]
+        // Effective magnification vs native: how much larger everything looks. Native = 100%;
+        // the 2x Retina point (half native, e.g. 1280×720 on a 2560×1440 panel) = 200%.
+        let (nativeW, _) = display.nativeResolution
+        guard nativeW > 0, m.width > 0 else { return "\(m.width) × \(m.height)" }
+        let pct = Int((Double(nativeW) / Double(m.width) * 100).rounded())
+        return "\(m.width) × \(m.height) · \(pct)%"
     }
 
     private func applySmooth(_ modes: [DisplayMode]) {
