@@ -26,7 +26,7 @@ struct DisplayDetailView: View {
             if !presetName.isEmpty {
                 ExpandableRow(
                     icon: "camera.filters",
-                    iconColor: .indigo,
+                    iconActive: false,
                     label: "Preset",
                     subtitle: presetName,
                     isExpanded: $showPreset
@@ -41,7 +41,7 @@ struct DisplayDetailView: View {
             if presetName.isEmpty {
                 ExpandableRow(
                     icon: "paintpalette.fill",
-                    iconColor: .purple,
+                    iconActive: false,
                     label: "Color Profile",
                     subtitle: activeProfileName,
                     isExpanded: $showColorProfile
@@ -59,6 +59,7 @@ struct DisplayDetailView: View {
             // Image adjustment section
             ExpandableRow(
                 icon: "slider.horizontal.3",
+                iconActive: false,
                 label: "Image Adjustment",
                 isExpanded: $showImageAdjustment
             )

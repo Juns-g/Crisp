@@ -73,7 +73,7 @@ struct SavePresetForm: View {
 
     @State private var presetName: String = ""
     @State private var selectedIcon: String = "display"
-    @State private var selectedColor: String = "indigo"
+    @State private var selectedColor: String = "blue"
     @State private var includeResolution: Bool = true
     @State private var includeBrightness: Bool = true
     @State private var includeArrangement: Bool = true
@@ -92,7 +92,7 @@ struct SavePresetForm: View {
         self._nameFocused = nameFocused
         _presetName = State(initialValue: editing?.name ?? "")
         _selectedIcon = State(initialValue: editing?.icon ?? "display")
-        _selectedColor = State(initialValue: editing?.colorName ?? "indigo")
+        _selectedColor = State(initialValue: editing?.colorName ?? "blue")
         _includeResolution = State(initialValue: editing?.includesResolution ?? true)
         _includeBrightness = State(initialValue: editing?.includesBrightness ?? true)
         _includeArrangement = State(initialValue: editing?.includesArrangement ?? true)

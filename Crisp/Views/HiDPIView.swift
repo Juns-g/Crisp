@@ -33,7 +33,7 @@ struct HiDPIToggleRow: View {
     var body: some View {
         Toggle(isOn: Binding(get: { isOn }, set: { userToggle($0) })) {
             HStack(spacing: 6) {
-                MenuItemIcon(systemName: "sparkles", color: .purple)
+                MenuItemIcon(systemName: "sparkles", color: .purple, active: isOn)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("HiDPI")

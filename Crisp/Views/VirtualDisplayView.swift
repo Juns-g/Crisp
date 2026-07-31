@@ -215,7 +215,7 @@ struct VirtualDisplayRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            MenuItemIcon(systemName: "display.2", color: isActive ? .blue : .gray)
+            MenuItemIcon(systemName: "display.2", color: .blue, active: isActive)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(config.name)

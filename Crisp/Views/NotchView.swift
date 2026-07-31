@@ -24,7 +24,7 @@ struct NotchView: View {
             VStack(alignment: .leading, spacing: 0) {
                 // Hide/show toggle
                 HStack {
-                    MenuItemIcon(systemName: isHidingNotch ? "eye.slash" : "eye", color: .gray)
+                    MenuItemIcon(systemName: isHidingNotch ? "eye.slash" : "eye", color: .teal, active: isHidingNotch)
                     Text("Hide Notch Area")
                         .font(.body)
                     Spacer()

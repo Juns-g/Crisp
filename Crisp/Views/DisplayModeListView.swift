@@ -81,6 +81,7 @@ struct DisplayModeSection: View {
             // Resolution: its own top-level row, list opens in one click.
             ExpandableRow(
                 icon: "rectangle.on.rectangle",
+                iconActive: false,
                 label: "Resolution",
                 subtitle: currentGroup?.menuLabel,
                 isExpanded: $showResolution
@@ -93,7 +94,7 @@ struct DisplayModeSection: View {
             if let group = currentGroup, group.hasMultipleRates {
                 ExpandableRow(
                     icon: "speedometer",
-                    iconColor: .teal,
+                    iconActive: false,
                     label: "Refresh Rate",
                     subtitle: currentMode?.refreshRateString,
                     isExpanded: $showRefresh
@@ -282,7 +283,7 @@ struct DisplayModeSection: View {
     private var smoothScalingSection: some View {
         Toggle(isOn: Binding(get: { smoothEnabled }, set: { setSmoothScaling($0) })) {
             HStack(spacing: 6) {
-                MenuItemIcon(systemName: "slider.horizontal.below.rectangle", color: .blue)
+                MenuItemIcon(systemName: "slider.horizontal.below.rectangle", color: .blue, active: smoothEnabled)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Smooth scaling")

@@ -3,16 +3,27 @@ import SwiftUI
 // MARK: - Shared Icon Helper
 
 /// A colored circular SF Symbol icon chip, macOS 26 Control Center style.
+/// `active` follows the native menu-bar rule (Wi-Fi/Battery): the colored chip
+/// is spent on state (connected, on, selected); inactive rows render a bare
+/// monochrome glyph in the same footprint so color still means something.
 struct MenuItemIcon: View {
     let systemName: String
     var color: Color = .blue
+    var active: Bool = true
 
     var body: some View {
+        // One view, not two branches, so active<->inactive cross-fades the glyph
+        // and fill instead of hard-swapping. Inactive keeps the same chip footprint
+        // with a faint gray fill (Wi-Fi non-selected style); active fills with the
+        // accent. Color still marks state, the change just animates.
         Image(systemName: systemName)
             .font(.system(size: 12, weight: .medium))
-            .foregroundColor(.white)
+            // Inactive glyph at full label strength (not .secondary) so it stays legible
+            // on the faint chip; the lack of color, not a dimmer glyph, marks it inactive.
+            .foregroundColor(active ? .white : .primary)
             .frame(width: 26, height: 26)
-            .background(Circle().fill(color))
+            .background(Circle().fill(active ? color : Color.primary.opacity(0.12)))
+            .animation(.easeInOut(duration: 0.12), value: active)
     }
 }
 
@@ -152,6 +163,7 @@ struct SectionHeader: View {
 struct ExpandableRow: View {
     let icon: String
     var iconColor: Color = .blue
+    var iconActive: Bool = true
     let label: String
     var subtitle: String? = nil
     @Binding var isExpanded: Bool
@@ -166,7 +178,7 @@ struct ExpandableRow: View {
 
     var body: some View {
         HStack {
-            MenuItemIcon(systemName: icon, color: iconColor)
+            MenuItemIcon(systemName: icon, color: iconColor, active: iconActive)
             Text(localizedLabel).font(.body)
             Spacer()
             if let sub = subtitle, !sub.isEmpty {
@@ -416,7 +428,7 @@ struct MenuBarView: View {
                 // a behavior preference and lives in Settings instead.
                 ExpandableRow(
                     icon: "wrench.and.screwdriver.fill",
-                    iconColor: .gray,
+                    iconActive: false,
                     label: "Tools",
                     isExpanded: $showTools
                 )
@@ -425,7 +437,7 @@ struct MenuBarView: View {
                     // Virtual Displays tool entry (Phase 10)
                     ExpandableRow(
                         icon: "display.2",
-                        iconColor: .blue,
+                        iconActive: false,
                         label: "Virtual Displays",
                         isExpanded: $showVirtualDisplays
                     )
@@ -443,7 +455,7 @@ struct MenuBarView: View {
                     if displayManager.displays.count > 1 {
                         ExpandableRow(
                             icon: "rectangle.3.offgrid",
-                            iconColor: .blue,
+                            iconActive: false,
                             label: "Arrange Displays",
                             isExpanded: $showArrangement
                         )
@@ -458,7 +470,7 @@ struct MenuBarView: View {
                 // Settings area (Phase 12)
                 ExpandableRow(
                     icon: "gearshape.fill",
-                    iconColor: .gray,
+                    iconActive: false,
                     label: "Settings",
                     isExpanded: $showSettings
                 )
@@ -623,7 +635,7 @@ struct SettingsView: View {
             // Show combined brightness
             Toggle(isOn: $settings.showCombinedBrightness) {
                 HStack(spacing: 6) {
-                    MenuItemIcon(systemName: "sun.min.fill", color: .yellow)
+                    MenuItemIcon(systemName: "sun.min.fill", color: .yellow, active: settings.showCombinedBrightness)
                         .accessibilityHidden(true)
                     Text("Show Combined Brightness")
                         .font(.body)
@@ -639,7 +651,7 @@ struct SettingsView: View {
             // of a stock pop-up button.
             ExpandableRow(
                 icon: "keyboard",
-                iconColor: .orange,
+                iconActive: false,
                 label: "Brightness Keys",
                 subtitle: brightnessTargetName(settings.brightnessKeyTarget),
                 isExpanded: $showBrightnessKeys
@@ -690,7 +702,7 @@ struct SettingsView: View {
                 }
             )) {
                 HStack(spacing: 6) {
-                    MenuItemIcon(systemName: "power", color: .green)
+                    MenuItemIcon(systemName: "power", color: .green, active: settings.launchAtLogin)
                         .accessibilityHidden(true)
                     Text("Launch at Login")
                         .font(.body)
@@ -704,7 +716,7 @@ struct SettingsView: View {
             // Check for updates at launch
             Toggle(isOn: $settings.checkUpdatesOnLaunch) {
                 HStack(spacing: 6) {
-                    MenuItemIcon(systemName: "arrow.clockwise.circle", color: .blue)
+                    MenuItemIcon(systemName: "arrow.clockwise.circle", color: .blue, active: settings.checkUpdatesOnLaunch)
                         .accessibilityHidden(true)
                     Text("Check for Updates at Launch")
                         .font(.body)

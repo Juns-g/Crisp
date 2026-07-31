@@ -2,7 +2,7 @@ import SwiftUI
 
 extension DisplayPreset {
     static let colorOptions: [(name: String, color: Color)] = [
-        ("indigo", .indigo), ("blue", .blue), ("purple", .purple), ("pink", .pink),
+        ("blue", .blue), ("indigo", .indigo), ("purple", .purple), ("pink", .pink),
         ("red", .red), ("orange", .orange), ("yellow", .yellow), ("green", .green),
         ("teal", .teal), ("gray", .gray),
     ]

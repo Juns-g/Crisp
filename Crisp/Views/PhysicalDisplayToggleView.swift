@@ -18,7 +18,7 @@ struct DisconnectDisplayRow: View {
         if service.isSupported, !service.wouldLeaveNoActiveDisplay(display.displayID) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    MenuItemIcon(systemName: "rectangle.slash", color: .orange)
+                    MenuItemIcon(systemName: "rectangle.slash", color: .orange, active: false)
                     Text("Disconnect Display")
                         .font(.body)
                     Spacer()
@@ -116,7 +116,7 @@ private struct DisconnectedDisplayRow: View {
             // The display is inactive, so dim its icon + name; it brightens as the
             // row is hovered, cueing that a click brings it back.
             HStack(spacing: 8) {
-                MenuItemIcon(systemName: "rectangle.slash", color: .secondary)
+                MenuItemIcon(systemName: "rectangle.slash", color: .secondary, active: false)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(record.name).font(.body).lineLimit(1)
                     Text(verbatim: "\(record.width)×\(record.height)")
