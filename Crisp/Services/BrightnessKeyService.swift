@@ -33,10 +33,6 @@ final class BrightnessKeyService: @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     /// Retained Unmanaged reference passed into the C callback. Released in stop().
     private var selfRetained: Unmanaged<BrightnessKeyService>?
-    /// Number of poll retries attempted.
-    private var pollRetryCount = 0
-    /// Max poll retries before giving up (2s × 15 = 30s).
-    private static let maxPollRetries = 15
 
     // MARK: - NX Media Key Constants
     // Marked nonisolated(unsafe) so they can be read from the nonisolated callback method.
@@ -81,7 +77,7 @@ final class BrightnessKeyService: @unchecked Sendable {
             retained.release()
             selfRetained = nil
             NSLog("[BrightnessKeyService] Event tap creation failed — no accessibility permission")
-            pollForAccessibility()
+            retryUntilArmed()
             return
         }
 
@@ -91,6 +87,7 @@ final class BrightnessKeyService: @unchecked Sendable {
 
         self.eventTap = tap
         self.runLoopSource = source
+        stopRetrying()
 
         NSLog("[BrightnessKeyService] Event tap installed successfully")
     }
@@ -112,26 +109,40 @@ final class BrightnessKeyService: @unchecked Sendable {
         print("[BrightnessKeyService] Event tap removed.")
     }
 
-    // MARK: - Accessibility Polling
+    // MARK: - Accessibility retry
+    // There is no system notification for Accessibility-trust changes, so we keep trying to
+    // arm the tap on two triggers until it takes: a slow recurring poll (reliable) and
+    // app-activation (fast path when the user returns from System Settings after granting).
+    // Whichever arms the tap calls stopRetrying(). This replaces the old bounded 30s give-up
+    // that left the feature dead until an app restart. (b00d.2)
 
     private var pollTimer: Timer?
+    private var activationObserver: NSObjectProtocol?
 
-    /// Polls every 2 seconds by attempting to create the tap. Stops after maxPollRetries.
-    private func pollForAccessibility() {
-        pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
-            guard let self else { timer.invalidate(); return }
-            self.pollRetryCount += 1
-            if self.pollRetryCount > Self.maxPollRetries {
-                NSLog("[BrightnessKeyService] Gave up after %d retries — grant Accessibility permission and restart app", Self.maxPollRetries)
-                timer.invalidate()
-                self.pollTimer = nil
-                return
+    private func retryUntilArmed() {
+        // ponytail: unbounded 2s poll; tapCreate is cheap and it stops the instant the grant
+        // lands. The activation observer just makes it feel instant when the user clicks back in.
+        if pollTimer == nil {
+            pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
+                guard let self else { timer.invalidate(); return }
+                self.start()
             }
-            NSLog("[BrightnessKeyService] Poll %d/%d: retrying…", self.pollRetryCount, Self.maxPollRetries)
-            timer.invalidate()
-            self.pollTimer = nil
-            self.start()
+        }
+        if activationObserver == nil {
+            activationObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.start() }
+            }
+        }
+    }
+
+    private func stopRetrying() {
+        pollTimer?.invalidate()
+        pollTimer = nil
+        if let obs = activationObserver {
+            NotificationCenter.default.removeObserver(obs)
+            activationObserver = nil
         }
     }
 
