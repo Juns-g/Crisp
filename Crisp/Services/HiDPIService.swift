@@ -268,16 +268,26 @@ final class HiDPIService: @unchecked Sendable {
         return logical.map { encodeScaledMode(backingW: $0.0 * 2, backingH: $0.1 * 2) }
     }
 
-    /// Dense HiDPI "looks like" ladder for smooth scaling: native plus `steps` logical
-    /// sizes from `minScale`×native up toward native, each injected as a 2×-backed HiDPI
-    /// mode. Deduped (rounding can collide adjacent steps), even dimensions, floored at
-    /// 800×600. This is what lets the smooth-scaling slider feel continuous: it snaps
-    /// across these. Injecting many modes also lengthens the System Settings list, so
-    /// this is only used for displays the user opts into smooth scaling for.
+    /// Dense HiDPI "looks like" ladder for smooth scaling: native plus logical sizes from
+    /// `minScale`×native up toward native, each injected as a 2×-backed HiDPI mode. Deduped
+    /// (rounding can collide adjacent steps), even dimensions, floored at 800×600. This is
+    /// what lets the smooth-scaling slider feel continuous: it snaps across these. Injecting
+    /// many modes also lengthens the System Settings list, so this is only used for displays
+    /// the user opts into smooth scaling for.
+    ///
+    /// The step count is derived from the panel, not fixed: one stop per ~`stepHeight`
+    /// logical points across the 50%→100% range. A 1440p panel yields ~14 stops (matching
+    /// BetterDisplay's flexible scaling); a 4K/5K panel gets proportionally more, since its
+    /// usable range spans more pixels, so the slider stays equally smooth on any display.
     func generateSmoothScaledModes(nativeWidth: Int, nativeHeight: Int,
-                                   steps: Int = 12, minScale: Double = 0.5) -> [Data] {
+                                   minScale: Double = 0.5) -> [Data] {
+        // One stop per ~55 logical points of height: fine enough to feel continuous when
+        // dragging, coarse enough not to flood the System Settings resolution list.
+        let stepHeight = 55.0
+        let span = Double(nativeHeight) * (1.0 - minScale)
+        let steps = max(1, Int((span / stepHeight).rounded()))
         var logical: [(Int, Int)] = [(nativeWidth, nativeHeight)]  // native as HiDPI
-        for i in 0..<max(steps, 1) {
+        for i in 0..<steps {
             let scale = minScale + (1.0 - minScale) * Double(i) / Double(steps)
             let w = Int((Double(nativeWidth) * scale).rounded()) & ~1
             let h = Int((Double(nativeHeight) * scale).rounded()) & ~1

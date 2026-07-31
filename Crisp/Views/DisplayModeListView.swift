@@ -263,9 +263,13 @@ struct DisplayModeSection: View {
     /// highest refresh), ascending: left = Larger Text, right = More Space.
     private var smoothModes: [DisplayMode] {
         let (nativeW, nativeH) = display.nativeResolution
+        // Floor the slider at 50% of native (the 2× Retina point), matching the injected
+        // ladder and BetterDisplay. Without this, small HiDPI modes macOS also enumerates
+        // (e.g. 800×600 accessibility sizes) would drag the left stop far below anything usable.
+        let minWidth = nativeW / 2
         var seen = Set<String>()
         return display.availableModes
-            .filter { $0.isHiDPI || ($0.width == nativeW && $0.height == nativeH) }
+            .filter { ($0.isHiDPI && $0.width >= minWidth) || ($0.width == nativeW && $0.height == nativeH) }
             .sorted {
                 if $0.isHiDPI != $1.isHiDPI { return $0.isHiDPI }
                 return $0.refreshRate > $1.refreshRate
