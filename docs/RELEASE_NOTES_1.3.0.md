@@ -21,6 +21,9 @@ publish (`scripts/release.sh v1.3.0 docs/RELEASE_NOTES_1.3.0.md --publish`).
   applied as a lookup table. (#17)
 - Image Adjustment: the Gain and Contrast sliders now take effect above 0.
   An internal clamp was pinning the bright end, so positive values did nothing.
+- Turning off "Keep display offsets" now snaps the external displays to the
+  built-in level right away, instead of waiting for the next built-in
+  brightness change.
 ## Added
 
 - Auto Brightness rework: the built-in slider tracks system brightness live,
@@ -46,6 +49,12 @@ publish (`scripts/release.sh v1.3.0 docs/RELEASE_NOTES_1.3.0.md --publish`).
 - Arrangement name badge no longer overlaps the wallpaper.
 - Removed the notch-height info row.
 - DDC brightness writes paced to ~20/sec to prevent flicker on fast drags. (#13)
+- Menu icons follow the native state rule: an icon carries its color only while
+  its feature is active (the way Wi-Fi and Battery do), and sits as a faint gray
+  chip otherwise.
+- Clicking a brightness slider's track glides to the value instead of jumping.
+  Built-in and software-dimmed displays fade; DDC externals still step in one
+  write, since each DDC write flashes the panel.
 ## Dev / build
 
 - `dev.sh` signs with a stable identity so the Accessibility grant survives
