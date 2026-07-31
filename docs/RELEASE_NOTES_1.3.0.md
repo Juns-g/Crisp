@@ -51,7 +51,9 @@ publish (`scripts/release.sh v1.3.0 docs/RELEASE_NOTES_1.3.0.md --publish`).
   ("Default", "low resolution"), off-spec external modes (odd aspect ratios and
   stray 1x sizes) hidden, and modes grouped under HiDPI / Non-HiDPI headers.
 - Combined brightness control restyled to match the per-display rows.
-- Smoother reveal animation for the resolution, preset, and image sections.
+- Smoother reveal animation for the resolution, preset, image, and combined
+  brightness sections. Enabling "Show Combined Brightness" now glides the control
+  open instead of popping it in at full height.
 - Spacing between stacked display sections in the menu.
 - Arrangement name badge no longer overlaps the wallpaper.
 - Removed the notch-height info row.
