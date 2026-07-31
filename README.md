@@ -16,7 +16,9 @@ https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 brew install --cask didriksg/tap/crisp
 ```
 
-Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/releases) and drag Crisp to Applications. The app isn't notarized, so on first launch macOS blocks it: open **System Settings > Privacy & Security**, scroll down, and click **Open Anyway**. (Homebrew installs skip this.)
+Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/releases) and drag Crisp to Applications.
+
+The app isn't notarized yet, so on first launch macOS blocks it (whether you installed via Homebrew or the DMG): open **System Settings > Privacy & Security**, scroll down, and click **Open Anyway**. Homebrew users can add `--no-quarantine` to the install command to skip the prompt.
 
 ## Features
 
