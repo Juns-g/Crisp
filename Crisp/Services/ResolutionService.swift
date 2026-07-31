@@ -7,37 +7,70 @@ final class ResolutionService: @unchecked Sendable {
     static let shared = ResolutionService()
     private init() {}
 
-    /// Persisted modeIDs keyed by displayID string. Used to re-apply modes after sleep/wake.
-    private var savedModeIDs: [String: Int32] = {
-        (UserDefaults.standard.dictionary(forKey: "crisp.ResolutionService.savedModes") as? [String: Int32]) ?? [:]
+    /// A persisted resolution stored as ATTRIBUTES, not the volatile ioDisplayModeID. macOS
+    /// reassigns that raw ID whenever the mode list is rebuilt (HiDPI override inject/remove,
+    /// reconnect, sleep/wake), so matching by ID after a rebuild resolved to a DIFFERENT mode
+    /// and set a wrong (often off-aspect, 60Hz) resolution on wake. (w18z)
+    private struct SavedMode: Codable, Equatable {
+        let width: Int
+        let height: Int
+        let refresh: Double
+        let hidpi: Bool
+    }
+
+    private static let savedModesKey = "crisp.ResolutionService.savedModeAttrs"
+
+    /// Last user-set mode per displayID (string key). Used to re-apply modes after sleep/wake.
+    private var savedModes: [String: SavedMode] = {
+        guard let data = UserDefaults.standard.data(forKey: ResolutionService.savedModesKey),
+              let decoded = try? JSONDecoder().decode([String: SavedMode].self, from: data)
+        else { return [:] }
+        return decoded
     }()
 
-    private func persistModeID(_ modeID: Int32, for displayID: CGDirectDisplayID) {
-        savedModeIDs["\(displayID)"] = modeID
-        UserDefaults.standard.set(savedModeIDs, forKey: "crisp.ResolutionService.savedModes")
+    private func persistMode(_ mode: DisplayMode, for displayID: CGDirectDisplayID) {
+        savedModes["\(displayID)"] = SavedMode(width: mode.width, height: mode.height,
+                                               refresh: mode.refreshRate, hidpi: mode.isHiDPI)
+        UserDefaults.standard.set(try? JSONEncoder().encode(savedModes), forKey: Self.savedModesKey)
     }
 
-    private func clearSavedModeID(for displayID: CGDirectDisplayID) {
-        savedModeIDs.removeValue(forKey: "\(displayID)")
-        UserDefaults.standard.set(savedModeIDs, forKey: "crisp.ResolutionService.savedModes")
+    /// Refresh rates match within 1 Hz (macOS reports 59.97 for a stored 60, etc.). A stored 0
+    /// means "display default"; treat it as a wildcard so it never blocks an otherwise exact
+    /// resolution match.
+    private static func refreshMatches(_ a: Double, _ b: Double) -> Bool {
+        if a == 0 || b == 0 { return true }
+        return abs(a - b) < 1.0
     }
 
-    /// Re-applies the last user-set mode for `displayID` if it differs from the current active mode.
-    /// Called on wake from sleep so macOS mode resets are corrected.
+    /// Re-applies the last user-set mode for `displayID` if it differs from the current active
+    /// mode. Called on wake from sleep so macOS mode resets are corrected. Matches by attributes
+    /// and applies ONLY on an exact match in the current valid mode list; if the saved size no
+    /// longer exists (mode list rebuilt, display swapped) it does nothing rather than forcing an
+    /// off-aspect fallback. (w18z)
     func reapplySavedModeIfNeeded(for displayID: CGDirectDisplayID) {
-        guard let savedID = savedModeIDs["\(displayID)"] else { return }
-        let currentID = CGDisplayCopyDisplayMode(displayID)?.ioDisplayModeID
-        guard currentID != savedID else { return }
+        guard let saved = savedModes["\(displayID)"] else { return }
 
-        // Enumerate modes to find the saved one
+        // Already at the saved resolution? Nothing to do.
+        if let cur = CGDisplayCopyDisplayMode(displayID),
+           cur.width == saved.width, cur.height == saved.height,
+           (cur.pixelWidth > cur.width) == saved.hidpi,
+           Self.refreshMatches(cur.refreshRate, saved.refresh) {
+            return
+        }
+
         let options: CFDictionary = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         guard let rawModes = CGDisplayCopyAllDisplayModes(displayID, options) as? [CGDisplayMode],
-              let cgMode = rawModes.first(where: { $0.ioDisplayModeID == savedID }) else { return }
+              let cgMode = rawModes.first(where: {
+                  $0.width == saved.width && $0.height == saved.height &&
+                  ($0.pixelWidth > $0.width) == saved.hidpi &&
+                  Self.refreshMatches($0.refreshRate, saved.refresh)
+              })
+        else { return }
 
         Task.detached(priority: .userInitiated) {
             let ok = await ResolutionService.applyModeSync(cgMode, on: displayID)
             #if DEBUG
-            print("[ResolutionService] wake re-apply modeID=\(savedID) on displayID=\(displayID) success=\(ok)")
+            print("[ResolutionService] wake re-apply \(saved.width)×\(saved.height) hidpi=\(saved.hidpi) @\(Int(saved.refresh))Hz on displayID=\(displayID) success=\(ok)")
             #endif
         }
     }
@@ -109,7 +142,7 @@ final class ResolutionService: @unchecked Sendable {
             print("[ResolutionService] No CGDisplayMode for id=\(mode.ioDisplayModeID) (\(mode.width)×\(mode.height) hiDPI=\(mode.isHiDPI)) on displayID=\(targetID); trying CGS")
             #endif
             let ok = await cgsFallback(modeID: UInt32(bitPattern: mode.ioDisplayModeID), on: targetID)
-            if ok { persistModeID(mode.ioDisplayModeID, for: displayID) }
+            if ok { persistMode(mode, for: displayID) }
             return ok
         }
 
@@ -124,7 +157,7 @@ final class ResolutionService: @unchecked Sendable {
 
         if success {
             // Persist so we can re-apply after sleep/wake
-            persistModeID(mode.ioDisplayModeID, for: displayID)
+            persistMode(mode, for: displayID)
             return true
         }
 
@@ -134,7 +167,7 @@ final class ResolutionService: @unchecked Sendable {
         #endif
         let fallbackSuccess = await cgsFallback(modeID: UInt32(bitPattern: cgMode.ioDisplayModeID), on: targetID)
         if fallbackSuccess {
-            persistModeID(mode.ioDisplayModeID, for: displayID)
+            persistMode(mode, for: displayID)
         }
         return fallbackSuccess
     }

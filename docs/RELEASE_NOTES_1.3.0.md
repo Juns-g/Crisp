@@ -31,6 +31,10 @@ publish (`scripts/release.sh v1.3.0 docs/RELEASE_NOTES_1.3.0.md --publish`).
   HiDPI on a 1440p/144Hz panel) now run at the panel's full refresh instead of
   dropping to 50Hz. macOS hides the full-refresh variant of such modes; Crisp
   now surfaces it and applies it directly.
+- After sleep/wake, a display no longer lands on a wrong (often stretched,
+  60Hz) resolution. Crisp re-applied the saved mode by a raw ID that macOS
+  reassigns when the mode list is rebuilt; it now matches by resolution
+  attributes and re-applies only on an exact match.
 ## Added
 
 - Auto Brightness rework: the built-in slider tracks system brightness live,
