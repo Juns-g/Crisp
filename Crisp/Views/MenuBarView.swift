@@ -1,4 +1,5 @@
 import SwiftUI
+import ApplicationServices
 
 // MARK: - Shared Icon Helper
 
@@ -631,6 +632,42 @@ struct SettingsView: View {
         }
     }
 
+    /// One-time Accessibility onboarding for the brightness keys, shown inside the Brightness
+    /// Keys section only while permission is missing (the tap can't route the keys without it).
+    /// The button fires the native trust prompt and opens the exact Settings pane; the tap arms
+    /// live once granted, no restart (see BrightnessKeyService). (b00d.1)
+    private struct BrightnessKeysPermissionNotice: View {
+        var body: some View {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                    Text("Brightness keys need Accessibility access to redirect them to external displays. Grant it once and they start working, no restart.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button("Grant Access") { requestAccess() }
+                    .controlSize(.small)
+                    .padding(.leading, 18)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+        }
+
+        private func requestAccess() {
+            // Fire the native trust prompt (shows the system dialog the first time)...
+            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(opts)
+            // ...and open the exact pane, so the button still lands somewhere useful after the
+            // one-shot prompt has already been dismissed once.
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             // Auto Brightness: a behavior preference (moved out of the Tools
@@ -665,6 +702,10 @@ struct SettingsView: View {
                 isExpanded: $showBrightnessKeys
             )
             if showBrightnessKeys {
+                // One-time Accessibility onboarding: the tap can't route the keys without it.
+                if !AXIsProcessTrusted() {
+                    BrightnessKeysPermissionNotice()
+                }
                 ForEach(BrightnessKeyTarget.allCases, id: \.self) { target in
                     CheckmarkRow(
                         label: brightnessTargetName(target),

@@ -1670,6 +1670,26 @@
           }
         }
       }
+    },
+    "Brightness keys need Accessibility access to redirect them to external displays. Grant it once and they start working, no restart." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "亮度键需要辅助功能权限才能重定向到外接显示器。授权一次即可使用，无需重启。"
+          }
+        }
+      }
+    },
+    "Grant Access" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "授予权限"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
