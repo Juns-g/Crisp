@@ -204,14 +204,14 @@ final class GammaService: @unchecked Sendable {
         // Incorporate software brightness factor so BrightnessService and GammaService
         // do not overwrite each other's transfer function.
         let brightnessFactor = max(0.05, BrightnessService.shared.currentSoftwareBrightness(for: displayID) ?? 1.0)
-        p.rHi = min(1.0, p.rHi * brightnessFactor)
-        p.gHi = min(1.0, p.gHi * brightnessFactor)
-        p.bHi = min(1.0, p.bHi * brightnessFactor)
+        p.rHi *= brightnessFactor
+        p.gHi *= brightnessFactor
+        p.bHi *= brightnessFactor
 
-        // Build the table by hand instead of CGSetDisplayTransferByFormula: the formula
-        // API normalises min<=max, which silently drops color inversion (rLo>rHi). Feeding
-        // a descending ramp to CGSetDisplayTransferByTable applies it verbatim, so invert
-        // works. Output is identical to the formula for every non-inverted adjustment.
+        // Build the table by hand instead of CGSetDisplayTransferByFormula: the formula API
+        // forces min/max into [0,1] with min<=max, which silently drops inversion (rLo>rHi),
+        // positive gain (rHi>1), and positive contrast. Sampling the same curve into
+        // CGSetDisplayTransferByTable and clamping per entry honors all three.
         let capacity = 256
         var redTable   = [CGGammaValue](repeating: 0, count: capacity)
         var greenTable = [CGGammaValue](repeating: 0, count: capacity)
@@ -270,10 +270,10 @@ final class GammaService: @unchecked Sendable {
             swap(&bLo, &bHi)
         }
 
-        // ── Clamp to [0, 1] required by CGSetDisplayTransferByFormula ──
-        rLo = max(0.0, rLo); rHi = min(1.0, rHi)
-        gLo = max(0.0, gLo); gHi = min(1.0, gHi)
-        bLo = max(0.0, bLo); bHi = min(1.0, bHi)
+        // No [0,1] clamp here: the apply paths sample these endpoints into a transfer table
+        // and clamp per entry, so out-of-range endpoints are preserved and drive real effects,
+        // inversion (rLo>rHi), positive gain (rHi>1), and positive contrast (rHi>1, rLo<0).
+        // Clamping here would pin rHi to 1.0 and silently no-op gain and contrast above 0.
 
         return ChannelParams(
             rLo: rLo, rHi: rHi, rGam: rGammaExp,
@@ -344,9 +344,9 @@ final class GammaService: @unchecked Sendable {
         var p = channelParams(for: adj)
         // Incorporate software brightness factor, matching applyFormula behaviour.
         let brightnessFactor = max(0.05, BrightnessService.shared.currentSoftwareBrightness(for: displayID) ?? 1.0)
-        p.rHi = min(1.0, p.rHi * brightnessFactor)
-        p.gHi = min(1.0, p.gHi * brightnessFactor)
-        p.bHi = min(1.0, p.bHi * brightnessFactor)
+        p.rHi *= brightnessFactor
+        p.gHi *= brightnessFactor
+        p.bHi *= brightnessFactor
 
         for i in 0..<capacity {
             let input = Double(i) / Double(capacity - 1)

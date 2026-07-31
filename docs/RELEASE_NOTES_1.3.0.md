@@ -19,6 +19,8 @@ publish (`scripts/release.sh v1.3.0 docs/RELEASE_NOTES_1.3.0.md --publish`).
 - "Invert Colors" now works. At the default quality it was silently dropped
   because the underlying gamma call ignores an inverted range; it is now
   applied as a lookup table. (#17)
+- Image Adjustment: the Gain and Contrast sliders now take effect above 0.
+  An internal clamp was pinning the bright end, so positive values did nothing.
 ## Added
 
 - Auto Brightness rework: the built-in slider tracks system brightness live,
