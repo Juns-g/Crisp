@@ -313,6 +313,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private var isWarmed = false
+    /// False until the panel has been shown once this launch. The first show fades
+    /// in to mask one-time on-screen costs; later shows are instant.
+    private var hasShownOnce = false
 
     private func warmPanel() {
         let p = panel ?? makePanel()
@@ -424,9 +427,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         positionPanel(p)
 
         p.ignoresMouseEvents = false
-        // Duration-zero animator set replaces any in-flight close fade.
+        // First open only: fade in briefly so the panel's one-time on-screen costs
+        // (Liquid Glass materialize bloom, first backdrop sample, first rasterization)
+        // play under the fade instead of glitching in visibly, the way native menus'
+        // appearance animation masks the same cost. The offscreen/alpha-0 warm-up can't
+        // pre-play them (glass only materializes when genuinely on screen). The panel
+        // sits at alpha 0 (warm-up / last close), so this is a clean 0 -> 1; every later
+        // open stays instant (duration 0), replacing any in-flight close fade.
+        let appearDuration: TimeInterval = hasShownOnce ? 0 : 0.12
+        hasShownOnce = true
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0
+            ctx.duration = appearDuration
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             p.animator().alphaValue = 1
         }
         p.orderFrontRegardless()
