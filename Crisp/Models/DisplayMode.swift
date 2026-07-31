@@ -56,7 +56,7 @@ struct DisplayMode: Identifiable, Equatable {
         let maxPixelWidth = nativePixelWidth(from: rawModes)
 
         var seen = Set<Int32>()
-        return rawModes.compactMap { mode -> DisplayMode? in
+        var modes: [DisplayMode] = rawModes.compactMap { mode -> DisplayMode? in
             let modeID = mode.ioDisplayModeID
             guard seen.insert(modeID).inserted else { return nil }  // deduplicate
             guard mode.isUsableForDesktopGUI() else { return nil }
@@ -78,13 +78,56 @@ struct DisplayMode: Identifiable, Equatable {
                 isNative: pw >= maxPixelWidth
             )
         }
-        .sorted { lhs, rhs in
+
+        // Merge in the GPU-scaled HiDPI variants CG hides (see cgsHiddenHiDPIModes), so a size
+        // like 1920x1080 HiDPI offers its 144Hz mode instead of only CG's 50Hz 4K timing.
+        let knownIDs = Set(modes.map { $0.id })
+        let hiDPISizes = Set(modes.filter { $0.isHiDPI }.map { "\($0.width)x\($0.height)" })
+        modes += cgsHiddenHiDPIModes(for: displayID, excludingIDs: knownIDs,
+                                     hiDPISizes: hiDPISizes, maxPixelWidth: maxPixelWidth)
+
+        return modes.sorted { lhs, rhs in
             if lhs.width != rhs.width { return lhs.width > rhs.width }
             if lhs.height != rhs.height { return lhs.height > rhs.height }
             if lhs.refreshRate != rhs.refreshRate { return lhs.refreshRate > rhs.refreshRate }
             if lhs.isHiDPI != rhs.isHiDPI { return lhs.isHiDPI }
             return false
         }
+    }
+
+    /// GPU-scaled HiDPI modes that `CGDisplayCopyAllDisplayModes` omits. When a scaled resolution
+    /// collides with a real EDID timing (e.g. 1920x1080 HiDPI, whose 3840x2160 backing the panel
+    /// advertises as a real 4K timing at only 50/60Hz), CG surfaces just that low-refresh timing
+    /// and drops the GPU-scaled full-refresh variant. The private CGS list still carries it.
+    /// Return the ones CG omits, restricted to logical sizes CG already lists as HiDPI, so we only
+    /// fill in missing refresh variants rather than inventing resolutions. Same id space as CG
+    /// (modeNumber == ioDisplayModeID), so ResolutionService applies them via CGSConfigureDisplayMode.
+    private static func cgsHiddenHiDPIModes(for displayID: CGDirectDisplayID,
+                                            excludingIDs known: Set<Int32>,
+                                            hiDPISizes: Set<String>,
+                                            maxPixelWidth: Int) -> [DisplayMode] {
+        var count: Int32 = 0
+        guard CGSGetNumberOfDisplayModes(displayID, &count) == .success, count > 0 else { return [] }
+        let length = Int32(MemoryLayout<CGSDisplayModeDescription>.size)
+
+        var out: [DisplayMode] = []
+        for i in 0..<count {
+            var d = CGSDisplayModeDescription()
+            guard CGSGetDisplayModeDescriptionOfLength(displayID, i, &d, length) == .success else { continue }
+            if d.flags & 0x40000000 != 0 { continue }   // macOS-unusable (isUsableForDesktopGUI == false)
+            guard d.density >= 1.5 else { continue }      // HiDPI (2x backing) only
+            let id = Int32(bitPattern: d.modeNumber)
+            if known.contains(id) { continue }            // already surfaced by CG
+            let w = Int(d.width), h = Int(d.height)
+            guard hiDPISizes.contains("\(w)x\(h)") else { continue }  // fill existing sizes only
+            let pw = Int((Float(d.width) * d.density).rounded())
+            let ph = Int((Float(d.height) * d.density).rounded())
+            out.append(DisplayMode(id: id, width: w, height: h,
+                                   pixelWidth: pw, pixelHeight: ph,
+                                   refreshRate: Double(d.freq),
+                                   isHiDPI: pw > w, isNative: pw >= maxPixelWidth))
+        }
+        return out
     }
 
     /// Returns the current active display mode.

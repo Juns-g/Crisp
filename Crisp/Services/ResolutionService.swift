@@ -93,23 +93,24 @@ final class ResolutionService: @unchecked Sendable {
                 return exact
             }
 
-            // Second try: match by logical size + HiDPI when we routed to the mirror source
-            // (the source has different modeIDs than the mirror target)
-            return ResolutionService.bestMatchingMode(in: allRaw, for: mode)
+            // Second try: match by logical size + HiDPI ONLY on a mirror redirect (the source has
+            // a different modeID space than the mirror target). For a normal display, an id missing
+            // from CG's list is a CGS-injected hidden mode (e.g. the 144Hz HiDPI-1080p variant):
+            // size-matching would wrongly pick CG's low-refresh twin (the real 4K@50 timing), so
+            // fall through to the CGS apply path instead.
+            return isMirrorRedirect ? ResolutionService.bestMatchingMode(in: allRaw, for: mode) : nil
         }.value
 
         guard let cgMode else {
-            if isMirrorRedirect {
-                // Last resort: try CGS private API with the mode's raw modeID on the source
-                #if DEBUG
-                print("[ResolutionService] No matching mode on mirror source=\(targetID), trying CGS fallback")
-                #endif
-                return await cgsFallback(modeID: UInt32(bitPattern: mode.ioDisplayModeID), on: targetID)
-            }
+            // No CGDisplayMode with this id: the GPU-scaled HiDPI variant CG hides (surfaced from
+            // the CGS list), or the mirror-source last resort. Both apply via the CGS transaction
+            // API, which addresses modes by the same id (CGS modeNumber == ioDisplayModeID).
             #if DEBUG
-            print("[ResolutionService] No matching CGDisplayMode for \(mode.width)×\(mode.height) hiDPI=\(mode.isHiDPI) on displayID=\(targetID)")
+            print("[ResolutionService] No CGDisplayMode for id=\(mode.ioDisplayModeID) (\(mode.width)×\(mode.height) hiDPI=\(mode.isHiDPI)) on displayID=\(targetID); trying CGS")
             #endif
-            return false
+            let ok = await cgsFallback(modeID: UInt32(bitPattern: mode.ioDisplayModeID), on: targetID)
+            if ok { persistModeID(mode.ioDisplayModeID, for: displayID) }
+            return ok
         }
 
         #if DEBUG
@@ -223,25 +224,40 @@ final class ResolutionService: @unchecked Sendable {
 
     // MARK: - CGSConfigureDisplayMode fallback (private API)
 
-    /// Applies a mode by its raw modeID using the CGS private API.
-    /// CGSConfigureDisplayMode(connection, displayID, modeID) bypasses some of the
-    /// restrictions that CGConfigureDisplayWithDisplayMode has on certain display configs.
-    /// Does NOT wrap in a CGBeginDisplayConfiguration transaction — CGSConfigureDisplayMode
-    /// manages its own transaction internally; an empty outer transaction would always succeed
-    /// regardless of whether the mode change actually took effect.
+    /// Applies a mode by its raw modeNumber using the CGS private API. Reaches the GPU-scaled
+    /// HiDPI variants CG hides (e.g. 1920x1080 HiDPI @144Hz) that CGConfigureDisplayWithDisplayMode
+    /// cannot see, and mirror-source modes.
+    ///
+    /// CGSConfigureDisplayMode's first argument is a CONFIG TOKEN from CGBeginDisplayConfiguration,
+    /// NOT the connection id: it reads the argument as a CGSConfigData*, so passing the connection
+    /// id segfaults in checkCapacity() on macOS 26. It must run inside a real
+    /// CGBegin/CGCompleteDisplayConfiguration transaction (verified against BetterDisplay on Tahoe).
     private func cgsFallback(modeID: UInt32, on displayID: CGDirectDisplayID) async -> Bool {
         return await Task.detached(priority: .userInitiated) {
-            let connection = CGSMainConnectionID()
-            CGSConfigureDisplayMode(connection, displayID, modeID)
+            var config: CGDisplayConfigRef?
+            guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
+                #if DEBUG
+                print("[ResolutionService] CGS fallback: CGBeginDisplayConfiguration failed modeID=\(modeID)")
+                #endif
+                return false
+            }
 
-            // Wait for the mode change to propagate before reading back
+            let result = CGSConfigureDisplayMode(cfg, displayID, Int32(bitPattern: modeID))
+            guard result == .success else {
+                CGCancelDisplayConfiguration(cfg)
+                #if DEBUG
+                print("[ResolutionService] CGS fallback: CGSConfigureDisplayMode failed (\(result.rawValue)) modeID=\(modeID)")
+                #endif
+                return false
+            }
+
+            let complete = CGCompleteDisplayConfiguration(cfg, .forSession)
+            // Wait for the mode change to propagate, then verify the active mode actually changed.
             try? await Task.sleep(nanoseconds: 100_000_000)  // 100ms
-
-            // Verify success by checking whether the active modeID changed
             let newModeID = CGDisplayCopyDisplayMode(displayID)?.ioDisplayModeID
-            let success = newModeID == Int32(bitPattern: modeID)
+            let success = complete == .success && newModeID == Int32(bitPattern: modeID)
             #if DEBUG
-            print("[ResolutionService] CGS fallback: success=\(success) modeID=\(modeID) displayID=\(displayID) activeModeID=\(newModeID as Any)")
+            print("[ResolutionService] CGS fallback: complete=\(complete.rawValue) success=\(success) modeID=\(modeID) activeModeID=\(newModeID as Any)")
             #endif
             return success
         }.value
