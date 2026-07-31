@@ -16,6 +16,9 @@ publish (`scripts/release.sh v1.3.0 docs/RELEASE_NOTES_1.3.0.md --publish`).
 - Brightness sliders behave correctly on monitors that answer DDC reads with
   stale or garbage data; a bogus reported maximum used to compress the usable
   range. (#13)
+- "Invert Colors" now works. At the default quality it was silently dropped
+  because the underlying gamma call ignores an inverted range; it is now
+  applied as a lookup table. (#17)
 ## Added
 
 - Auto Brightness rework: the built-in slider tracks system brightness live,

@@ -207,10 +207,26 @@ final class GammaService: @unchecked Sendable {
         p.rHi = min(1.0, p.rHi * brightnessFactor)
         p.gHi = min(1.0, p.gHi * brightnessFactor)
         p.bHi = min(1.0, p.bHi * brightnessFactor)
-        CGSetDisplayTransferByFormula(displayID,
-            CGGammaValue(p.rLo), CGGammaValue(p.rHi), CGGammaValue(p.rGam),
-            CGGammaValue(p.gLo), CGGammaValue(p.gHi), CGGammaValue(p.gGam),
-            CGGammaValue(p.bLo), CGGammaValue(p.bHi), CGGammaValue(p.bGam))
+
+        // Build the table by hand instead of CGSetDisplayTransferByFormula: the formula
+        // API normalises min<=max, which silently drops color inversion (rLo>rHi). Feeding
+        // a descending ramp to CGSetDisplayTransferByTable applies it verbatim, so invert
+        // works. Output is identical to the formula for every non-inverted adjustment.
+        let capacity = 256
+        var redTable   = [CGGammaValue](repeating: 0, count: capacity)
+        var greenTable = [CGGammaValue](repeating: 0, count: capacity)
+        var blueTable  = [CGGammaValue](repeating: 0, count: capacity)
+        for i in 0..<capacity {
+            let input = Double(i) / Double(capacity - 1)
+            func tableValue(lo: Double, hi: Double, gam: Double) -> CGGammaValue {
+                CGGammaValue(max(0.0, min(1.0, lo + (hi - lo) * pow(input, gam))))
+            }
+            redTable[i]   = tableValue(lo: p.rLo, hi: p.rHi, gam: p.rGam)
+            greenTable[i] = tableValue(lo: p.gLo, hi: p.gHi, gam: p.gGam)
+            blueTable[i]  = tableValue(lo: p.bLo, hi: p.bHi, gam: p.bGam)
+        }
+        CGSetDisplayTransferByTable(displayID, UInt32(capacity),
+                                    &redTable, &greenTable, &blueTable)
     }
 
     private func channelParams(for adj: GammaAdjustment) -> ChannelParams {
