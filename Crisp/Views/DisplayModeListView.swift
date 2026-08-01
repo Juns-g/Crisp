@@ -54,13 +54,22 @@ struct DisplayModeSection: View {
             )
         }
         .filter { group in
+            // Built-in (notched) panel: macOS only offers scaled sizes at the panel's
+            // native aspect. CGDisplayCopyAllDisplayModes also returns 16:10 "non-notch"
+            // modes (e.g. 1512x945, 2560x1600) that letterbox the notch away and aren't
+            // selectable in System Settings, so drop them; always keep the active mode.
+            // Non-notched built-ins share the native aspect, so nothing is dropped there.
+            // ponytail: 2% tolerance cleanly splits 1.60 (16:10) from ~1.54 (notched).
+            if display.isBuiltin {
+                let nativeAR = Double(nativeW) / Double(nativeH)
+                let ar = Double(group.width) / Double(group.height)
+                return abs(ar - nativeAR) / nativeAR < 0.02
+                    || group.modes.contains { $0.id == currentMode?.id }
+            }
             // External: drop standalone 1x oddballs (non-HiDPI, no HiDPI twin, not
             // the native default) that clutter the list, e.g. 2048x1152, 1344x756,
             // and the off-aspect 4:3/5:4/portrait sizes. Keep native, the HiDPI
-            // ladder, the "(low resolution)" twins, and whatever is current. The
-            // built-in keeps everything (its big 1x modes are legitimate "more space"
-            // options macOS also offers).
-            if display.isBuiltin { return true }
+            // ladder, the "(low resolution)" twins, and whatever is current.
             if group.isHiDPI || group.isDefault || group.isLowResolution { return true }
             return group.modes.contains { $0.id == currentMode?.id }
         }
