@@ -38,6 +38,12 @@ class DisplayManager: ObservableObject {
     /// Display whose menu bar the panel was opened on; listed first, like the native displays panel.
     @Published var activePanelDisplayID: CGDirectDisplayID?
 
+    /// A smooth-scaling toggle soft-reconnects the display, which drops it from the list and
+    /// re-adds it as a fresh DisplayInfo, wiping its row's expansion @State. The enable flow
+    /// sets this to the display's stable UUID afterward so the menu re-expands that display's
+    /// detail and Resolution section, landing the user back where they were. Cleared once applied.
+    @Published var pendingResolutionExpandUUID: String?
+
     // nonisolated(unsafe) allows deinit (which is nonisolated in Swift 6) to access this value.
     nonisolated(unsafe) private var callbackContext: UnsafeMutableRawPointer?
 

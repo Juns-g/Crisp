@@ -589,6 +589,12 @@ struct MenuBarView: View {
             let validIDs = Set(newDisplays.map { $0.displayID })
             expandedDisplayIDs = expandedDisplayIDs.intersection(validIDs)
         }
+        .onChange(of: displayManager.pendingResolutionExpandUUID) { _, uuid in
+            // A smooth-scaling reconnect rebuilt this display's row collapsed; re-expand its
+            // detail so the reopened Resolution section (DisplayModeSection reacts too) shows.
+            guard let uuid, let d = displayManager.displays.first(where: { $0.displayUUID == uuid }) else { return }
+            withAnimation(.panelResize) { expandedDisplayIDs.insert(d.displayID) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             // Reopen collapsed, like a native menu. Fires while the panel is hidden,
             // so the content resizes off screen and reopens at the collapsed height.
@@ -597,6 +603,7 @@ struct MenuBarView: View {
             showArrangement = false
             showSettings = false
             expandedDisplayIDs.removeAll()
+            displayManager.pendingResolutionExpandUUID = nil
         }
         .task {
             await updateService.checkForUpdates()

@@ -7,6 +7,7 @@ import AppKit
 /// its own section, shown only when the current resolution offers more than one.
 struct DisplayModeSection: View {
     @ObservedObject var display: DisplayInfo
+    @EnvironmentObject var displayManager: DisplayManager
     @State private var showResolution: Bool = false
     @State private var showAllResolutions: Bool = false
     @State private var showRefresh: Bool = false
@@ -170,6 +171,14 @@ struct DisplayModeSection: View {
             showResolution = false
             showAllResolutions = false
             showRefresh = false
+        }
+        .onChange(of: displayManager.pendingResolutionExpandUUID) { _, uuid in
+            // This display's row was just rebuilt by a smooth-scaling reconnect: reopen its
+            // Resolution section. Clear async so the parent's matching onChange (which
+            // re-expands the detail) still sees the non-nil value this same pass.
+            guard uuid == display.displayUUID else { return }
+            withAnimation(.panelResize) { showResolution = true }
+            DispatchQueue.main.async { displayManager.pendingResolutionExpandUUID = nil }
         }
     }
 
@@ -586,6 +595,10 @@ struct DisplayModeSection: View {
         smoothOn = on   // optimistic; the re-enumeration below confirms it
         smoothBusy = true
         let (nativeW, nativeH) = display.nativeResolution
+        // Capture now, while the display is still connected and its UUID resolves; the
+        // soft-reconnect below destroys this view, but the Task keeps running and uses
+        // this to ask the rebuilt menu to re-expand the same display afterward.
+        let targetUUID = display.displayUUID
         Task { @MainActor in
             let err: String?
             if on {
@@ -604,6 +617,14 @@ struct DisplayModeSection: View {
                     withAnimation { errorMessage = nil }
                 }
             } else {
+                // The soft-reconnect blanks the display ~1s, which makes the panel resign
+                // key. That normally auto-closes it (windowDidResignKey), and closePanel
+                // posts crispPanelDidClose, collapsing every expanded row, dumping the user
+                // back to the top. Suppress the resign/outside-click dismissal for the
+                // duration so the panel stays put on this display's Resolution section;
+                // nothing to restore because it never closes.
+                PanelOpenGuard.suppressAutoDismiss = true
+                defer { PanelOpenGuard.suppressAutoDismiss = false }
                 // Re-read the override change in software (screen blanks ~1s) instead of
                 // asking for a physical reconnect.
                 await PhysicalDisplayToggleService.shared.softReconnect(display)
@@ -611,10 +632,13 @@ struct DisplayModeSection: View {
                 try? await Task.sleep(nanoseconds: 800_000_000)  // let refreshModes land
                 smoothOn = smoothModesPresent
                 refreshSmoothWouldPrompt()
-                // The auth prompt can steal key focus, greying the switch; re-key the panel.
+                // The blank/auth prompt can steal key focus, greying the switch; re-key the panel.
                 if let panel = NSApp.windows.first(where: { $0 is MenuPanel }), panel.isVisible {
                     panel.makeKey()
                 }
+                // The reconnect rebuilt this display's row (fresh, collapsed). Ask the menu to
+                // re-expand it and reopen Resolution, so the user lands back where they were.
+                displayManager.pendingResolutionExpandUUID = targetUUID
             }
             smoothBusy = false
         }
