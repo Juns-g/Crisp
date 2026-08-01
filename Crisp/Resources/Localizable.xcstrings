@@ -1700,6 +1700,16 @@
           }
         }
       }
+    },
+    "Automatically adjust brightness" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动调节亮度"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

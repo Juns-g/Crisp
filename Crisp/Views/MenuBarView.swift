@@ -67,6 +67,11 @@ extension Notification.Name {
     /// Posted once the panel has finished hiding, so the menu content can reset
     /// transient UI (collapse the tool/nav sections) and reopen fresh like a native menu.
     static let crispPanelDidClose = Notification.Name("crisp.panelDidClose")
+
+    /// Posted each time the panel opens, so content mirroring live external state
+    /// (e.g. the system auto-brightness toggle) can re-read it — the view mounts once,
+    /// so its .onAppear can't re-fire on later opens.
+    static let crispPanelDidOpen = Notification.Name("crisp.panelDidOpen")
 }
 
 extension Animation {

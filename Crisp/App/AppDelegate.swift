@@ -450,6 +450,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // resets this behind our back.
         statusItem?.button?.highlight(true)
 
+        // Re-sync views that mirror live external state (e.g. the system auto-brightness
+        // toggle) on every open; the panel content mounts once, so their .onAppear
+        // won't re-fire here.
+        NotificationCenter.default.post(name: .crispPanelDidOpen, object: nil)
+
         PanelOpenGuard.openedAt = Date()
         // Re-check for updates on open so a long-running instance surfaces a new
         // release without a restart (the panel view mounts once, so its launch
