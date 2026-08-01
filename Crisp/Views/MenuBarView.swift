@@ -645,21 +645,12 @@ struct MenuBarView: View {
 
 struct SettingsView: View {
     @ObservedObject private var settings = SettingsService.shared
-    @ObservedObject private var presetService = PresetService.shared
     // SettingsView stays mounted (only height-clipped) across panel opens, so the
     // support submenu's expansion must be reset explicitly on close like every
     // other section, or it reopens still expanded.
     @State private var showSupport = false
     @State private var showBrightnessKeys = false
     @EnvironmentObject var displayManager: DisplayManager
-
-    private var builtinPresets: [DisplayPreset] {
-        presetService.presets.filter { $0.isBuiltin }
-    }
-
-    private var externalDisplays: [DisplayInfo] {
-        displayManager.displays.filter { !$0.isBuiltin }
-    }
 
     /// Localized display name for a brightness-key target (row subtitle + choices).
     private func brightnessTargetName(_ target: BrightnessKeyTarget) -> String {
@@ -803,24 +794,6 @@ struct SettingsView: View {
             .controlSize(.small)
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
-
-            // HiDPI / Scaling (moved here from the top-level segmented control and per-display panel)
-            if !builtinPresets.isEmpty || !externalDisplays.isEmpty {
-                SectionDivider()
-
-                SectionHeader(title: "HiDPI & Scaling")
-
-                // One switch for the whole HiDPI story: flips the Native/HiDPI
-                // presets, and the first enable also installs the per-monitor
-                // override (admin prompt) when it's missing.
-                if !externalDisplays.isEmpty {
-                    HiDPIToggleRow(
-                        displays: externalDisplays,
-                        nativePreset: builtinPresets.first(where: { $0.name == "Native Mode" }),
-                        hidpiPreset: builtinPresets.first(where: { $0.name == "HiDPI Mode" })
-                    )
-                }
-            }
 
             SectionDivider()
 

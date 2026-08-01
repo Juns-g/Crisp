@@ -811,16 +811,6 @@
         }
       }
     },
-    "HiDPI & Scaling" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HiDPI 与缩放"
-          }
-        }
-      }
-    },
     "HiDPI Operation Failed" : {
       "localizations" : {
         "zh-Hans" : {
