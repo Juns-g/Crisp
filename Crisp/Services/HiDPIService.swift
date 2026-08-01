@@ -268,61 +268,34 @@ final class HiDPIService: @unchecked Sendable {
         return logical.map { encodeScaledMode(backingW: $0.0 * 2, backingH: $0.1 * 2) }
     }
 
-    /// Dense HiDPI "looks like" ladder for smooth scaling: native plus logical sizes from
-    /// `minScale`×native up toward native, each injected as a 2×-backed HiDPI mode. Deduped
-    /// (rounding can collide adjacent steps), even dimensions, floored at 800×600. This is
-    /// what lets the smooth-scaling slider feel continuous: it snaps across these. Injecting
-    /// many modes also lengthens the System Settings list, so this is only used for displays
-    /// the user opts into smooth scaling for.
-    ///
-    /// The step count is derived from the panel, not fixed: one stop per ~`stepHeight`
-    /// logical points across the 50%→100% range. A 1440p panel yields ~14 stops (matching
-    /// BetterDisplay's flexible scaling); a 4K/5K panel gets proportionally more, since its
-    /// usable range spans more pixels, so the slider stays equally smooth on any display.
+    /// Dense HiDPI "looks like" ladder for smooth scaling: native plus a sub-native ladder,
+    /// each injected as a 2×-backed HiDPI mode. This is what lets the smooth-scaling slider
+    /// feel continuous. Injecting this many modes also floods the System Settings resolution
+    /// list, so it's only used for displays the user opts into smooth scaling for.
     func generateSmoothScaledModes(nativeWidth: Int, nativeHeight: Int,
                                    minScale: Double = 0.5) -> [Data] {
         smoothScaledLogicalSizes(nativeWidth: nativeWidth, nativeHeight: nativeHeight, minScale: minScale)
             .map { encodeScaledMode(backingW: $0.width * 2, backingH: $0.height * 2) }
     }
 
-    /// The logical (point) sizes smooth scaling injects: native plus a dense sub-native
-    /// ladder, one stop per ~55 points of height (fine enough to feel continuous when
-    /// dragging, coarse enough not to flood the System Settings list). Exposed so the UI
-    /// can tell whether these have enumerated yet: they only appear after the display
-    /// re-enumerates (physical reconnect / sleep-wake).
+    /// The logical (point) sizes smooth scaling injects, on BetterDisplay's flexible-scaling
+    /// grid: native width stepped down by 16 points with height held to the panel's exact
+    /// aspect, down to `minScale`×native. 16px is fine enough that the slider drags
+    /// continuously (a 1440p panel yields ~80 stops). Standard sizes land on the grid for free
+    /// (1920 = 2560−16·40, 1600 = 2560−16·60, 2048 = 2560−16·32), so no anchoring is needed.
+    /// Exposed so the UI can tell whether these have enumerated yet: they only appear after the
+    /// display re-enumerates (soft-reconnect / physical reconnect).
     func smoothScaledLogicalSizes(nativeWidth: Int, nativeHeight: Int,
                                   minScale: Double = 0.5) -> [(width: Int, height: Int)] {
-        let stepHeight = 55.0
-        let span = Double(nativeHeight) * (1.0 - minScale)
-        let steps = max(1, Int((span / stepHeight).rounded()))
-        var stops: [(Int, Int)] = []
-        for i in 0..<steps {
-            let scale = minScale + (1.0 - minScale) * Double(i) / Double(steps)
-            let w = Int((Double(nativeWidth) * scale).rounded()) & ~1
-            let h = Int((Double(nativeHeight) * scale).rounded()) & ~1
-            guard w >= 800, h >= 600 else { continue }
-            stops.append((w, h))
+        let minW = Int((Double(nativeWidth) * minScale).rounded())
+        var stops: [(width: Int, height: Int)] = []
+        var w = nativeWidth
+        while w >= minW {
+            let h = Int((Double(w) * Double(nativeHeight) / Double(nativeWidth)).rounded())
+            if w >= 800, h >= 600 { stops.append((width: w, height: h)) }
+            w -= 16  // BetterDisplay's step; 16px stays even, so backing (×2) stays integer
         }
-
-        // Snap the nearest arithmetic stop to each standard resolution users pick by
-        // name, so the ladder lands on 1920×1080 / 1600×900 / 2048×1152 exactly instead
-        // of neighbours like 1968×1108. Only anchors matching the panel's aspect apply,
-        // so non-16:9 panels keep the pure ladder; out-of-range anchors find no stop
-        // within half a step and are skipped. Parity with BetterDisplay's ladder.
-        let aspect = Double(nativeWidth) / Double(nativeHeight)
-        let anchors = [(2048, 1152), (1920, 1080), (1600, 900)]
-            .filter { abs(Double($0.0) / Double($0.1) - aspect) < 0.01 }
-        for a in anchors {
-            guard let j = stops.indices.min(by: {
-                abs(stops[$0].0 - a.0) < abs(stops[$1].0 - a.0)
-            }), abs(stops[j].0 - a.0) <= 49 else { continue }
-            stops[j] = a
-        }
-
-        var seen = Set<Int>()
-        return ([(nativeWidth, nativeHeight)] + stops)  // native as HiDPI, then ladder
-            .filter { seen.insert(($0.0 << 16) | $0.1).inserted }
-            .map { (width: $0.0, height: $0.1) }
+        return stops  // native first, then descending: distinct widths, no dedup needed
     }
 
     /// Encodes a backing (pixel) resolution as the 8-byte big-endian entry the
