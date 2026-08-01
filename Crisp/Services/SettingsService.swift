@@ -33,6 +33,20 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
 
     private init() {
         loadAll()
+        // Re-sync launch-at-login from the authoritative SMAppService state on every panel
+        // open, so toggling Crisp in System Settings > Login Items reflects without a
+        // relaunch. No OS notification exists for login-item changes, so panel-open is the
+        // cheapest reliable hook. Only the didSet (a UserDefaults write) runs on assignment,
+        // never a re-register, so this can't fight the user's own toggle. Singleton -> no teardown.
+        NotificationCenter.default.addObserver(
+            forName: .crispPanelDidOpen, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let actual = LaunchService.shared.isEnabled
+                if self.launchAtLogin != actual { self.launchAtLogin = actual }
+            }
+        }
     }
 
     // MARK: - Keys

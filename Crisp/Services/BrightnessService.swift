@@ -272,10 +272,20 @@ final class BrightnessService: @unchecked Sendable {
                 if let result = result, result.max > 0 {
                     let brightness = Double(result.current) / Double(result.max) * 100.0
                     self.ddcAvailableLock.lock()
+                    let firstRead = self.ddcAvailable[displayID] != true
                     self.ddcAvailable[displayID] = true
                     self.ddcMaxBrightness[displayID] = result.max
                     self.ddcAvailableLock.unlock()
-                    Task { @MainActor in display.brightness = brightness }
+                    Task { @MainActor in
+                        // DDC reads quantize (many panels expose a coarser internal
+                        // scale than they accept), so a value we just set can read back
+                        // 1-2% off and twitch the slider on every open. Adopt the read
+                        // only on the first seed, or when it differs enough to be a real
+                        // external change (the monitor's own buttons), not read noise.
+                        if firstRead || abs(brightness - display.brightness) > 3.0 {
+                            display.brightness = brightness
+                        }
+                    }
                 }
                 // A failed/ignored read does NOT mean DDC is unavailable: many monitors
                 // accept brightness *writes* but never answer *reads* (they ack the I2C
