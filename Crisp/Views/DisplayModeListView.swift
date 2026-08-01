@@ -415,14 +415,17 @@ struct DisplayModeSection: View {
         }
     }
 
-    /// Admin-password heads-up, shown only while off and a write would actually prompt (the
-    /// dense override isn't already on disk).
+    /// Subtitle for the row while off: what smooth scaling does (the decision point), plus the
+    /// admin/flash heads-up when enabling would actually prompt (the dense override isn't on
+    /// disk yet). On shows nothing, the switch says it all.
     private var smoothSubtitle: String? {
         // Ground truth, not the optimistic switch value: the hint stays put through the whole
         // operation (so the row height, and the icon centered against it, don't jump mid-prompt)
         // and only clears once the dense modes actually enumerate.
-        guard !smoothModesPresent, smoothWouldPrompt else { return nil }
-        return String(localized: "Enabling asks for an administrator password and briefly flashes the screen")
+        guard !smoothModesPresent else { return nil }
+        return smoothWouldPrompt
+            ? String(localized: "Adds finer in-between steps for how large everything looks. Enabling asks for an administrator password and briefly flashes the screen")
+            : String(localized: "Adds finer in-between steps for how large everything looks")
     }
 
     /// Whether the dense smooth-scaling ladder is actually enumerated for this display (≥ half

@@ -691,12 +691,22 @@
         }
       }
     },
-    "Enabling asks for an administrator password and briefly flashes the screen" : {
+    "Adds finer in-between steps for how large everything looks" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "启用需要管理员密码，并会短暂闪烁屏幕"
+            "value" : "增加更精细的中间缩放档位，用于微调界面大小"
+          }
+        }
+      }
+    },
+    "Adds finer in-between steps for how large everything looks. Enabling asks for an administrator password and briefly flashes the screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "增加更精细的中间缩放档位，用于微调界面大小。启用需要管理员密码，并会短暂闪烁屏幕"
           }
         }
       }
