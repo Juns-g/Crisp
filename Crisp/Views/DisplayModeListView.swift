@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Resolution and refresh-rate selection as native checkmarked lists, each a
 /// top-level expandable row like the System Settings display menu: resolution is
@@ -14,7 +15,7 @@ struct DisplayModeSection: View {
     @State private var errorMessage: String?
     @State private var sliderIndex: Double = 0
     @State private var smoothBusy: Bool = false
-    @State private var smoothRowHovered: Bool = false
+    @State private var smoothOn: Bool = false
     @State private var smoothWouldPrompt: Bool = true
 
     private var currentMode: DisplayMode? { display.currentDisplayMode }
@@ -39,8 +40,13 @@ struct DisplayModeSection: View {
         // is the "(Default)"; only tagged for external displays, since the built-in's
         // native mode is a 1x physical size that macOS does not treat as the default.
         let hiDPISizes = Set(base.filter { $0.isHiDPI }.map { "\($0.width)x\($0.height)" })
+        // Low-res twins: macOS pairs each of the panel's standard scaled sizes with a
+        // non-HiDPI ("low resolution") mode, but does NOT twin the dense smooth-scaling
+        // ladder it injects. So a HiDPI size with a LoDPI twin is a known/native one, and a
+        // twinless HiDPI size is exactly one of the injected in-between steps.
+        let lodpiSizes = Set(base.filter { !$0.isHiDPI }.map { "\($0.width)x\($0.height)" })
 
-        return grouped.map { (_, modes) -> ResolutionGroup in
+        let mapped = grouped.map { (_, modes) -> ResolutionGroup in
             let sorted = modes.sorted { $0.refreshRate > $1.refreshRate }
             let w = sorted[0].width, h = sorted[0].height, hidpi = sorted[0].isHiDPI
             let isDefault = !display.isBuiltin && !hidpi && w == nativeW && h == nativeH
@@ -54,7 +60,15 @@ struct DisplayModeSection: View {
                 modes: sorted
             )
         }
-        .filter { group in
+
+        // Only collapse the list to the known sizes when the dense ladder is actually live
+        // (lots of twinless HiDPI entries). A normal display's list is left exactly as before.
+        // ponytail: count > 8 is the "smooth scaling is on" signal (it injects ~80 twinless).
+        let denseLadderActive = mapped.filter {
+            $0.isHiDPI && !lodpiSizes.contains("\($0.width)x\($0.height)")
+        }.count > 8
+
+        return mapped.filter { group in
             // Built-in (notched) panel: macOS only offers scaled sizes at the panel's
             // native aspect. CGDisplayCopyAllDisplayModes also returns 16:10 "non-notch"
             // modes (e.g. 1512x945, 2560x1600) that letterbox the notch away and aren't
@@ -66,6 +80,14 @@ struct DisplayModeSection: View {
                 let ar = Double(group.width) / Double(group.height)
                 return abs(ar - nativeAR) / nativeAR < 0.02
                     || group.modes.contains { $0.id == currentMode?.id }
+            }
+            // External, dense ladder live: keep only the known sizes (those with a low-res
+            // twin) in the list. The injected in-between steps stay off the list but remain
+            // on the slider, so people who want the "known ones" aren't wading through 100.
+            if denseLadderActive, group.isHiDPI, !group.isDefault,
+               !lodpiSizes.contains("\(group.width)x\(group.height)"),
+               !group.modes.contains(where: { $0.id == currentMode?.id }) {
+                return false
             }
             // External: drop standalone 1x oddballs (non-HiDPI, no HiDPI twin, not
             // the native default) that clutter the list, e.g. 2048x1152, 1344x756,
@@ -113,8 +135,8 @@ struct DisplayModeSection: View {
                     .curtainReveal(showRefresh)
             }
 
-            // Smooth scaling: opt-in dense HiDPI ladder driven by a slider. External
-            // displays only (built-ins already scale smoothly via System Settings).
+            // Smooth scaling: on/off switch for the dense HiDPI ladder the Resolution slider
+            // steps through. External displays only (built-ins already scale via System Settings).
             if !display.isBuiltin {
                 smoothScalingSection
             }
@@ -333,32 +355,25 @@ struct DisplayModeSection: View {
             .sorted { $0.width == $1.width ? $0.height < $1.height : $0.width < $1.width }
     }
 
-    /// A one-way "Enable smooth scaling" row. The dense HiDPI ladder is a one-time install
-    /// of extra resolutions that persist (macOS only drops them on a physical reconnect, so
-    /// there is no working "off", and nobody wants fewer resolutions anyway). So this just
-    /// installs on tap, then disappears once the modes are live; it shows only while they're
-    /// missing or still enumerating after the reconnect.
-    @ViewBuilder
+    /// Smooth scaling as an on/off switch. ON injects the dense HiDPI ladder (admin write +
+    /// soft-reconnect, screen blanks ~1s); OFF removes the override + soft-reconnects, falling
+    /// back to the panel's standard CGS scaled modes (HiDPI intact, just coarser steps). The
+    /// switch tracks ground truth (are the dense modes enumerated), not a stored flag.
     private var smoothScalingSection: some View {
-        if !smoothModesPresent {
-            HStack(spacing: 6) {
-                MenuItemIcon(systemName: "slider.horizontal.below.rectangle", color: .blue, active: false)
+        Toggle(isOn: Binding(get: { smoothOn }, set: { userToggleSmooth($0) })) {
+            HStack(spacing: 8) {
+                // Track ground truth (are the dense modes live), not the optimistic switch value,
+                // so the icon doesn't recolor or shift while the admin prompt blocks. The switch
+                // still flips instantly for responsiveness; the icon settles when modes re-enumerate.
+                MenuItemIcon(systemName: "slider.horizontal.below.rectangle", color: .blue, active: smoothModesPresent)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 5) {
-                        Text("Smooth scaling")
-                            .font(.body)
-                        Text("Beta")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.secondary.opacity(0.18)))
-                    }
-                    if let hint = smoothHint {
-                        Text(hint.text)
+                    Text("Smooth scaling")
+                        .font(.body)
+                    if let hint = smoothSubtitle {
+                        Text(hint)
                             .font(.caption)
-                            .foregroundColor(hint.warning ? .orange : .secondary)
+                            .foregroundColor(.secondary)
                     }
                 }
                 Spacer()
@@ -366,32 +381,31 @@ struct DisplayModeSection: View {
                     ProgressView()
                         .scaleEffect(0.6)
                         .frame(width: 16, height: 16)
-                } else if smoothWouldPrompt {
-                    Text("Enable")
-                        .font(.callout)
-                        .foregroundColor(.accentColor)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .menuRowHover(smoothRowHovered)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard PanelOpenGuard.allowsActivation, !smoothBusy, smoothWouldPrompt else { return }
-                enableSmooth()
-            }
-            .onHover { smoothRowHovered = $0 }
-            .onAppear { refreshSmoothWouldPrompt() }
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .onAppear {
+            smoothOn = smoothModesPresent
+            refreshSmoothWouldPrompt()
+        }
+        .onChange(of: smoothModesPresent) { _, present in
+            // Adopt external truth (reconnect, another app) unless our own toggle is settling.
+            if !smoothBusy { smoothOn = present }
         }
     }
 
-    /// Sub-label for the enable row (only shown while the dense modes aren't live yet): the
-    /// reconnect prompt once installed but not enumerated, else the enable pitch.
-    private var smoothHint: (text: String, warning: Bool)? {
-        if !smoothWouldPrompt {
-            return (String(localized: "Reconnect the display to finish"), true)
-        }
-        return (String(localized: "First enable asks for an administrator password"), false)
+    /// Admin-password heads-up, shown only while off and a write would actually prompt (the
+    /// dense override isn't already on disk).
+    private var smoothSubtitle: String? {
+        // Ground truth, not the optimistic switch value: the hint stays put through the whole
+        // operation (so the row height, and the icon centered against it, don't jump mid-prompt)
+        // and only clears once the dense modes actually enumerate.
+        guard !smoothModesPresent, smoothWouldPrompt else { return nil }
+        return String(localized: "Enabling asks for an administrator password and briefly flashes the screen")
     }
 
     /// Whether the dense smooth-scaling ladder is actually enumerated for this display (≥ half
@@ -536,30 +550,44 @@ struct DisplayModeSection: View {
         switchTo(mode) { }
     }
 
-    /// One-way install of the dense HiDPI ladder (admin prompt, then a software soft-reconnect
-    /// enumerates the modes: screen blanks ~1s, no physical reconnect). There is no disable: the
-    /// modes persist and the enable row hides once they are live. Re-invoking on an
-    /// already-installed plist doesn't re-prompt.
-    private func enableSmooth() {
-        guard !smoothBusy else { return }
-        let (nativeW, nativeH) = display.nativeResolution
+    /// Flips the dense HiDPI ladder on or off. ON writes the override, OFF removes it; both then
+    /// soft-reconnect (screen blanks ~1s) so macOS re-enumerates in software rather than on a
+    /// physical reconnect, and both touch /Library/Displays so both show one admin prompt.
+    /// Optimistic: the knob moves now, a settle re-read adopts whatever actually enumerated.
+    private func userToggleSmooth(_ on: Bool) {
+        guard !smoothBusy, PanelOpenGuard.allowsActivation else { return }
+        smoothOn = on   // optimistic; the re-enumeration below confirms it
         smoothBusy = true
+        let (nativeW, nativeH) = display.nativeResolution
         Task { @MainActor in
-            let err = HiDPIService.shared.enableSmoothScaling(
-                vendor: display.vendorNumber, product: display.modelNumber,
-                nativeWidth: nativeW, nativeHeight: nativeH)
+            let err: String?
+            if on {
+                err = HiDPIService.shared.enableSmoothScaling(
+                    vendor: display.vendorNumber, product: display.modelNumber,
+                    nativeWidth: nativeW, nativeHeight: nativeH)
+            } else {
+                err = HiDPIService.shared.disableHiDPI(
+                    vendor: display.vendorNumber, product: display.modelNumber)
+            }
             if let err {
                 withAnimation { errorMessage = err }
+                smoothOn = smoothModesPresent   // failed: snap back to reality
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     withAnimation { errorMessage = nil }
                 }
             } else {
-                // Force macOS to re-read the freshly written override in software (screen blanks
-                // ~1s) instead of asking the user to physically reconnect the cable.
+                // Re-read the override change in software (screen blanks ~1s) instead of
+                // asking for a physical reconnect.
                 await PhysicalDisplayToggleService.shared.softReconnect(display)
                 HiDPIService.shared.refreshModes(for: display)
+                try? await Task.sleep(nanoseconds: 800_000_000)  // let refreshModes land
+                smoothOn = smoothModesPresent
                 refreshSmoothWouldPrompt()
+                // The auth prompt can steal key focus, greying the switch; re-key the panel.
+                if let panel = NSApp.windows.first(where: { $0 is MenuPanel }), panel.isVisible {
+                    panel.makeKey()
+                }
             }
             smoothBusy = false
         }

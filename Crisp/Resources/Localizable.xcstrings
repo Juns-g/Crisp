@@ -691,6 +691,16 @@
         }
       }
     },
+    "Enabling asks for an administrator password and briefly flashes the screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用需要管理员密码，并会短暂闪烁屏幕"
+          }
+        }
+      }
+    },
     "First enable asks for an administrator password" : {
       "localizations" : {
         "zh-Hans" : {
