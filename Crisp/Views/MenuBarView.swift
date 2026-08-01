@@ -608,6 +608,7 @@ struct MenuBarView: View {
 struct SettingsView: View {
     @ObservedObject private var settings = SettingsService.shared
     @ObservedObject private var presetService = PresetService.shared
+    @ObservedObject private var keepAwake = KeepAwakeService.shared
     // SettingsView stays mounted (only height-clipped) across panel opens, so the
     // support submenu's expansion must be reset explicitly on close like every
     // other section, or it reopens still expanded.
@@ -754,6 +755,24 @@ struct SettingsView: View {
                     MenuItemIcon(systemName: "power", color: .green, active: settings.launchAtLogin)
                         .accessibilityHidden(true)
                     Text("Launch at Login")
+                        .font(.body)
+                    Spacer()
+                }
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .padding(.horizontal, 12)
+
+            // Keep Awake: hold a power assertion so the display and system don't
+            // idle-sleep. Session-only (KeepAwakeService), so it starts off each launch.
+            Toggle(isOn: Binding(
+                get: { keepAwake.isActive },
+                set: { keepAwake.setActive($0) }
+            )) {
+                HStack(spacing: 6) {
+                    MenuItemIcon(systemName: "cup.and.saucer.fill", color: .orange, active: keepAwake.isActive)
+                        .accessibilityHidden(true)
+                    Text("Keep Awake")
                         .font(.body)
                     Spacer()
                 }

@@ -1690,6 +1690,16 @@
           }
         }
       }
+    },
+    "Keep Awake" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保持唤醒"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
