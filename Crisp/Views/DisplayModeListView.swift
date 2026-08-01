@@ -67,6 +67,10 @@ struct DisplayModeSection: View {
         let denseLadderActive = mapped.filter {
             $0.isHiDPI && !lodpiSizes.contains("\($0.width)x\($0.height)")
         }.count > 8
+        // At native size the crisp non-HiDPI Default beats a same-size HiDPI (which downscales a
+        // 2x backing onto the panel and looks soft with no size benefit). Hide the HiDPI twin of
+        // native when the Default is present.
+        let hasNativeDefault = mapped.contains { $0.isDefault }
 
         return mapped.filter { group in
             // Built-in (notched) panel: macOS only offers scaled sizes at the panel's
@@ -80,6 +84,12 @@ struct DisplayModeSection: View {
                 let ar = Double(group.width) / Double(group.height)
                 return abs(ar - nativeAR) / nativeAR < 0.02
                     || group.modes.contains { $0.id == currentMode?.id }
+            }
+            // External: the HiDPI twin of native is redundant with the crisp Default and looks
+            // softer, so drop it (unless the display is currently on it).
+            if hasNativeDefault, group.isHiDPI, group.width == nativeW, group.height == nativeH,
+               !group.modes.contains(where: { $0.id == currentMode?.id }) {
+                return false
             }
             // External, dense ladder live: keep only the known sizes (those with a low-res
             // twin) in the list. The injected in-between steps stay off the list but remain
@@ -344,9 +354,16 @@ struct DisplayModeSection: View {
         // ladder and BetterDisplay. Without this, small HiDPI modes macOS also enumerates
         // (e.g. 800×600 accessibility sizes) would drag the left stop far below anything usable.
         let minWidth = nativeW / 2
+        // Top stop = the crisp non-HiDPI native, not its same-size HiDPI twin (which downscales a
+        // 2x backing onto the panel and looks soft with no size benefit). Drop that twin when the
+        // native exists, so the dedup below keeps the crisp one for the "More Space" end.
+        let hasNativeDefault = display.availableModes.contains { !$0.isHiDPI && $0.width == nativeW && $0.height == nativeH }
         var seen = Set<String>()
         return display.availableModes
-            .filter { ($0.isHiDPI && $0.width >= minWidth) || ($0.width == nativeW && $0.height == nativeH) }
+            .filter {
+                if hasNativeDefault, $0.isHiDPI, $0.width == nativeW, $0.height == nativeH { return false }
+                return ($0.isHiDPI && $0.width >= minWidth) || ($0.width == nativeW && $0.height == nativeH)
+            }
             .sorted {
                 if $0.isHiDPI != $1.isHiDPI { return $0.isHiDPI }
                 return $0.refreshRate > $1.refreshRate
