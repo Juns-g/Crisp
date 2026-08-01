@@ -499,14 +499,21 @@ struct DisplayModeSection: View {
     /// (the way BetterDisplay marks it). A dot rather than a "Default" label stays clean
     /// even when the default sits at the very edge. Positioned to track the slider thumb,
     /// which is inset from the track edges by ~half its width (see markX's thumbInset).
+    ///
+    /// The per-step ticks are dropped once the ladder is dense (smooth scaling on, ~80
+    /// stops): at that count they read as an illegible picket fence and fight the
+    /// continuous "smooth" feel, so the slider shows only the default dot and leans on
+    /// the live "· NNN%" label. Ticks stay for the sparse default ladder.
     private func stepMarks(count: Int, defaultIdx: Int?) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
-                ForEach(0..<count, id: \.self) { i in
-                    Rectangle()
-                        .fill(Color.secondary.opacity(0.45))
-                        .frame(width: 1, height: 4)
-                        .position(x: markX(i, count: count, width: geo.size.width), y: 3)
+                if count <= 12 {
+                    ForEach(0..<count, id: \.self) { i in
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.45))
+                            .frame(width: 1, height: 4)
+                            .position(x: markX(i, count: count, width: geo.size.width), y: 3)
+                    }
                 }
                 if let di = defaultIdx, count > 1 {
                     Circle()
