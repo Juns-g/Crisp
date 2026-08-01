@@ -295,16 +295,33 @@ final class HiDPIService: @unchecked Sendable {
         let stepHeight = 55.0
         let span = Double(nativeHeight) * (1.0 - minScale)
         let steps = max(1, Int((span / stepHeight).rounded()))
-        var logical: [(Int, Int)] = [(nativeWidth, nativeHeight)]  // native as HiDPI
+        var stops: [(Int, Int)] = []
         for i in 0..<steps {
             let scale = minScale + (1.0 - minScale) * Double(i) / Double(steps)
             let w = Int((Double(nativeWidth) * scale).rounded()) & ~1
             let h = Int((Double(nativeHeight) * scale).rounded()) & ~1
             guard w >= 800, h >= 600 else { continue }
-            logical.append((w, h))
+            stops.append((w, h))
         }
+
+        // Snap the nearest arithmetic stop to each standard resolution users pick by
+        // name, so the ladder lands on 1920×1080 / 1600×900 / 2048×1152 exactly instead
+        // of neighbours like 1968×1108. Only anchors matching the panel's aspect apply,
+        // so non-16:9 panels keep the pure ladder; out-of-range anchors find no stop
+        // within half a step and are skipped. Parity with BetterDisplay's ladder.
+        let aspect = Double(nativeWidth) / Double(nativeHeight)
+        let anchors = [(2048, 1152), (1920, 1080), (1600, 900)]
+            .filter { abs(Double($0.0) / Double($0.1) - aspect) < 0.01 }
+        for a in anchors {
+            guard let j = stops.indices.min(by: {
+                abs(stops[$0].0 - a.0) < abs(stops[$1].0 - a.0)
+            }), abs(stops[j].0 - a.0) <= 49 else { continue }
+            stops[j] = a
+        }
+
         var seen = Set<Int>()
-        return logical.filter { seen.insert(($0.0 << 16) | $0.1).inserted }
+        return ([(nativeWidth, nativeHeight)] + stops)  // native as HiDPI, then ladder
+            .filter { seen.insert(($0.0 << 16) | $0.1).inserted }
             .map { (width: $0.0, height: $0.1) }
     }
 
