@@ -12,7 +12,6 @@ Crisp.dmg
 .superpowers/
 Crisp-bin
 
-# Working/internal docs kept local-only (design, research, release-note drafts)
-docs/DESIGN.md
+# Working/internal docs kept local-only (research, release-note drafts)
 docs/research/
 docs/RELEASE_NOTES_*.md
