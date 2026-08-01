@@ -30,8 +30,12 @@ struct DisplayMode: Identifiable, Equatable {
 
     var refreshRateString: String {
         guard refreshRate > 0 else { return "-- Hz" }
-        // Round fractional rates to nearest integer: 59.97 → "60Hz", 119.88 → "120Hz"
-        return "\(Int(refreshRate.rounded()))Hz"
+        let rounded = refreshRate.rounded()
+        // Whole-number timings render clean ("60Hz"). NTSC fractional timings keep two
+        // decimals ("59.94Hz", "47.95Hz") so they don't collapse onto the neighbouring
+        // whole rate and show up as duplicate rows, matching System Settings.
+        if abs(refreshRate - rounded) < 0.01 { return "\(Int(rounded))Hz" }
+        return String(format: "%.2fHz", refreshRate)
     }
 
     // MARK: - Enumeration helpers

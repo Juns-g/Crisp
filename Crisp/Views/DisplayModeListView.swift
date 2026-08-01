@@ -6,14 +6,15 @@ import SwiftUI
 /// its own section, shown only when the current resolution offers more than one.
 struct DisplayModeSection: View {
     @ObservedObject var display: DisplayInfo
-    @ObservedObject private var settings = SettingsService.shared
     @State private var showResolution: Bool = false
+    @State private var showAllResolutions: Bool = false
     @State private var showRefresh: Bool = false
     @State private var pendingResolutionID: String?
     @State private var pendingRefreshID: Int32?
     @State private var errorMessage: String?
     @State private var sliderIndex: Double = 0
     @State private var smoothBusy: Bool = false
+    @State private var smoothRowHovered: Bool = false
     @State private var smoothWouldPrompt: Bool = true
 
     private var currentMode: DisplayMode? { display.currentDisplayMode }
@@ -95,7 +96,7 @@ struct DisplayModeSection: View {
                 subtitle: currentGroup?.menuLabel,
                 isExpanded: $showResolution
             )
-            resolutionList
+            resolutionReveal
                 .curtainReveal(showResolution)
 
             // Refresh Rate: a sibling section, not nested under resolution.
@@ -105,7 +106,7 @@ struct DisplayModeSection: View {
                     icon: "speedometer",
                     iconActive: false,
                     label: "Refresh Rate",
-                    subtitle: currentMode?.refreshRateString,
+                    subtitle: currentMode.map(refreshLabel),
                     isExpanded: $showRefresh
                 )
                 refreshList(group)
@@ -135,11 +136,30 @@ struct DisplayModeSection: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             showResolution = false
+            showAllResolutions = false
             showRefresh = false
         }
     }
 
     // MARK: - Lists
+
+    /// The Resolution picker: a "looks like" slider (matching System Settings) over
+    /// sliderModes, with the full exact-mode list kept behind a "Show all resolutions"
+    /// disclosure. Falls back to the plain list when there are too few slider stops.
+    @ViewBuilder
+    private var resolutionReveal: some View {
+        let modes = sliderModes
+        if modes.count >= 2 {
+            VStack(alignment: .leading, spacing: 0) {
+                modeSlider(modes)
+                DisclosureSubRow(label: "Show all resolutions", isExpanded: $showAllResolutions)
+                resolutionList
+                    .curtainReveal(showAllResolutions)
+            }
+        } else {
+            resolutionList
+        }
+    }
 
     @ViewBuilder
     private var resolutionList: some View {
@@ -197,11 +217,18 @@ struct DisplayModeSection: View {
             .accessibilityAddTraits(.isHeader)
     }
 
+    /// Refresh-rate label, matching System Settings: the built-in's 120Hz variable-refresh
+    /// mode reads "ProMotion" rather than a fixed number; everything else is its Hz string.
+    private func refreshLabel(_ mode: DisplayMode) -> String {
+        if display.isBuiltin && Int(mode.refreshRate.rounded()) >= 120 { return "ProMotion" }
+        return mode.refreshRateString
+    }
+
     private func refreshList(_ group: ResolutionGroup) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(group.modes) { mode in
                 CheckmarkRow(
-                    label: mode.refreshRateString,
+                    label: refreshLabel(mode),
                     isSelected: mode.id == currentMode?.id,
                     isPending: mode.id == pendingRefreshID
                 ) {
@@ -261,8 +288,26 @@ struct DisplayModeSection: View {
 
     // MARK: - Smooth scaling
 
-    private var smoothEnabled: Bool {
-        settings.smoothScalingDisplayUUIDs.contains(display.displayUUID)
+    /// The ladder the Resolution slider steps through. Built-in: the native-aspect HiDPI
+    /// "looks like" stops macOS's own slider shows (no 1x "native" stop, since macOS caps
+    /// More Space at the largest HiDPI mode). External: smoothModes (HiDPI ladder + native
+    /// pixel-for-pixel as the More Space end), which the smooth-scaling toggle densifies.
+    private var sliderModes: [DisplayMode] {
+        display.isBuiltin ? builtinLooksLikeModes : smoothModes
+    }
+
+    /// Built-in "looks like" stops: the native-aspect HiDPI modes (e.g. 1024×665 …
+    /// 1800×1169). The aspect test also excludes the 16:10 non-notch modes, matching
+    /// the resolution list. One representative per size, ascending (left = Larger Text).
+    private var builtinLooksLikeModes: [DisplayMode] {
+        let (nativeW, nativeH) = display.nativeResolution
+        let nativeAR = Double(nativeW) / Double(nativeH)
+        var seen = Set<String>()
+        return display.availableModes
+            .filter { $0.isHiDPI && abs(Double($0.width) / Double($0.height) - nativeAR) / nativeAR < 0.02 }
+            .sorted { $0.refreshRate > $1.refreshRate }
+            .filter { seen.insert("\($0.width)x\($0.height)").inserted }
+            .sorted { $0.width < $1.width }
     }
 
     /// The "looks like" ladder for the slider: every HiDPI logical size plus the native
@@ -288,11 +333,16 @@ struct DisplayModeSection: View {
             .sorted { $0.width == $1.width ? $0.height < $1.height : $0.width < $1.width }
     }
 
+    /// A one-way "Enable smooth scaling" row. The dense HiDPI ladder is a one-time install
+    /// of extra resolutions that persist (macOS only drops them on a physical reconnect, so
+    /// there is no working "off", and nobody wants fewer resolutions anyway). So this just
+    /// installs on tap, then disappears once the modes are live; it shows only while they're
+    /// missing or still enumerating after the reconnect.
     @ViewBuilder
     private var smoothScalingSection: some View {
-        Toggle(isOn: Binding(get: { smoothEnabled }, set: { setSmoothScaling($0) })) {
+        if !smoothModesPresent {
             HStack(spacing: 6) {
-                MenuItemIcon(systemName: "slider.horizontal.below.rectangle", color: .blue, active: smoothEnabled)
+                MenuItemIcon(systemName: "slider.horizontal.below.rectangle", color: .blue, active: false)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5) {
@@ -316,48 +366,46 @@ struct DisplayModeSection: View {
                     ProgressView()
                         .scaleEffect(0.6)
                         .frame(width: 16, height: 16)
+                } else if smoothWouldPrompt {
+                    Text("Enable")
+                        .font(.callout)
+                        .foregroundColor(.accentColor)
                 }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .menuRowHover(smoothRowHovered)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard PanelOpenGuard.allowsActivation, !smoothBusy, smoothWouldPrompt else { return }
+                enableSmooth()
+            }
+            .onHover { smoothRowHovered = $0 }
+            .onAppear { refreshSmoothWouldPrompt() }
         }
-        .toggleStyle(.switch)
-        .controlSize(.small)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .onAppear { refreshSmoothWouldPrompt() }
-
-        // Laid out unconditionally so the curtain glides the slider open with the panel
-        // spring instead of popping to full height while the other sections animate
-        // (same reveal fix as the combined-brightness section). The toggle flips
-        // smoothEnabled inside withAnimation(.panelResize); see setSmoothScaling.
-        smoothSlider
-            .curtainReveal(smoothEnabled)
     }
 
-    /// Caption under the toggle, priority-ordered: reconnect hint (injected sizes not yet
-    /// enumerated) > admin-prompt hint (off, override missing) > the beta softness
-    /// expectation (on and settled). `warning` renders orange like the HiDPI toggle.
+    /// Sub-label for the enable row (only shown while the dense modes aren't live yet): the
+    /// reconnect prompt once installed but not enumerated, else the enable pitch.
     private var smoothHint: (text: String, warning: Bool)? {
-        if smoothReconnectNeeded { return (String(localized: "Reconnect the display to finish"), true) }
-        if !smoothEnabled && smoothWouldPrompt {
-            return (String(localized: "First enable asks for an administrator password"), false)
+        if !smoothWouldPrompt {
+            return (String(localized: "Reconnect the display to finish"), true)
         }
-        if smoothEnabled { return (String(localized: "Most sizes are scaled and look slightly soft"), false) }
-        return nil
+        return (String(localized: "First enable asks for an administrator password"), false)
     }
 
-    /// Smooth scaling is on but its dense sub-native ladder hasn't enumerated yet (needs a
-    /// display reconnect / sleep-wake). A bare count won't do: macOS's default HiDPI ladder
-    /// already supplies a few of these sizes, so we require under half the injected
-    /// sub-native sizes to be present among the enumerated HiDPI modes.
-    private var smoothReconnectNeeded: Bool {
-        guard smoothEnabled, !smoothBusy else { return false }
+    /// Whether the dense smooth-scaling ladder is actually enumerated for this display (≥ half
+    /// its sub-native sizes present among the modes). The real "is it on" signal, independent
+    /// of any stored flag; it is exactly what the slider's density reflects. When true the
+    /// enable row is hidden — there is nothing left to do.
+    private var smoothModesPresent: Bool {
         let (w, h) = display.nativeResolution
         let injected = HiDPIService.shared.smoothScaledLogicalSizes(nativeWidth: w, nativeHeight: h)
             .filter { $0.width < w }  // native is a real mode, always present; ignore it
         guard !injected.isEmpty else { return false }
         let present = Set(display.availableModes.lazy.filter { $0.isHiDPI }.map { "\($0.width)x\($0.height)" })
         let hits = injected.filter { present.contains("\($0.width)x\($0.height)") }.count
-        return Double(hits) / Double(injected.count) < 0.5
+        return Double(hits) / Double(injected.count) >= 0.5
     }
 
     /// Whether enabling smooth scaling would show the admin prompt (override not yet
@@ -370,18 +418,30 @@ struct DisplayModeSection: View {
     }
 
     @ViewBuilder
-    private var smoothSlider: some View {
-        let modes = smoothModes
+    private func modeSlider(_ modes: [DisplayMode]) -> some View {
         if modes.count >= 2 {
+            let defaultIdx = defaultSliderIndex(modes)
             VStack(alignment: .leading, spacing: 2) {
+                // Continuous slider (no native step, which would swap in a bar-style thumb)
+                // so its knob matches the brightness slider above. Snapped to whole stops
+                // live via onChange, so it still clicks tick-to-tick with the round knob.
+                // The mode only switches on release; dragging just moves the knob/label.
                 Slider(
                     value: $sliderIndex,
                     in: 0...Double(modes.count - 1),
-                    step: 1,
                     onEditingChanged: { editing in
                         if !editing { applySmooth(modes) }
                     }
                 )
+                .controlSize(.small)
+                .tint(Color.accentColor)
+                .onChange(of: sliderIndex) { _, v in
+                    let snapped = v.rounded()
+                    if snapped != sliderIndex { sliderIndex = snapped }
+                }
+
+                stepMarks(count: modes.count, defaultIdx: defaultIdx)
+
                 HStack(spacing: 0) {
                     Text("Larger Text")
                         .font(.caption2)
@@ -402,6 +462,46 @@ struct DisplayModeSection: View {
                 if !smoothBusy { sliderIndex = currentSmoothIndex(modes) }
             }
         }
+    }
+
+    /// A tick per stop, with the default stop drawn as a filled dot on top of its tick
+    /// (the way BetterDisplay marks it). A dot rather than a "Default" label stays clean
+    /// even when the default sits at the very edge. Positioned to track the slider thumb,
+    /// which is inset from the track edges by ~half its width (see markX's thumbInset).
+    private func stepMarks(count: Int, defaultIdx: Int?) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                ForEach(0..<count, id: \.self) { i in
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.45))
+                        .frame(width: 1, height: 4)
+                        .position(x: markX(i, count: count, width: geo.size.width), y: 3)
+                }
+                if let di = defaultIdx, count > 1 {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 5, height: 5)
+                        .position(x: markX(di, count: count, width: geo.size.width), y: 3)
+                }
+            }
+        }
+        .frame(height: 8)
+    }
+
+    /// X of stop `index` along a slider of the given width, accounting for the thumb inset.
+    private func markX(_ index: Int, count: Int, width: Double) -> Double {
+        let thumbInset = 8.0
+        let frac = count > 1 ? Double(index) / Double(count - 1) : 0
+        return thumbInset + frac * max(width - thumbInset * 2, 1)
+    }
+
+    /// The stop the slider flags as "Default", i.e. macOS's recommended scaling: the 2×
+    /// Retina point (native width / 2) on the high-PPI built-in, native pixel-for-pixel on
+    /// an external. Returns nil when that stop isn't on the ladder.
+    private func defaultSliderIndex(_ modes: [DisplayMode]) -> Int? {
+        let nativeW = display.nativeResolution.width
+        let targetW = display.isBuiltin ? nativeW / 2 : nativeW
+        return modes.firstIndex { $0.width == targetW }
     }
 
     private func currentSmoothIndex(_ modes: [DisplayMode]) -> Double {
@@ -436,23 +536,14 @@ struct DisplayModeSection: View {
         switchTo(mode) { }
     }
 
-    private func setSmoothScaling(_ on: Bool) {
+    /// One-way install of the dense HiDPI ladder (admin prompt, then a reconnect enumerates
+    /// the modes). There is no disable: the modes persist and the enable row hides once they
+    /// are live. Re-invoking on an already-installed plist doesn't re-prompt.
+    private func enableSmooth() {
         guard !smoothBusy else { return }
-        let uuid = display.displayUUID
-
-        // Disable is cheap: drop the opt-in and hide the slider, but leave the injected
-        // modes installed so flipping it back on does not ask for admin again (removing
-        // them would need admin). Turn HiDPI off entirely to clear them.
-        guard on else {
-            withAnimation(.panelResize) { settings.smoothScalingDisplayUUIDs.remove(uuid) }
-            return
-        }
-
         let (nativeW, nativeH) = display.nativeResolution
         smoothBusy = true
         Task { @MainActor in
-            // enableSmoothScaling only prompts when the on-disk plist is missing these
-            // modes, so re-enabling an already-installed display does not re-prompt.
             let err = HiDPIService.shared.enableSmoothScaling(
                 vendor: display.vendorNumber, product: display.modelNumber,
                 nativeWidth: nativeW, nativeHeight: nativeH)
@@ -463,7 +554,6 @@ struct DisplayModeSection: View {
                     withAnimation { errorMessage = nil }
                 }
             } else {
-                withAnimation(.panelResize) { settings.smoothScalingDisplayUUIDs.insert(uuid) }
                 HiDPIService.shared.refreshModes(for: display)
                 refreshSmoothWouldPrompt()
             }
@@ -515,6 +605,40 @@ struct CheckmarkRow: View {
         }
         .onHover { isHovered = $0 }
         .accessibilityLabel(isSelected ? "\(label), selected" : label)
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// A subordinate disclosure line (indented, chevron, hover) that reveals the full
+/// "Show all resolutions" list beneath the Resolution slider. Lighter than
+/// ExpandableRow (no leading icon chip) so it reads as a child of the slider.
+private struct DisclosureSubRow: View {
+    let label: LocalizedStringKey
+    @Binding var isExpanded: Bool
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.callout)
+                .foregroundColor(.secondary)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundColor(.secondary)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                .accessibilityHidden(true)
+        }
+        .padding(.leading, 24)
+        .padding(.trailing, 12)
+        .padding(.vertical, 5)
+        .menuRowHover(isHovered)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard PanelOpenGuard.allowsActivation else { return }
+            withAnimation(.panelResize) { isExpanded.toggle() }
+        }
+        .onHover { isHovered = $0 }
         .accessibilityAddTraits(.isButton)
     }
 }

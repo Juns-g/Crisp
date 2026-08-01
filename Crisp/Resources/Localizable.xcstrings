@@ -1710,6 +1710,16 @@
           }
         }
       }
+    },
+    "Show all resolutions" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示所有分辨率"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
