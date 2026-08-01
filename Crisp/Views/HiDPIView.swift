@@ -32,7 +32,7 @@ struct HiDPIToggleRow: View {
 
     var body: some View {
         Toggle(isOn: Binding(get: { isOn }, set: { userToggle($0) })) {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 MenuItemIcon(systemName: "sparkles", color: .purple, active: isOn)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
@@ -55,6 +55,7 @@ struct HiDPIToggleRow: View {
         .toggleStyle(.switch)
         .controlSize(.small)
         .padding(.horizontal, 12)
+        .padding(.vertical, 5)
         .onAppear { isOn = hidpiActive }
         .onChange(of: hidpiActive) { _, newValue in
             // Adopt external truth (Control Center, another app, a failed

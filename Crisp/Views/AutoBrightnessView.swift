@@ -12,7 +12,7 @@ struct AutoBrightnessView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Main toggle
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 MenuItemIcon(systemName: "sun.and.horizon.fill", color: .orange, active: service.isEnabled)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
@@ -53,8 +53,8 @@ struct AutoBrightnessView: View {
             }
             .padding(.vertical, 7)
             .padding(.trailing, 12)
-            // Align the label under the parent's title: 12 pad + 26 icon + 6 spacing.
-            .padding(.leading, 44)
+            // Align the label under the parent's title: 12 pad + 26 icon + 8 spacing.
+            .padding(.leading, 46)
             .curtainReveal(service.isEnabled && !builtinUnavailable)
         }
     }

@@ -467,7 +467,7 @@ struct MenuBarView: View {
                         get: { keepAwake.isActive },
                         set: { keepAwake.setActive($0) }
                     )) {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 8) {
                             MenuItemIcon(systemName: "cup.and.saucer.fill", color: .orange, active: keepAwake.isActive)
                                 .accessibilityHidden(true)
                             Text("Keep Awake")
@@ -478,6 +478,7 @@ struct MenuBarView: View {
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
 
                     // Virtual Displays tool entry (Phase 10)
                     ExpandableRow(
@@ -706,7 +707,9 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        // spacing 0: each row carries its own .vertical padding (like the Tools group),
+        // so rows sit ~10px apart instead of 5+6+5. Dividers/headers pad themselves.
+        VStack(alignment: .leading, spacing: 0) {
             // Auto Brightness: a behavior preference (moved out of the Tools
             // group, which is display features only).
             AutoBrightnessView()
@@ -716,7 +719,7 @@ struct SettingsView: View {
                 get: { settings.showCombinedBrightness },
                 set: { newValue in withAnimation(.panelResize) { settings.showCombinedBrightness = newValue } }
             )) {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     MenuItemIcon(systemName: "sun.min.fill", color: .yellow, active: settings.showCombinedBrightness)
                         .accessibilityHidden(true)
                     Text("Show Combined Brightness")
@@ -727,6 +730,7 @@ struct SettingsView: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .padding(.horizontal, 12)
+            .padding(.vertical, 5)
 
             // Which displays the hardware brightness keys adjust. Expandable row +
             // checkmark list, matching the Resolution / Color Profile idiom instead
@@ -787,7 +791,7 @@ struct SettingsView: View {
                     settings.launchAtLogin = newValue
                 }
             )) {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     MenuItemIcon(systemName: "power", color: .green, active: settings.launchAtLogin)
                         .accessibilityHidden(true)
                     Text("Launch at Login")
@@ -798,6 +802,7 @@ struct SettingsView: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .padding(.horizontal, 12)
+            .padding(.vertical, 5)
 
             // HiDPI / Scaling (moved here from the top-level segmented control and per-display panel)
             if !builtinPresets.isEmpty || !externalDisplays.isEmpty {
