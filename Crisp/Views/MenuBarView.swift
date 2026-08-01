@@ -270,16 +270,25 @@ struct SupportRow: View {
 
     private let kofi = "https://ko-fi.com/didriksg"
     private let afdian = "https://ifdian.net/a/didriksg"
+    private let github = "https://github.com/sponsors/didriksg"
 
     /// A supporter's payment region can't be detected reliably in a sideloaded
     /// app (no App Store storefront; Locale.current.region is only a formatting
-    /// hint mainland users often switch away), so the submenu lists both and lets
-    /// them pick. Mainland China can't complete Ko-fi's PayPal/Stripe checkout
-    /// (needs Afdian's WeChat/Alipay), so the hint only ORDERS the list, surfacing
-    /// the likely option first; neither is ever hidden.
+    /// hint mainland users often switch away), so the submenu lists them all and
+    /// lets them pick. Mainland China can't complete the Stripe-based checkouts
+    /// (Ko-fi, GitHub Sponsors) and needs Afdian's WeChat/Alipay, so the hint only
+    /// ORDERS the list, surfacing the likely option first; none is ever hidden.
     private var prefersChinese: Bool {
         Locale.current.region?.identifier == "CN"
             || Bundle.main.preferredLocalizations.first?.hasPrefix("zh-Hans") == true
+    }
+
+    /// Afdian's own brand name is 爱发电; the "(Afdian)" romanization only helps a
+    /// non-Chinese reader, so drop it when the UI itself is Chinese (keyed on the UI
+    /// language, not region: an English UI in CN still needs the handle).
+    private var afdianTitle: String {
+        Bundle.main.preferredLocalizations.first?.hasPrefix("zh") == true
+            ? "爱发电" : "爱发电 (Afdian)"
     }
 
     var body: some View {
@@ -291,15 +300,19 @@ struct SupportRow: View {
                 isExpanded: $expanded
             )
 
+            // Always laid out so the curtain glides the links open with the panel
+            // spring, instead of popping to full height while the row animates.
+            // prefersChinese only orders the rows (static per launch), so branching
+            // on it here doesn't affect the reveal.
             VStack(spacing: 0) {
-                if expanded {
-                    if prefersChinese {
-                        SupportLinkRow(title: "爱发电 (Afdian)", url: afdian)
-                        SupportLinkRow(title: "Ko-fi", url: kofi)
-                    } else {
-                        SupportLinkRow(title: "Ko-fi", url: kofi)
-                        SupportLinkRow(title: "爱发电 (Afdian)", url: afdian)
-                    }
+                if prefersChinese {
+                    SupportLinkRow(title: afdianTitle, url: afdian)
+                    SupportLinkRow(title: "Ko-fi", url: kofi)
+                    SupportLinkRow(title: "GitHub Sponsors", url: github)
+                } else {
+                    SupportLinkRow(title: "Ko-fi", url: kofi)
+                    SupportLinkRow(title: "GitHub Sponsors", url: github)
+                    SupportLinkRow(title: afdianTitle, url: afdian)
                 }
             }
             .padding(.leading, 8)
