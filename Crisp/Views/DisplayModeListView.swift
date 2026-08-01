@@ -316,9 +316,12 @@ struct DisplayModeSection: View {
         .padding(.vertical, 4)
         .onAppear { refreshSmoothWouldPrompt() }
 
-        if smoothEnabled {
-            smoothSlider
-        }
+        // Laid out unconditionally so the curtain glides the slider open with the panel
+        // spring instead of popping to full height while the other sections animate
+        // (same reveal fix as the combined-brightness section). The toggle flips
+        // smoothEnabled inside withAnimation(.panelResize); see setSmoothScaling.
+        smoothSlider
+            .curtainReveal(smoothEnabled)
     }
 
     /// Caption under the toggle, priority-ordered: reconnect hint (injected sizes not yet
@@ -432,7 +435,7 @@ struct DisplayModeSection: View {
         // modes installed so flipping it back on does not ask for admin again (removing
         // them would need admin). Turn HiDPI off entirely to clear them.
         guard on else {
-            settings.smoothScalingDisplayUUIDs.remove(uuid)
+            withAnimation(.panelResize) { settings.smoothScalingDisplayUUIDs.remove(uuid) }
             return
         }
 
@@ -451,7 +454,7 @@ struct DisplayModeSection: View {
                     withAnimation { errorMessage = nil }
                 }
             } else {
-                settings.smoothScalingDisplayUUIDs.insert(uuid)
+                withAnimation(.panelResize) { settings.smoothScalingDisplayUUIDs.insert(uuid) }
                 HiDPIService.shared.refreshModes(for: display)
                 refreshSmoothWouldPrompt()
             }
