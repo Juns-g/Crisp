@@ -144,23 +144,22 @@ class DisplayManager: ObservableObject {
         // Only auto-enable for 2K+ displays (width >= 2560 or total pixels >= 2560*1440)
         guard nativeW >= 2560 || (nativeW * nativeH >= 2560 * 1440) else { return }
 
-        print("[DisplayManager] Auto-enabling HiDPI for \(display.name) (\(nativeW)×\(nativeH), vendor=\(vendor), product=\(product))")
+        print("[DisplayManager] Auto-enabling smooth scaling for \(display.name) (\(nativeW)×\(nativeH), vendor=\(vendor), product=\(product))")
 
-        let err = await HiDPIService.shared.enableHiDPI(
-            for: display.displayID,
-            vendor: vendor,
-            product: product,
-            nativeWidth: nativeW,
-            nativeHeight: nativeH
-        )
+        // Install the dense smooth-scaling ladder directly, not just the coarse HiDPI set: this
+        // admin prompt is the one interruption, so make it deliver the full scaled slider in one
+        // shot. Anyone enabling HiDPI on a 2K+ external wants that range anyway.
+        let err = HiDPIService.shared.enableSmoothScaling(
+            vendor: vendor, product: product, nativeWidth: nativeW, nativeHeight: nativeH)
 
         if let err {
-            print("[DisplayManager] Auto-enable HiDPI failed: \(err)")
+            print("[DisplayManager] Auto-enable smooth scaling failed: \(err)")
         } else {
-            print("[DisplayManager] Auto-enable HiDPI succeeded, refreshing modes")
+            print("[DisplayManager] Auto-enable smooth scaling succeeded, re-enumerating")
+            // Soft-reconnect so the freshly written override enumerates now (screen blanks ~1s),
+            // instead of the weak probe that left the modes dormant until a physical reconnect.
+            await PhysicalDisplayToggleService.shared.softReconnect(display)
             HiDPIService.shared.refreshModes(for: display)
-            // Give IOServiceRequestProbe time to re-enumerate modes
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
             await display.loadDetails()
             PresetService.shared.refreshBuiltins()
         }

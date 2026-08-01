@@ -536,9 +536,10 @@ struct DisplayModeSection: View {
         switchTo(mode) { }
     }
 
-    /// One-way install of the dense HiDPI ladder (admin prompt, then a reconnect enumerates
-    /// the modes). There is no disable: the modes persist and the enable row hides once they
-    /// are live. Re-invoking on an already-installed plist doesn't re-prompt.
+    /// One-way install of the dense HiDPI ladder (admin prompt, then a software soft-reconnect
+    /// enumerates the modes: screen blanks ~1s, no physical reconnect). There is no disable: the
+    /// modes persist and the enable row hides once they are live. Re-invoking on an
+    /// already-installed plist doesn't re-prompt.
     private func enableSmooth() {
         guard !smoothBusy else { return }
         let (nativeW, nativeH) = display.nativeResolution
@@ -554,6 +555,9 @@ struct DisplayModeSection: View {
                     withAnimation { errorMessage = nil }
                 }
             } else {
+                // Force macOS to re-read the freshly written override in software (screen blanks
+                // ~1s) instead of asking the user to physically reconnect the cable.
+                await PhysicalDisplayToggleService.shared.softReconnect(display)
                 HiDPIService.shared.refreshModes(for: display)
                 refreshSmoothWouldPrompt()
             }
