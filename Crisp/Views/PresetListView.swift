@@ -22,7 +22,7 @@ struct PresetListView: View {
     @State private var activeEditor: PresetEditor?
 
     private var userPresets: [DisplayPreset] {
-        presetService.presets.filter { !$0.isBuiltin }
+        presetService.presets
     }
 
     var body: some View {

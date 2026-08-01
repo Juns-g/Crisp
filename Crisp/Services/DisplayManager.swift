@@ -95,9 +95,6 @@ class DisplayManager: ObservableObject {
         displays = updatedDisplays
         DisplayManagerAccessor.shared.displays = updatedDisplays
 
-        // Regenerate built-in presets (HiDPI mode / Native mode) from updated display list.
-        PresetService.shared.refreshBuiltins()
-
         // Only load details / refresh brightness for newly appeared displays
         for display in addedDisplays {
             Task { await BrightnessService.shared.refreshBrightness(for: display) }
@@ -107,7 +104,6 @@ class DisplayManager: ObservableObject {
                 if !display.isBuiltin {
                     await self.autoEnableHiDPIIfNeeded(for: display)
                 }
-                PresetService.shared.refreshBuiltins()
             }
             // Restore saved gamma/software-brightness adjustments for the reconnected display.
             // Brief delay lets WindowServer settle before we write transfer tables.
@@ -175,7 +171,6 @@ class DisplayManager: ObservableObject {
             await PhysicalDisplayToggleService.shared.softReconnect(display)
             HiDPIService.shared.refreshModes(for: display)
             await display.loadDetails()
-            PresetService.shared.refreshBuiltins()
         }
     }
 

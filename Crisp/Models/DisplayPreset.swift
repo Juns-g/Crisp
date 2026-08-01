@@ -28,7 +28,6 @@ struct DisplayPreset: Codable, Identifiable {
     var name: String
     var icon: String              // SF Symbol name
     var colorName: String? = nil  // chip color key; nil = default
-    var isBuiltin: Bool = false
     var displays: [DisplayPresetEntry]
 
     // Which attributes this preset controls (derived from whether any entry stores one).

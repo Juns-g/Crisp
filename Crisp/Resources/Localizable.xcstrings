@@ -711,16 +711,6 @@
         }
       }
     },
-    "First enable asks for an administrator password" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "首次启用需要管理员密码"
-          }
-        }
-      }
-    },
     "Gain B" : {
       "localizations" : {
         "zh-Hans" : {
@@ -817,16 +807,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "隐藏刘海区域"
-          }
-        }
-      }
-    },
-    "HiDPI Operation Failed" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HiDPI 操作失败"
           }
         }
       }
@@ -1107,16 +1087,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "推荐"
-          }
-        }
-      }
-    },
-    "Reconnect the display to finish" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重新连接显示器以完成"
           }
         }
       }
