@@ -144,6 +144,14 @@ class DisplayManager: ObservableObject {
         // Only auto-enable for 2K+ displays (width >= 2560 or total pixels >= 2560*1440)
         guard nativeW >= 2560 || (nativeW * nativeH >= 2560 * 1440) else { return }
 
+        // CGS-direct already surfaces the panel's HiDPI scaled modes with no override (the normal
+        // case for 2K+ panels). When those are present, skip the override write + soft-reconnect
+        // entirely: no admin prompt, no blank. The override path below is only a fallback for a
+        // panel that genuinely lacks HiDPI in CGS.
+        if display.availableModes.contains(where: {
+            $0.isHiDPI && $0.pixelWidth >= nativeW && $0.width >= nativeW / 2
+        }) { return }
+
         print("[DisplayManager] Auto-enabling smooth scaling for \(display.name) (\(nativeW)×\(nativeH), vendor=\(vendor), product=\(product))")
 
         // Install the dense smooth-scaling ladder directly, not just the coarse HiDPI set: this
