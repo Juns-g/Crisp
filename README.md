@@ -18,12 +18,10 @@ brew install --cask didriksg/tap/crisp
 
 Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/releases) and drag Crisp to Applications.
 
-The app isn't notarized yet, so on first launch macOS blocks it (whether you installed via Homebrew or the DMG): open **System Settings > Privacy & Security**, scroll down, and click **Open Anyway**. Homebrew users can add `--no-quarantine` to the install command to skip the prompt.
-
 ## Features
 
-- **Sharp, Retina-quality scaling on any display**: HiDPI scaled resolutions that make external monitors crisp instead of blurry or undersized, with automatic HiDPI setup for 1440p and larger displays
-- **Brightness everywhere**: hardware DDC control for external monitors with software (gamma) fallback, smooth fades, brightness-key routing to the display under the cursor, and true darkness below the hardware floor
+- **Sharp, Retina-quality scaling on any display**: HiDPI scaled resolutions that make external monitors crisp instead of blurry or undersized, set up automatically for 1440p and larger displays, plus optional smooth scaling for fine-grained control over how large everything looks
+- **Brightness everywhere**: hardware DDC control for external monitors with software (gamma) fallback, smooth fades, brightness keys that target the display under the cursor, all displays, or a chosen subset, and true darkness below the hardware floor
 - **Presets**: save named display configurations (resolution, brightness, arrangement) with custom icons and colors, apply with one click, update in place
 - **Display arrangement**: drag-to-arrange canvas, main display switching
 - **Disconnect displays**: turn physical displays off and back on from the menu, remembered across sleep/wake (Apple Silicon)
@@ -36,12 +34,13 @@ The app isn't notarized yet, so on first launch macOS blocks it (whether you ins
 
 Crisp is free, and every feature stays free. No Pro tier, no license key.
 
-If you'd like to help, my main running cost is the $99/yr Apple Developer Program, Apple's fee for signing and notarizing apps so they install cleanly. Sponsoring helps me cover it and keeps me building:
+Its main running cost is the $99/year Apple Developer Program, Apple's fee for signing and notarizing the app so it installs cleanly. If you've found Crisp useful and would like to chip in toward that, there's:
 
 - [GitHub Sponsors](https://github.com/sponsors/didriksg)
-- [爱发电](https://ifdian.net/a/didriksg)
+- [Ko-fi](https://ko-fi.com/didriksg)
+- [爱发电 (Afdian)](https://ifdian.net/a/didriksg)
 
-Completely optional. If Crisp saved you a BetterDisplay or Lunar license and you'd like to say thanks, it genuinely helps.
+Completely optional, but you'll have my heartfelt thanks. If Crisp saved you a BetterDisplay or Lunar license, that's a good moment to say so.
 
 ## Requirements
 
@@ -50,7 +49,7 @@ Completely optional. If Crisp saved you a BetterDisplay or Lunar license and you
 ## Permissions
 
 - **Accessibility** (System Settings > Privacy & Security > Accessibility): needed only for routing the keyboard brightness keys to the display under the cursor. Without it, everything else still works; the brightness keys just control the built-in display as usual.
-- **Administrator password** (one time, per monitor): the first time you enable HiDPI for a display, Crisp installs a display override file into `/Library/Displays/Contents/Resources/Overrides`, which macOS protects. Every later toggle is password-free.
+- **Administrator password** (one time, per monitor): needed only when you turn on smooth scaling, which installs a display override file into `/Library/Displays/Contents/Resources/Overrides` that macOS protects. Regular HiDPI scaling and everything else are password-free.
 
 ## Building
 
