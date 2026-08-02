@@ -11,13 +11,23 @@
     <priority>0.9</priority>
   </url>
   <url>
+    <loc>https://didriksg.github.io/Crisp/crisp-vs-betterdisplay.html</loc>
+    <lastmod>2026-07-31</lastmod>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://didriksg.github.io/Crisp/crisp-vs-betterdisplay-zh.html</loc>
+    <lastmod>2026-07-31</lastmod>
+    <priority>0.9</priority>
+  </url>
+  <url>
     <loc>https://didriksg.github.io/Crisp/fix-blurry-external-monitor-macos.html</loc>
-    <lastmod>2026-07-29</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://didriksg.github.io/Crisp/mac-hidpi.html</loc>
-    <lastmod>2026-07-29</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <priority>0.8</priority>
   </url>
 </urlset>
