@@ -148,9 +148,7 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
             let data = try JSONEncoder().encode(value)
             try data.write(to: url, options: .atomic)
         } catch {
-            #if DEBUG
-            print("[SettingsService] Failed to save \(filename): \(error)")
-            #endif
+            // best-effort persistence; a failed write is non-fatal
         }
     }
 

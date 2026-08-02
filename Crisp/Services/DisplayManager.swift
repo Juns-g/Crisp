@@ -154,20 +154,16 @@ class DisplayManager: ObservableObject {
             $0.isHiDPI && $0.pixelWidth >= nativeW && $0.width >= nativeW / 2
         }) { return }
 
-        print("[DisplayManager] Auto-enabling smooth scaling for \(display.name) (\(nativeW)×\(nativeH), vendor=\(vendor), product=\(product))")
-
         // Install the dense smooth-scaling ladder directly, not just the coarse HiDPI set: this
         // admin prompt is the one interruption, so make it deliver the full scaled slider in one
         // shot. Anyone enabling HiDPI on a 2K+ external wants that range anyway.
         let err = HiDPIService.shared.enableSmoothScaling(
             vendor: vendor, product: product, nativeWidth: nativeW, nativeHeight: nativeH)
 
-        if let err {
-            print("[DisplayManager] Auto-enable smooth scaling failed: \(err)")
-        } else {
-            print("[DisplayManager] Auto-enable smooth scaling succeeded, re-enumerating")
-            // Soft-reconnect so the freshly written override enumerates now (screen blanks ~1s),
-            // instead of the weak probe that left the modes dormant until a physical reconnect.
+        // On success, soft-reconnect so the freshly written override enumerates now (screen
+        // blanks ~1s), instead of the weak probe that left the modes dormant until a physical
+        // reconnect.
+        if err == nil {
             await PhysicalDisplayToggleService.shared.softReconnect(display)
             HiDPIService.shared.refreshModes(for: display)
             await display.loadDetails()

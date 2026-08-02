@@ -482,9 +482,6 @@ final class BrightnessService: @unchecked Sendable {
                     DispatchQueue.main.async { [weak self] in
                         self?.setSoftwareBrightness(percent, for: displayID)
                     }
-                    #if DEBUG
-                    print("[BrightnessService] DDC unavailable for display \(displayID), using software fallback")
-                    #endif
                 }
             }
             self.pumpDDCWrite(for: displayID)
@@ -593,14 +590,7 @@ final class BrightnessService: @unchecked Sendable {
             blue[i]  = v
         }
 
-        let result = CGSetDisplayTransferByTable(displayID, tableSize, &red, &green, &blue)
-        #if DEBUG
-        if result != CGError.success {
-            print("[BrightnessService] CGSetDisplayTransferByTable failed: \(result)")
-        } else {
-            print("[BrightnessService] software brightness set to \(Int(brightness))% for display \(displayID)")
-        }
-        #endif
+        _ = CGSetDisplayTransferByTable(displayID, tableSize, &red, &green, &blue)
     }
 
     /// Resets the gamma table for a display back to the identity curve.
@@ -755,9 +745,6 @@ final class BrightnessService: @unchecked Sendable {
             if IODisplaySetFloatParameter(
                 servicePort, 0, Self.ioDisplayBrightnessKey, value
             ) == KERN_SUCCESS {
-                #if DEBUG
-                print("[BrightnessService] internal brightness set to \(value)")
-                #endif
                 return
             }
         }
@@ -785,9 +772,6 @@ final class BrightnessService: @unchecked Sendable {
             IOServiceMatching("IODisplayConnect"),
             &iter
         ) == KERN_SUCCESS else {
-            #if DEBUG
-            print("[BrightnessService] setInternalBrightness: no builtin service responded")
-            #endif
             return
         }
         defer { IOObjectRelease(iter) }
@@ -799,14 +783,8 @@ final class BrightnessService: @unchecked Sendable {
             if IODisplaySetFloatParameter(
                 service, 0, Self.ioDisplayBrightnessKey, value
             ) == KERN_SUCCESS {
-                #if DEBUG
-                print("[BrightnessService] internal brightness set to \(value)")
-                #endif
                 return
             }
         }
-        #if DEBUG
-        print("[BrightnessService] setInternalBrightness: no builtin service responded")
-        #endif
     }
 }

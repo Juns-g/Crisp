@@ -41,9 +41,6 @@ enum CGHelpers {
                 guard !didResume else { lock.unlock(); return }
                 didResume = true
                 lock.unlock()
-#if DEBUG
-                print("[CGHelpers] runWithTimeout: timed out after \(seconds)s — returning fallback")
-#endif
                 cont.resume(returning: fallback)
             }
         }

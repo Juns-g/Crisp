@@ -68,10 +68,7 @@ final class ResolutionService: @unchecked Sendable {
         else { return }
 
         Task.detached(priority: .userInitiated) {
-            let ok = await ResolutionService.applyModeSync(cgMode, on: displayID)
-            #if DEBUG
-            print("[ResolutionService] wake re-apply \(saved.width)×\(saved.height) hidpi=\(saved.hidpi) @\(Int(saved.refresh))Hz on displayID=\(displayID) success=\(ok)")
-            #endif
+            _ = await ResolutionService.applyModeSync(cgMode, on: displayID)
         }
     }
 
@@ -104,20 +101,12 @@ final class ResolutionService: @unchecked Sendable {
         PresetService.shared.noteManualChange()
         // Resolve mirror source, the physical display may mirror a virtual display
         let (targetID, isMirrorRedirect) = resolvedTargetDisplayID(for: displayID)
-        #if DEBUG
-        if isMirrorRedirect {
-            print("[ResolutionService] Mirror redirect: applying mode on source=\(targetID) instead of mirror target=\(displayID)")
-        }
-        #endif
 
         let options: CFDictionary = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
 
         // Enumerate modes off the main thread to avoid blocking the UI
         let cgMode: CGDisplayMode? = await Task.detached(priority: .userInitiated) {
             guard let allRaw = CGDisplayCopyAllDisplayModes(targetID, options) as? [CGDisplayMode] else {
-                #if DEBUG
-                print("[ResolutionService] CGDisplayCopyAllDisplayModes returned nil for displayID=\(targetID)")
-                #endif
                 return nil
             }
 
@@ -138,17 +127,11 @@ final class ResolutionService: @unchecked Sendable {
             // No CGDisplayMode with this id: the GPU-scaled HiDPI variant CG hides (surfaced from
             // the CGS list), or the mirror-source last resort. Both apply via the CGS transaction
             // API, which addresses modes by the same id (CGS modeNumber == ioDisplayModeID).
-            #if DEBUG
-            print("[ResolutionService] No CGDisplayMode for id=\(mode.ioDisplayModeID) (\(mode.width)×\(mode.height) hiDPI=\(mode.isHiDPI)) on displayID=\(targetID); trying CGS")
-            #endif
             let ok = await cgsFallback(modeID: UInt32(bitPattern: mode.ioDisplayModeID), on: targetID)
             if ok { persistMode(mode, for: displayID) }
             return ok
         }
 
-        #if DEBUG
-        print("[ResolutionService] Applying modeID=\(cgMode.ioDisplayModeID) (\(cgMode.width)×\(cgMode.height) pixW=\(cgMode.pixelWidth)) on displayID=\(targetID)")
-        #endif
 
         // Apply via standard public CG API (off main thread to avoid blocking the UI)
         let success = await Task.detached(priority: .userInitiated) {
@@ -162,9 +145,6 @@ final class ResolutionService: @unchecked Sendable {
         }
 
         // Fallback: CGSConfigureDisplayMode
-        #if DEBUG
-        print("[ResolutionService] Standard API failed, trying CGS fallback modeID=\(cgMode.ioDisplayModeID)")
-        #endif
         let fallbackSuccess = await cgsFallback(modeID: UInt32(bitPattern: cgMode.ioDisplayModeID), on: targetID)
         if fallbackSuccess {
             persistMode(mode, for: displayID)
@@ -186,9 +166,6 @@ final class ResolutionService: @unchecked Sendable {
         let options: CFDictionary = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         guard let sourceModes = CGDisplayCopyAllDisplayModes(mirrorSource, options) as? [CGDisplayMode],
               !sourceModes.isEmpty else {
-            #if DEBUG
-            print("[ResolutionService] Mirror source=\(mirrorSource) has no modes; using original displayID=\(displayID)")
-            #endif
             return (displayID, false)
         }
 
@@ -230,27 +207,16 @@ final class ResolutionService: @unchecked Sendable {
             var config: CGDisplayConfigRef?
             guard CGBeginDisplayConfiguration(&config) == .success,
                   let cfg = config else {
-                #if DEBUG
-                print("[ResolutionService] CGBeginDisplayConfiguration failed")
-                #endif
                 return false
             }
 
             let result = CGConfigureDisplayWithDisplayMode(cfg, displayID, cgMode, nil)
             guard result == .success else {
                 CGCancelDisplayConfiguration(cfg)
-                #if DEBUG
-                print("[ResolutionService] CGConfigureDisplayWithDisplayMode failed (\(result.rawValue)) displayID=\(displayID) modeID=\(cgMode.ioDisplayModeID)")
-                #endif
                 return false
             }
 
             let complete = CGCompleteDisplayConfiguration(cfg, .forSession)
-            #if DEBUG
-            if complete != .success {
-                print("[ResolutionService] CGCompleteDisplayConfiguration failed (\(complete.rawValue))")
-            }
-            #endif
             return complete == .success
         }
     }
@@ -269,18 +235,12 @@ final class ResolutionService: @unchecked Sendable {
         return await Task.detached(priority: .userInitiated) {
             var config: CGDisplayConfigRef?
             guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
-                #if DEBUG
-                print("[ResolutionService] CGS fallback: CGBeginDisplayConfiguration failed modeID=\(modeID)")
-                #endif
                 return false
             }
 
             let result = CGSConfigureDisplayMode(cfg, displayID, Int32(bitPattern: modeID))
             guard result == .success else {
                 CGCancelDisplayConfiguration(cfg)
-                #if DEBUG
-                print("[ResolutionService] CGS fallback: CGSConfigureDisplayMode failed (\(result.rawValue)) modeID=\(modeID)")
-                #endif
                 return false
             }
 
@@ -289,9 +249,6 @@ final class ResolutionService: @unchecked Sendable {
             try? await Task.sleep(nanoseconds: 100_000_000)  // 100ms
             let newModeID = CGDisplayCopyDisplayMode(displayID)?.ioDisplayModeID
             let success = complete == .success && newModeID == Int32(bitPattern: modeID)
-            #if DEBUG
-            print("[ResolutionService] CGS fallback: complete=\(complete.rawValue) success=\(success) modeID=\(modeID) activeModeID=\(newModeID as Any)")
-            #endif
             return success
         }.value
     }

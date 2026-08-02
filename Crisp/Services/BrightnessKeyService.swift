@@ -105,8 +105,6 @@ final class BrightnessKeyService: @unchecked Sendable {
 
         selfRetained?.release()
         selfRetained = nil
-
-        print("[BrightnessKeyService] Event tap removed.")
     }
 
     // MARK: - Accessibility retry

@@ -156,7 +156,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let lockPath = NSTemporaryDirectory() + "crisp.lock"
         let lockFD = open(lockPath, O_CREAT | O_RDWR, 0o600)
         if lockFD == -1 || flock(lockFD, LOCK_EX | LOCK_NB) != 0 {
-            print("[Crisp] Another instance is already running, exiting.")
             exit(0)
         }
         // The descriptor stays open for the app's lifetime to hold the lock.

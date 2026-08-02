@@ -52,9 +52,6 @@ final class UpdateService: ObservableObject, @unchecked Sendable {
             do {
                 json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             } catch {
-                #if DEBUG
-                print("[UpdateService] JSON parse error: \(error)")
-                #endif
                 lastCheckDate = Date()
                 return
             }

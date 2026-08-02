@@ -309,9 +309,6 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
                     // still be registered with WindowServer. Skip creation if an online
                     // virtual display with matching dimensions already exists.
                     guard !virtualDisplayAlreadyExists(width: config.width, height: config.height) else {
-                        #if DEBUG
-                        print("[VirtualDisplayService] autoCreate skipped — virtual display \(config.width)×\(config.height) already online")
-                        #endif
                         continue
                     }
                     _ = await create(config: config)

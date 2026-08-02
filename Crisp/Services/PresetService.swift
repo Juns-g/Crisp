@@ -133,10 +133,7 @@ final class PresetService: ObservableObject, @unchecked Sendable {
 
     /// Applies a preset: for each entry, finds the matching display and applies settings.
     func applyPreset(_ preset: DisplayPreset) async {
-        guard !isApplying else {
-            print("[PresetService] applyPreset: already applying, skipped")
-            return
-        }
+        guard !isApplying else { return }
         isApplying = true
         applyingPresetID = preset.id
         defer {
@@ -145,31 +142,11 @@ final class PresetService: ObservableObject, @unchecked Sendable {
         }
 
         let displays = DisplayManagerAccessor.shared.displays
-        print("[PresetService] applyPreset '\(preset.name)': \(displays.count) display(s) online, preset has \(preset.displays.count) entr(ies)")
-
-        if displays.isEmpty {
-            print("[PresetService] WARNING: displays list is empty – DisplayManagerAccessor may not be set up")
-        }
-
-        for (i, display) in displays.enumerated() {
-            print("[PresetService]   display[\(i)] uuid=\(display.displayUUID) id=\(display.displayID) online=\(display.isOnline) modes=\(display.availableModes.count)")
-        }
-
-        var anyActionTaken = false
 
         for entry in preset.displays {
-            print("[PresetService] entry uuid=\(entry.displayUUID) target=\(entry.resolutionLabel)")
-
-            guard let display = displays.first(where: { $0.displayUUID == entry.displayUUID }) else {
-                print("[PresetService]   -> no display matched UUID '\(entry.displayUUID)' – skipping")
-                continue
-            }
-            guard display.isOnline else {
-                print("[PresetService]   -> display '\(display.name)' is offline – skipping")
-                continue
-            }
+            guard let display = displays.first(where: { $0.displayUUID == entry.displayUUID }) else { continue }
+            guard display.isOnline else { continue }
             let displayID = display.displayID
-            print("[PresetService]   -> matched display '\(display.name)' (id=\(displayID)), \(display.availableModes.count) available modes")
 
             // Set resolution, only when the preset includes it (width present).
             // The built-in panel is driven too: a preset restores whatever mode was
@@ -188,51 +165,37 @@ final class PresetService: ObservableObject, @unchecked Sendable {
                     let alreadyActive = currentMode?.width == mode.width
                         && currentMode?.height == mode.height
                         && currentMode?.isHiDPI == mode.isHiDPI
-                    if alreadyActive {
-                        print("[PresetService]   -> resolution \(mode.width)×\(mode.height) hiDPI=\(mode.isHiDPI) already active, skipping mode switch")
-                    } else {
-                        print("[PresetService]   -> setting mode \(mode.width)×\(mode.height) hiDPI=\(mode.isHiDPI)")
+                    if !alreadyActive {
                         let ok = await ResolutionService.shared.setDisplayMode(mode, for: displayID)
-                        print("[PresetService]   -> setDisplayMode result: \(ok)")
                         if ok {
                             // refreshDisplays() doesn't re-read the current mode for
                             // already-present displays, so write it back here (as the manual
                             // switch does) or the panel keeps showing the old resolution.
                             display.currentDisplayMode = mode
                         }
-                        anyActionTaken = true
                     }
-                } else {
-                    print("[PresetService]   -> WARNING: no matching mode found for \(w)×\(h) hiDPI=\(hiDPI)")
-                    print("[PresetService]      available: \(display.availableModes.map { "\($0.width)×\($0.height)/\($0.isHiDPI)" }.joined(separator: ", "))")
                 }
             }
 
             // Set brightness if specified (convert 0.0-1.0 to 0-100 range used by BrightnessService).
             // Smooth variant fades over ~200ms instead of snapping.
             if let brightness = entry.brightness {
-                print("[PresetService]   -> setting brightness \(brightness)")
                 BrightnessService.shared.setBrightnessSmooth(
                     brightness * 100.0,
                     for: display,
                     isAutoAdjust: false,
                     duration: 0.5
                 )
-                anyActionTaken = true
             }
 
             // Set arrangement position if specified
             if let x = entry.arrangementX, let y = entry.arrangementY {
-                print("[PresetService]   -> setting arrangement x=\(x) y=\(y)")
-                let ok = await ArrangementService.shared.setPosition(
+                _ = await ArrangementService.shared.setPosition(
                     x: Int(x), y: Int(y), for: displayID
                 )
-                print("[PresetService]   -> setPosition result: \(ok)")
-                anyActionTaken = true
             }
         }
 
-        print("[PresetService] applyPreset '\(preset.name)' complete. anyActionTaken=\(anyActionTaken)")
         activePresetID = preset.id
         // DisplayManager is not a singleton; callers with a DisplayManager ref can call refreshDisplays().
     }

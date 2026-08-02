@@ -30,9 +30,6 @@ final class MirrorService: @unchecked Sendable {
     func enableMirror(source: CGDirectDisplayID, target: CGDirectDisplayID) async -> Bool {
         // Mirroring a display onto itself is invalid and causes undefined CG behaviour.
         guard source != target else {
-#if DEBUG
-            print("[MirrorService] enableMirror: source == target (\(source)), ignoring")
-#endif
             return false
         }
         return await CGHelpers.runWithTimeout(seconds: 10, fallback: false) {

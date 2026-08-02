@@ -160,9 +160,6 @@ final class DDCService: ObservableObject, @unchecked Sendable {
             if let matched = byModel {
                 map[matched] = ordered[i]
                 usedDisplays.insert(matched)
-                #if DEBUG
-                print("[DDCService] ARM64: identity matched AVService[\(i)] -> display \(matched) (v=\(idty.vendor) p=\(idty.product) s=\(idty.serial))")
-                #endif
             } else {
                 unmatched.append(i)
             }
@@ -172,9 +169,6 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         let leftovers = externalIDs.filter { !usedDisplays.contains($0) }.sorted()
         for (n, i) in unmatched.enumerated() where n < leftovers.count {
             map[leftovers[n]] = ordered[i]
-            #if DEBUG
-            print("[DDCService] ARM64: traversal-order fallback AVService[\(i)] -> display \(leftovers[n])")
-            #endif
         }
 
         // Warn only when the fallback had to guess among >1 indistinguishable displays.
@@ -183,9 +177,6 @@ final class DDCService: ObservableObject, @unchecked Sendable {
             ? "Multiple external displays: DDC identity matching failed; using traversal order"
             : nil
         DispatchQueue.main.async { self.mappingWarning = warning }
-        #if DEBUG
-        if let warning { print("[DDCService] WARNING: \(warning)") }
-        #endif
 
         return (map, ordered)
     }
@@ -236,9 +227,6 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         let (serviceMap, ordered) = buildAVServiceMapByProximity()
 
         guard !ordered.isEmpty else {
-            #if DEBUG
-            print("[DDCService] ARM64: no IOAVService found for display \(displayID)")
-            #endif
             return nil
         }
 
@@ -256,13 +244,6 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         let result = avServiceCache[displayID]
         avServiceLock.unlock()
 
-        #if DEBUG
-        if result != nil {
-            print("[DDCService] ARM64: found IOAVService for display \(displayID)")
-        } else {
-            print("[DDCService] ARM64: no IOAVService found for display \(displayID)")
-        }
-        #endif
         return result
     }
 
@@ -290,13 +271,6 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 
         var buf: [UInt8] = payload + [checksum]
         let ret = IOAVServiceWriteI2C(avService, 0x37, 0x51, &buf, UInt32(buf.count))
-        #if DEBUG
-        if ret == kIOReturnSuccess {
-            print("[DDCService] ARM64 write VCP 0x\(String(command, radix: 16)) = \(value) OK")
-        } else {
-            print("[DDCService] ARM64 write VCP 0x\(String(command, radix: 16)) failed: \(ret)")
-        }
-        #endif
         return ret == kIOReturnSuccess
     }
 
@@ -314,9 +288,6 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 
         let writeRet = IOAVServiceWriteI2C(avService, 0x37, 0x51, &requestBuf, UInt32(requestBuf.count))
         guard writeRet == kIOReturnSuccess else {
-            #if DEBUG
-            print("[DDCService] ARM64 read request failed for VCP 0x\(String(command, radix: 16)): \(writeRet)")
-            #endif
             return nil
         }
 
@@ -327,9 +298,6 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         var replyBuf = [UInt8](repeating: 0, count: 12)
         let readRet = IOAVServiceReadI2C(avService, 0x37, 0x51, &replyBuf, UInt32(replyBuf.count))
         guard readRet == kIOReturnSuccess else {
-            #if DEBUG
-            print("[DDCService] ARM64 read reply failed for VCP 0x\(String(command, radix: 16)): \(readRet)")
-            #endif
             return nil
         }
 
@@ -358,9 +326,6 @@ final class DDCService: ObservableObject, @unchecked Sendable {
               replyBuf[3] == 0x00,      // result code: no error
               replyBuf[4] == command    // echo of the VCP code we asked for
         else {
-            #if DEBUG
-            print("[DDCService] ARM64 read VCP 0x\(String(command, radix: 16)): invalid reply frame, ignoring (bytes: \(replyBuf.prefix(6).map { String(format: "%02X", $0) }.joined(separator: " ")))")
-            #endif
             return nil
         }
 
@@ -368,14 +333,8 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         let curVal = (UInt16(replyBuf[8]) << 8) | UInt16(replyBuf[9])
         // A zero max is also invalid (would make every write 0); reject it.
         guard maxVal > 0 else {
-            #if DEBUG
-            print("[DDCService] ARM64 read VCP 0x\(String(command, radix: 16)): reply reports max=0, ignoring")
-            #endif
             return nil
         }
-        #if DEBUG
-        print("[DDCService] ARM64 read VCP 0x\(String(command, radix: 16)): cur=\(curVal) max=\(maxVal)")
-        #endif
         return (current: curVal, max: maxVal)
     }
 #endif
@@ -459,9 +418,6 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         if arm64Write(displayID: displayID, command: command, value: value) {
             return true
         }
-        #if DEBUG
-        print("[DDCService] writeSynchronous ARM64: failed for display \(displayID) VCP 0x\(String(command, radix: 16))")
-        #endif
         return false
 #else
         // Intel fallback path
@@ -482,9 +438,6 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 
     private func intelWriteSynchronous(displayID: CGDirectDisplayID, command: UInt8, value: UInt16) -> Bool {
         guard let fb = framebufferService(for: displayID) else {
-            #if DEBUG
-            print("[DDCService] intelWrite: no framebuffer for display \(displayID)")
-            #endif
             return false
         }
         defer { IOObjectRelease(fb) }
@@ -529,15 +482,9 @@ final class DDCService: ObservableObject, @unchecked Sendable {
                 return kr == KERN_SUCCESS && req.result == KERN_SUCCESS
             }
             if ok {
-                #if DEBUG
-                print("[DDCService] Intel write VCP 0x\(String(command, radix:16)) = \(value) on bus \(busIndex) OK")
-                #endif
                 return true
             }
         }
-        #if DEBUG
-        print("[DDCService] intelWrite: all buses failed for display \(displayID) VCP 0x\(String(command, radix:16))")
-        #endif
         return false
     }
 
