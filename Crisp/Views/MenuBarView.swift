@@ -453,7 +453,7 @@ struct MenuBarView: View {
                     sectionDivider
                     CombinedBrightnessView(displays: displayManager.displays)
                 }
-                .curtainReveal(settings.showCombinedBrightness)
+                .curtainReveal(settings.showCombinedBrightness && displayManager.displays.count > 1)
 
                 // Dark Mode / Night Shift / True Tone circular toggle row (modeled on the system displays panel).
                 // No divider above it: the native panel runs the effect row straight under the sliders.
@@ -753,26 +753,34 @@ struct SettingsView: View {
         // so rows sit ~10px apart instead of 5+6+5. Dividers/headers pad themselves.
         VStack(alignment: .leading, spacing: 0) {
             // Auto Brightness: a behavior preference (moved out of the Tools
-            // group, which is display features only).
-            AutoBrightnessView()
-
-            // Show combined brightness
-            Toggle(isOn: Binding(
-                get: { settings.showCombinedBrightness },
-                set: { newValue in withAnimation(.panelResize) { settings.showCombinedBrightness = newValue } }
-            )) {
-                HStack(spacing: 8) {
-                    MenuItemIcon(systemName: "sun.min.fill", color: .yellow, active: settings.showCombinedBrightness)
-                        .accessibilityHidden(true)
-                    Text("Show Combined Brightness")
-                        .font(.body)
-                    Spacer()
-                }
+            // group, which is display features only). Hidden without an external
+            // display, there is nothing to sync; the stored state is untouched and
+            // the service keeps running, so an armed sync resumes on reconnect.
+            if displayManager.displays.contains(where: { !$0.isBuiltin }) {
+                AutoBrightnessView()
             }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
+
+            // Show combined brightness. Hidden with a single display: "combined"
+            // would just duplicate that display's own slider. The preference
+            // persists, so the slider returns as it was when a display connects.
+            if displayManager.displays.count > 1 {
+                Toggle(isOn: Binding(
+                    get: { settings.showCombinedBrightness },
+                    set: { newValue in withAnimation(.panelResize) { settings.showCombinedBrightness = newValue } }
+                )) {
+                    HStack(spacing: 8) {
+                        MenuItemIcon(systemName: "sun.min.fill", color: .yellow, active: settings.showCombinedBrightness)
+                            .accessibilityHidden(true)
+                        Text("Show Combined Brightness")
+                            .font(.body)
+                        Spacer()
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+            }
 
             // Which displays the hardware brightness keys adjust. Once Accessibility is granted,
             // an expandable row + checkmark list (the Resolution / Color Profile idiom). Before
