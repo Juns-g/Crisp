@@ -559,6 +559,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // tracking menu or an in-panel confirmation alert, which take key.
             if PanelOpenGuard.suppressAutoDismiss || PanelOpenGuard.isMenuTracking
                 || PanelOpenGuard.isConfirmationActive { return }
+            // A soft-reconnect just settled: focus steals in its wake are system
+            // noise, not the user clicking away (those still close via the global
+            // click monitor, which ignores this grace).
+            if Date() < PanelOpenGuard.resignKeyGraceUntil { return }
             // Same overlay caveat as the click monitor: during the crossfade
             // the snapshot window can steal key while the user is clicking
             // INSIDE the panel; don't treat that as clicking away.
