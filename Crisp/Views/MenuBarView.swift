@@ -657,6 +657,11 @@ struct SettingsView: View {
     // other section, or it reopens still expanded.
     @State private var showSupport = false
     @State private var showBrightnessKeys = false
+    // Accessibility trust drives which Brightness Keys UI shows (toggle vs target menu).
+    // AXIsProcessTrusted() isn't observable and the panel content mounts once, so re-read
+    // it on every open (below) or the section shows a stale state after the user grants or
+    // revokes in System Settings. (vx44)
+    @State private var isTrusted = AXIsProcessTrusted()
     @EnvironmentObject var displayManager: DisplayManager
 
     /// Localized display name for a brightness-key target (row subtitle + choices).
@@ -755,7 +760,7 @@ struct SettingsView: View {
             // an expandable row + checkmark list (the Resolution / Color Profile idiom). Before
             // that there is no row or target subtitle at all, only the opt-in toggle, so enabling
             // is discoverable without expanding and no target reads as live before it is. (jv1b)
-            if AXIsProcessTrusted() {
+            if isTrusted {
                 ExpandableRow(
                     icon: "keyboard",
                     iconColor: .accentColor,
@@ -838,6 +843,11 @@ struct SettingsView: View {
             SupportRow(expanded: $showSupport)
         }
         .padding(.vertical, 6)
+        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidOpen)) { _ in
+            // Re-read trust on every open so the section reflects a grant/revoke made in
+            // System Settings since the last open (the content mounts once). (vx44)
+            isTrusted = AXIsProcessTrusted()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             showSupport = false
             showBrightnessKeys = false
