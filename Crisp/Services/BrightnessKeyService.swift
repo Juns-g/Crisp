@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import ApplicationServices
 
 // MARK: - C Event Tap Callback
 
@@ -152,12 +153,22 @@ final class BrightnessKeyService: @unchecked Sendable {
         type: CGEventType,
         event: CGEvent
     ) -> Unmanaged<CGEvent>? {
-        // Re-enable the tap if the system disabled it (e.g. after a timeout).
+        // The system disabled the tap. If we still hold Accessibility this is a normal
+        // timeout, so re-enable it. If trust was revoked (the user unchecked Crisp under
+        // Privacy > Accessibility), re-enabling churns: the system disables it again at once,
+        // and an active .cgSessionEventTap stuck in that disable/re-enable loop stalls the
+        // window-server input pipeline and freezes clicks system-wide. So tear the tap down
+        // instead and let retryUntilArmed re-install it cleanly once trust returns. (kome)
         if type.rawValue == CGEventType.tapDisabledByTimeout.rawValue ||
            type.rawValue == CGEventType.tapDisabledByUserInput.rawValue {
             DispatchQueue.main.async {
-                if let tap = self.eventTap {
-                    CGEvent.tapEnable(tap: tap, enable: true)
+                MainActor.assumeIsolated {
+                    if AXIsProcessTrusted(), let tap = self.eventTap {
+                        CGEvent.tapEnable(tap: tap, enable: true)
+                    } else {
+                        self.stop()
+                        self.retryUntilArmed()
+                    }
                 }
             }
             return Unmanaged.passRetained(event)
