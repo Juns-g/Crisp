@@ -136,7 +136,7 @@ struct DisplayModeSection: View {
             // Only shown when the current resolution actually offers a choice.
             if let group = currentGroup, group.hasMultipleRates {
                 ExpandableRow(
-                    icon: "gauge.with.dots.needle.bottom.50percent",
+                    icon: "waveform",
                     iconActive: false,
                     label: "Refresh Rate",
                     subtitle: currentMode.map(refreshLabel),
