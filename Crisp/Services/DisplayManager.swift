@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import AppKit
 
 // Global C-compatible callback for display reconfiguration.
 // Must be a top-level function (not a closure) to be used as a C function pointer.
@@ -46,16 +47,44 @@ class DisplayManager: ObservableObject {
 
     // nonisolated(unsafe) allows deinit (which is nonisolated in Swift 6) to access this value.
     nonisolated(unsafe) private var callbackContext: UnsafeMutableRawPointer?
+    nonisolated(unsafe) private var screenParamsObserver: NSObjectProtocol?
 
     init() {
         refreshDisplays()
         setupReconfigCallback()
+        // On connect, the CG reconfiguration callback fires before AppKit's
+        // NSScreen.screens includes the new display, so DisplayInfo.init can miss
+        // the monitor's localized name and fall back to "Display N" for good.
+        // AppKit posts this notification exactly when its screen list is current,
+        // which is the first moment the lookup is guaranteed to see the display.
+        screenParamsObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor [weak self] in self?.refreshDisplayNames() }
+        }
     }
 
     deinit {
         if let ctx = callbackContext {
             CGDisplayRemoveReconfigurationCallback(displayReconfigCallback, ctx)
             Unmanaged<DisplayManager>.fromOpaque(ctx).release()
+        }
+        if let obs = screenParamsObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+    }
+
+    /// Re-resolve display names against the now-current NSScreen list, replacing
+    /// any "Display N" fallback a connect-time race left behind (and tracking
+    /// renames macOS applies to its own list).
+    private func refreshDisplayNames() {
+        for display in displays where !display.isBuiltin {
+            if let real = NSScreen.screen(for: display.displayID)?.localizedName,
+               real != display.name {
+                display.name = real
+            }
         }
     }
 
