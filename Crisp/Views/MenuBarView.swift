@@ -678,7 +678,7 @@ struct SettingsView: View {
     /// Localized display name for a brightness-key target (row subtitle + choices).
     private func brightnessTargetName(_ target: BrightnessKeyTarget) -> String {
         switch target {
-        case .underCursor: return String(localized: "Display under cursor")
+        case .underCursor: return String(localized: "Follow the pointer")
         case .allDisplays: return String(localized: "All connected displays")
         case .selected:    return String(localized: "Selected displays only")
         }

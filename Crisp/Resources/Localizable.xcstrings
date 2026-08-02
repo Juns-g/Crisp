@@ -1,6 +1,126 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "blue" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "蓝色"
+          }
+        }
+      }
+    },
+    "indigo" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "靛蓝色"
+          }
+        }
+      }
+    },
+    "purple" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "紫色"
+          }
+        }
+      }
+    },
+    "pink" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粉色"
+          }
+        }
+      }
+    },
+    "red" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "红色"
+          }
+        }
+      }
+    },
+    "orange" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "橙色"
+          }
+        }
+      }
+    },
+    "yellow" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "黄色"
+          }
+        }
+      }
+    },
+    "green" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "绿色"
+          }
+        }
+      }
+    },
+    "teal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "蓝绿色"
+          }
+        }
+      }
+    },
+    "gray" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "灰色"
+          }
+        }
+      }
+    },
+    "HiDPI" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HiDPI"
+          }
+        }
+      }
+    },
+    "Non-HiDPI" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "非 HiDPI"
+          }
+        }
+      }
+    },
     "External displays follow the built-in but keep the difference you set" : {
       "localizations" : {
         "zh-Hans" : {
@@ -46,17 +166,17 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "亮度按键"
+            "value" : "亮度键"
           }
         }
       }
     },
-    "Display under cursor" : {
+    "Follow the pointer" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "光标所在显示器"
+            "value" : "跟随指针"
           }
         }
       }
@@ -221,16 +341,6 @@
         }
       }
     },
-    "Adjusts external displays to follow the built-in display brightness" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "调整外接显示器以跟随内置显示器亮度"
-          }
-        }
-      }
-    },
     "All Profiles" : {
       "localizations" : {
         "zh-Hans" : {
@@ -296,7 +406,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "合并"
+            "value" : "合并亮度"
           }
         }
       }
@@ -537,16 +647,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "创建"
-          }
-        }
-      }
-    },
-    "Creating..." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "创建中…"
           }
         }
       }
@@ -1141,16 +1241,6 @@
         }
       }
     },
-    "Saving..." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保存中…"
-          }
-        }
-      }
-    },
     "Set as Main Display" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1446,7 +1536,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "宽"
+            "value" : "宽度"
           }
         }
       }
@@ -1456,7 +1546,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "高"
+            "value" : "高度"
           }
         }
       }
@@ -1566,7 +1656,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "采集项目"
+            "value" : "包含项目"
           }
         }
       }
@@ -1616,7 +1706,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "较大文本"
+            "value" : "更大文本"
           }
         }
       }
@@ -1666,7 +1756,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "保持唤醒"
+            "value" : "防止睡眠"
           }
         }
       }
