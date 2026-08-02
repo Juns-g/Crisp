@@ -77,6 +77,9 @@ struct SavePresetForm: View {
     @State private var includeResolution: Bool = true
     @State private var includeBrightness: Bool = true
     @State private var includeArrangement: Bool = true
+    /// Edit mode only: when on, Save re-captures the current display values
+    /// (resolution/brightness/arrangement) instead of keeping the stored ones.
+    @State private var recaptureValues: Bool = false
     @State private var showIdentityPicker: Bool = false
     @State private var isSaving: Bool = false
     @State private var saveError: String?
@@ -254,6 +257,24 @@ struct SavePresetForm: View {
                 }
             }
 
+            // Edit mode only: let Save refresh the stored values to the current
+            // display state. New always captures fresh, so this only shows when editing.
+            if editing != nil {
+                Toggle(isOn: $recaptureValues) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Update to current values")
+                            .font(.callout)
+                        Text("Replace the stored values above with this display's current settings")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(.accentColor)
+            }
+
             if let err = saveError {
                 Text(err)
                     .font(.caption)
@@ -306,6 +327,10 @@ struct SavePresetForm: View {
                 includeBrightness: includeBrightness,
                 includeArrangement: includeArrangement
             )
+            // Opt-in: refresh the stored values to the current display state.
+            if recaptureValues {
+                PresetService.shared.updatePreset(id: editing.id)
+            }
         } else {
             var preset = PresetService.shared.captureCurrentState(
                 name: name, icon: selectedIcon,

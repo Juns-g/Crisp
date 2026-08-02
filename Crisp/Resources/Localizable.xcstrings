@@ -1700,6 +1700,26 @@
           }
         }
       }
+    },
+    "Update to current values" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新为当前值"
+          }
+        }
+      }
+    },
+    "Replace the stored values above with this display's current settings" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用该显示器的当前设置替换上方存储的值"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
