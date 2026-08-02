@@ -98,6 +98,18 @@ class DisplayManager: ObservableObject {
         // Only load details / refresh brightness for newly appeared displays
         for display in addedDisplays {
             Task { await BrightnessService.shared.refreshBrightness(for: display) }
+            // Monitors often answer DDC with nothing (or garbage) for the first
+            // seconds after link training, and a failed connect-time read has no
+            // retry: with auto-brightness on the panel poll skips externals, so a
+            // stale slider seed would stick until the next panel open. One delayed
+            // re-read heals it; the adopt deadband makes it a no-op if the first
+            // read was fine.
+            if !display.isBuiltin {
+                Task {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    await BrightnessService.shared.refreshBrightness(for: display)
+                }
+            }
             Task {
                 await display.loadDetails()
                 // Auto-enable HiDPI for new external 2K+ displays that don't have it yet
