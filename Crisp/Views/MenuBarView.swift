@@ -682,6 +682,14 @@ struct SettingsView: View {
     @State private var isTrusted = AXIsProcessTrusted()
     @EnvironmentObject var displayManager: DisplayManager
 
+    /// External-display features (Auto Brightness sync, brightness-key redirection)
+    /// hide without one: the built-in's keys and slider already work natively. Gated
+    /// on external presence, NOT display count, so clamshell (one external, lid
+    /// closed) keeps them. Stored state is untouched while hidden.
+    private var hasExternalDisplay: Bool {
+        displayManager.displays.contains { !$0.isBuiltin }
+    }
+
     /// Localized display name for a brightness-key target (row subtitle + choices).
     private func brightnessTargetName(_ target: BrightnessKeyTarget) -> String {
         switch target {
@@ -754,9 +762,9 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Auto Brightness: a behavior preference (moved out of the Tools
             // group, which is display features only). Hidden without an external
-            // display, there is nothing to sync; the stored state is untouched and
-            // the service keeps running, so an armed sync resumes on reconnect.
-            if displayManager.displays.contains(where: { !$0.isBuiltin }) {
+            // display, there is nothing to sync; the service keeps running, so an
+            // armed sync resumes on reconnect.
+            if hasExternalDisplay {
                 AutoBrightnessView()
             }
 
@@ -786,7 +794,8 @@ struct SettingsView: View {
             // an expandable row + checkmark list (the Resolution / Color Profile idiom). Before
             // that there is no row or target subtitle at all, only the opt-in toggle, so enabling
             // is discoverable without expanding and no target reads as live before it is. (jv1b)
-            if isTrusted {
+            // The whole section hides without an external display (see hasExternalDisplay).
+            if hasExternalDisplay, isTrusted {
                 ExpandableRow(
                     icon: "keyboard",
                     iconColor: .accentColor,
@@ -827,7 +836,7 @@ struct SettingsView: View {
                         }
                     }
                 }
-            } else {
+            } else if hasExternalDisplay {
                 BrightnessKeysPermissionNotice()
             }
 
