@@ -449,11 +449,14 @@ struct MenuBarView: View {
                 // curtain can reveal it with the panel spring, gliding in like the
                 // other sections instead of popping to full height. Parent VStack is
                 // spacing:0, so a collapsed curtain leaves no gap.
+                // visibleDisplays, not displays: "combined" means the slider rows
+                // above, and a virtual display has no slider (it mirrors the
+                // built-in; dimming it would double-dim the mirror).
                 VStack(spacing: 0) {
                     sectionDivider
-                    CombinedBrightnessView(displays: displayManager.displays)
+                    CombinedBrightnessView(displays: visibleDisplays)
                 }
-                .curtainReveal(settings.showCombinedBrightness && displayManager.displays.count > 1)
+                .curtainReveal(settings.showCombinedBrightness && visibleDisplays.count > 1)
 
                 // Dark Mode / Night Shift / True Tone circular toggle row (modeled on the system displays panel).
                 // No divider above it: the native panel runs the effect row straight under the sliders.
@@ -759,10 +762,10 @@ struct SettingsView: View {
             AutoBrightnessView()
 
             // Show combined brightness. Hidden unless more than one brightness
-            // slider exists (one per connected display): with a single display,
-            // "combined" would just duplicate that display's own slider. The
-            // preference persists, so it returns as it was on reconnect.
-            if displayManager.displays.count > 1 {
+            // slider exists (one per connected display, virtuals excluded since
+            // they get no slider): with a single slider, "combined" would just
+            // duplicate it. The preference persists, so it returns on reconnect.
+            if displayManager.displays.filter({ !VirtualDisplayService.shared.isVirtualDisplay($0.displayID) }).count > 1 {
                 Toggle(isOn: Binding(
                     get: { settings.showCombinedBrightness },
                     set: { newValue in withAnimation(.panelResize) { settings.showCombinedBrightness = newValue } }
