@@ -21,7 +21,7 @@ Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/
 ## Features
 
 - **Sharp, Retina-quality scaling on any display**: HiDPI scaled resolutions that make external monitors crisp instead of blurry or undersized, set up automatically for 1440p and larger displays, plus optional smooth scaling for fine-grained control over how large everything looks
-- **Brightness everywhere**: hardware DDC control for external monitors with software (gamma) fallback, smooth fades, brightness keys that target the display under the cursor, all displays, or a chosen subset, and true darkness below the hardware floor
+- **Brightness everywhere**: hardware DDC control for external monitors with software (gamma) fallback, smooth fades, brightness keys that target the display under the cursor, all displays, or a chosen subset, and gamma dimming below the monitor's hardware brightness floor
 - **Presets**: save named display configurations (resolution, brightness, arrangement) with custom icons and colors, apply with one click, update in place
 - **Display arrangement**: drag-to-arrange canvas, main display switching
 - **Disconnect displays**: turn physical displays off and back on from the menu, remembered across sleep/wake (Apple Silicon)
