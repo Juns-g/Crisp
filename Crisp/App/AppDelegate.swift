@@ -201,7 +201,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.repositionWorkItem?.cancel()
                 let work = DispatchWorkItem { [weak self] in
                     guard let self, self.isPanelShown, let p = self.panel else { return }
-                    self.positionPanel(p)
+                    self.positionPanel(p, preferOrigin: true)
                 }
                 self.repositionWorkItem = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
@@ -395,17 +395,43 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// on. Called on open AND whenever screen parameters change (e.g. the
     /// main display switches, which re-origins global coordinates and would
     /// otherwise leave the panel at a stale position).
-    private func positionPanel(_ p: MenuPanel) {
+    /// Display the open panel was summoned on, by stable UUID (displayIDs are
+    /// reassigned across a soft-reconnect). When that display blanks, the status
+    /// item's window migrates to a surviving display and the post-storm reposition
+    /// would drag the panel there for good; `preferOrigin` re-anchors to this
+    /// display once it's back online.
+    private var panelOriginDisplayUUID: String?
+
+    private func displayUUID(for displayID: CGDirectDisplayID) -> String? {
+        guard let cfUUID = CGDisplayCreateUUIDFromDisplayID(displayID) else { return nil }
+        return CFUUIDCreateString(nil, cfUUID.takeRetainedValue()) as String
+    }
+
+    private func positionPanel(_ p: MenuPanel, preferOrigin: Bool = false) {
         let size = p.lastContentSize ?? p.frame.size
         guard let btnWindow = statusItem?.button?.window else { return }
         let btnFrame = btnWindow.frame
-        let screen = btnWindow.screen ?? NSScreen.main
+        let btnScreen = btnWindow.screen ?? NSScreen.main
+        var screen = btnScreen
+        var anchorMidX = btnFrame.midX
+        var topY = btnFrame.minY - 1
+        // After a reconnect storm, prefer the display the panel was opened on if
+        // it's online again. The menu bar mirrors across displays, so mirror the
+        // status item's offset from the right edge onto the origin screen.
+        if preferOrigin,
+           let uuid = panelOriginDisplayUUID,
+           let bs = btnScreen,
+           let origin = NSScreen.screens.first(where: { displayUUID(for: $0.displayID) == uuid }),
+           origin != bs {
+            screen = origin
+            anchorMidX = origin.frame.maxX - (bs.frame.maxX - btnFrame.midX)
+            topY = origin.visibleFrame.maxY - 1
+        }
         displayManager.activePanelDisplayID = screen?.displayID
-        var x = btnFrame.midX - size.width / 2
+        var x = anchorMidX - size.width / 2
         if let vis = screen?.visibleFrame {
             x = min(max(x, vis.minX + 8), vis.maxX - size.width - 8)
         }
-        let topY = btnFrame.minY - 1
         if let vis = screen?.visibleFrame {
             // Cap like the native Wi-Fi panel: grow to ~80% of the drop below
             // the status item, then scroll, leaving real breathing room at
@@ -428,6 +454,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Native menus appear at full size with all content visible at once;
         // only size changes AFTER opening animate.
         positionPanel(p)
+        // Remember where this open happened (fresh each open; the menu bar the
+        // user clicked is the anchor, not wherever a previous open ended up).
+        panelOriginDisplayUUID = displayManager.activePanelDisplayID.flatMap { displayUUID(for: $0) }
 
         p.ignoresMouseEvents = false
         // First open only: fade in briefly so the panel's one-time on-screen costs
