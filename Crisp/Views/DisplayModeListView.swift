@@ -654,6 +654,12 @@ struct DisplayModeSection: View {
                 // The reconnect rebuilt this display's row (fresh, collapsed). Ask the menu to
                 // re-expand it and reopen Resolution, so the user lands back where they were.
                 displayManager.pendingResolutionExpandUUID = targetUUID
+                // The settle storm keeps stealing key for a few seconds after the
+                // suppression window (the defer above) releases; the makeKey above
+                // re-armed resign-key, so a late steal would close the panel right
+                // after a successful toggle. Ignore bare resigns for a grace period;
+                // real outside clicks still dismiss via the global click monitor.
+                PanelOpenGuard.resignKeyGraceUntil = Date().addingTimeInterval(5)
             }
             smoothBusy = false
         }

@@ -49,6 +49,12 @@ enum PanelOpenGuard {
     /// if another window started since, so it can't clear that newer window
     /// mid-flight (the smooth-scaling soft-reconnect holds one for ~2s).
     static var suppressGeneration = 0
+    /// Ignore bare resign-key dismissals until this instant. After a smooth-scaling
+    /// soft-reconnect completes (and suppressAutoDismiss releases), WindowServer keeps
+    /// stealing key focus for a few seconds while the display settles; a late steal
+    /// would close the panel out from under the user. Genuine outside clicks still
+    /// dismiss through the global click monitor, which does not consult this.
+    static var resignKeyGraceUntil = Date.distantPast
     /// True while an AppKit menu (a SwiftUI `Menu`, e.g. a row's ⋯) is tracking.
     /// Those popups render in their own window outside the panel frame, so a click
     /// on a menu item reads as an outside-click; suppress dismissal while tracking.
