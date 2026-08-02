@@ -79,6 +79,10 @@ final class AutoBrightnessService: ObservableObject, @unchecked Sendable {
     /// Set when tracking (re)starts (enable, or toggling relative on) so the next apply
     /// re-pins offsets from the current levels instead of moving anything.
     private var needsRebaseline = false
+    /// Last manual external-brightness adjustment. Absolute mode has no offset
+    /// re-pinning, so a 30s grace keeps auto-sync from fighting the user's hand
+    /// on the slider; the eventual re-sync is that mode's contract.
+    private var lastExternalManualAdjust: Date?
 
     /// Set to true after the first poll attempt completes (success or failure).
     /// Used by the UI to distinguish "not polled yet" from "no builtin display found".
@@ -185,7 +189,9 @@ final class AutoBrightnessService: ObservableObject, @unchecked Sendable {
                   let id = note.userInfo?["displayID"] as? CGDirectDisplayID,
                   let value = note.userInfo?["value"] as? Double else { return }
             MainActor.assumeIsolated {
-                guard self.isEnabled, self.relativeMode else { return }
+                guard self.isEnabled else { return }
+                self.lastExternalManualAdjust = Date()
+                guard self.relativeMode else { return }
                 let builtinPct = (self.readBuiltinBrightness() ?? self.builtinBrightness) * 100.0
                 self.offsets[id] = value - builtinPct
             }
@@ -233,6 +239,12 @@ final class AutoBrightnessService: ObservableObject, @unchecked Sendable {
         // unless forced (the user just flipped relative<->absolute, so externals must
         // re-aim now instead of waiting for the next built-in change).
         guard force || abs(builtin - lastAppliedBrightness) >= 0.02 else { return }
+
+        // Absolute mode: a fresh manual external adjustment wins for 30s (relative mode
+        // absorbs it into the offset instead). A forced apply is a deliberate mode
+        // toggle, so it bypasses the grace.
+        if !force, !relativeMode, let last = lastExternalManualAdjust,
+           Date().timeIntervalSince(last) < 30 { return }
 
         let builtinPct = builtin * 100.0
         // In relative mode, (re)pin offsets from the current levels on the first apply
