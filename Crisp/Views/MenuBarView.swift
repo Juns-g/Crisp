@@ -668,25 +668,46 @@ struct SettingsView: View {
         }
     }
 
-    /// One-time Accessibility onboarding for the brightness keys, shown inside the Brightness
-    /// Keys section only while permission is missing (the tap can't route the keys without it).
-    /// The button fires the native trust prompt and opens the exact Settings pane; the tap arms
-    /// live once granted, no restart (see BrightnessKeyService). (b00d.1)
+    /// Opt-in control for brightness-key redirection, shown inside the Brightness Keys section
+    /// only while Accessibility is missing. The toggle is the deliberate, in-context trigger for
+    /// the native trust prompt (nothing is requested at launch); it also opens the exact Settings
+    /// pane, and the tap arms live once granted, no restart. On grant the parent swaps this for
+    /// the target menu. (b00d.1, jv1b)
     private struct BrightnessKeysPermissionNotice: View {
+        // ponytail: local intent so the switch animates on tap. On grant the parent replaces
+        // this whole view with the target menu; on deny it stays on until the section next
+        // renders, which is harmless since the keys simply aren't armed.
+        @State private var requesting = false
+
         var body: some View {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                        .font(.caption)
-                    Text("Brightness keys need Accessibility access to redirect them to external displays. Grant it once and they start working, no restart.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                Toggle(isOn: Binding(
+                    get: { requesting },
+                    set: { on in
+                        requesting = on
+                        if on {
+                            requestAccess()
+                            BrightnessKeyService.shared.start()
+                        } else {
+                            BrightnessKeyService.shared.stop()
+                        }
+                    }
+                )) {
+                    HStack(spacing: 8) {
+                        MenuItemIcon(systemName: "keyboard", color: .accentColor, active: requesting)
+                            .accessibilityHidden(true)
+                        Text("Use brightness keys on external displays")
+                            .font(.body)
+                        Spacer()
+                    }
                 }
-                Button("Grant Access") { requestAccess() }
-                    .controlSize(.small)
-                    .padding(.leading, 18)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
+                Text("Brightness keys need Accessibility access to redirect them to external displays. Grant it once and they start working, no restart.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
@@ -696,7 +717,7 @@ struct SettingsView: View {
             // Fire the native trust prompt (shows the system dialog the first time)...
             let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             _ = AXIsProcessTrustedWithOptions(opts)
-            // ...and open the exact pane, so the button still lands somewhere useful after the
+            // ...and open the exact pane, so the toggle still lands somewhere useful after the
             // one-shot prompt has already been dismissed once.
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
                 NSWorkspace.shared.open(url)
@@ -730,51 +751,52 @@ struct SettingsView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
 
-            // Which displays the hardware brightness keys adjust. Expandable row +
-            // checkmark list, matching the Resolution / Color Profile idiom instead
-            // of a stock pop-up button.
-            ExpandableRow(
-                icon: "keyboard",
-                iconActive: false,
-                label: "Brightness Keys",
-                subtitle: brightnessTargetName(settings.brightnessKeyTarget),
-                isExpanded: $showBrightnessKeys
-            )
-            if showBrightnessKeys {
-                // One-time Accessibility onboarding: the tap can't route the keys without it.
-                if !AXIsProcessTrusted() {
-                    BrightnessKeysPermissionNotice()
-                }
-                ForEach(BrightnessKeyTarget.allCases, id: \.self) { target in
-                    CheckmarkRow(
-                        label: brightnessTargetName(target),
-                        isSelected: settings.brightnessKeyTarget == target
-                    ) {
-                        settings.brightnessKeyTarget = target
-                    }
-                }
-                // "Selected displays only": a checklist of the current displays.
-                // Real toggles (not CheckmarkRow, which can't deselect) since this is
-                // multi-select. Membership is keyed by the stable displayUUID so it
-                // survives reconnects; built-in included, since "All" affects it too.
-                if settings.brightnessKeyTarget == .selected {
-                    ForEach(displayManager.displays) { display in
-                        Toggle(isOn: Binding(
-                            get: { settings.brightnessKeySelectedDisplayUUIDs.contains(display.displayUUID) },
-                            set: { isOn in
-                                if isOn { settings.brightnessKeySelectedDisplayUUIDs.insert(display.displayUUID) }
-                                else { settings.brightnessKeySelectedDisplayUUIDs.remove(display.displayUUID) }
-                            }
-                        )) {
-                            Text(display.name).font(.callout)
+            // Which displays the hardware brightness keys adjust. Once Accessibility is granted,
+            // an expandable row + checkmark list (the Resolution / Color Profile idiom). Before
+            // that there is no row or target subtitle at all, only the opt-in toggle, so enabling
+            // is discoverable without expanding and no target reads as live before it is. (jv1b)
+            if AXIsProcessTrusted() {
+                ExpandableRow(
+                    icon: "keyboard",
+                    iconActive: false,
+                    label: "Brightness Keys",
+                    subtitle: brightnessTargetName(settings.brightnessKeyTarget),
+                    isExpanded: $showBrightnessKeys
+                )
+                if showBrightnessKeys {
+                    ForEach(BrightnessKeyTarget.allCases, id: \.self) { target in
+                        CheckmarkRow(
+                            label: brightnessTargetName(target),
+                            isSelected: settings.brightnessKeyTarget == target
+                        ) {
+                            settings.brightnessKeyTarget = target
                         }
-                        .toggleStyle(.checkbox)
-                        .controlSize(.small)
-                        .padding(.leading, 46)
-                        .padding(.trailing, 12)
-                        .padding(.vertical, 1)
+                    }
+                    // "Selected displays only": a checklist of the current displays.
+                    // Real toggles (not CheckmarkRow, which can't deselect) since this is
+                    // multi-select. Membership is keyed by the stable displayUUID so it
+                    // survives reconnects; built-in included, since "All" affects it too.
+                    if settings.brightnessKeyTarget == .selected {
+                        ForEach(displayManager.displays) { display in
+                            Toggle(isOn: Binding(
+                                get: { settings.brightnessKeySelectedDisplayUUIDs.contains(display.displayUUID) },
+                                set: { isOn in
+                                    if isOn { settings.brightnessKeySelectedDisplayUUIDs.insert(display.displayUUID) }
+                                    else { settings.brightnessKeySelectedDisplayUUIDs.remove(display.displayUUID) }
+                                }
+                            )) {
+                                Text(display.name).font(.callout)
+                            }
+                            .toggleStyle(.checkbox)
+                            .controlSize(.small)
+                            .padding(.leading, 46)
+                            .padding(.trailing, 12)
+                            .padding(.vertical, 1)
+                        }
                     }
                 }
+            } else {
+                BrightnessKeysPermissionNotice()
             }
 
             // Launch at login

@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import CoreGraphics
+import ApplicationServices
 
 /// Borderless key-capable panel for the menu bar UI.
 /// Owning the panel (instead of MenuBarExtra's window) removes the WindowServer
@@ -160,8 +161,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         // The descriptor stays open for the app's lifetime to hold the lock.
 
-        // Start intercepting brightness keys to route them to the display under the cursor.
-        BrightnessKeyService.shared.start()
+        // Start intercepting brightness keys to route them to the display under the cursor,
+        // but only if Accessibility is already granted. Creating the tap (tapCreate) is what
+        // surfaces the OS prompt, so gating on trust keeps launch prompt-free; new users opt
+        // in via the toggle in the Brightness Keys section, which arms it in context. (jv1b)
+        if AXIsProcessTrusted() { BrightnessKeyService.shared.start() }
 
         // Touch the singleton so auto-brightness polling starts at launch; otherwise
         // it only starts the first time the menu panel is opened (its only other ref).

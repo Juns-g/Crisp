@@ -1661,16 +1661,6 @@
         }
       }
     },
-    "Grant Access" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "授予权限"
-          }
-        }
-      }
-    },
     "Keep Awake" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1717,6 +1707,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用该显示器的当前设置替换上方存储的值"
+          }
+        }
+      }
+    },
+    "Use brightness keys on external displays" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用亮度键控制外接显示器"
           }
         }
       }
