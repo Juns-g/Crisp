@@ -174,10 +174,16 @@ final class HiDPIService: @unchecked Sendable {
         // dismiss events queue while the main thread is blocked below and only
         // fire once it unblocks, so keep suppression alive briefly afterward.
         PanelOpenGuard.suppressAutoDismiss = true
+        let generation = PanelOpenGuard.suppressGeneration
         defer {
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 500_000_000)
-                PanelOpenGuard.suppressAutoDismiss = false
+                // Skip if a newer suppression window opened since (the caller wraps
+                // the whole soft-reconnect in one); resetting here would clear it
+                // mid-reconnect and let the panel auto-dismiss under the user.
+                if PanelOpenGuard.suppressGeneration == generation {
+                    PanelOpenGuard.suppressAutoDismiss = false
+                }
             }
         }
         appleScript.executeAndReturnError(&error)

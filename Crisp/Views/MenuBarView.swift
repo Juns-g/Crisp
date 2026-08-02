@@ -41,7 +41,14 @@ enum PanelOpenGuard {
     /// outside-click). Set around a system-modal prompt we raise ourselves (the
     /// admin auth dialog for installing a HiDPI override) so clicking/typing in
     /// that dialog doesn't dismiss the panel out from under it.
-    static var suppressAutoDismiss = false
+    static var suppressAutoDismiss = false {
+        didSet { if suppressAutoDismiss { suppressGeneration &+= 1 } }
+    }
+    /// Bumped on every new suppression window. A DELAYED reset (the admin-auth
+    /// helper's 500ms tail) captures this when it suppresses and skips its reset
+    /// if another window started since, so it can't clear that newer window
+    /// mid-flight (the smooth-scaling soft-reconnect holds one for ~2s).
+    static var suppressGeneration = 0
     /// True while an AppKit menu (a SwiftUI `Menu`, e.g. a row's ⋯) is tracking.
     /// Those popups render in their own window outside the panel frame, so a click
     /// on a menu item reads as an outside-click; suppress dismissal while tracking.
