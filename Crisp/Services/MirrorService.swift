@@ -51,7 +51,7 @@ final class MirrorService: @unchecked Sendable {
 
     // MARK: - Query (source perspective)
 
-    /// Returns true when `displayID` is acting as a mirror source —
+    /// Returns true when `displayID` is acting as a mirror source, 
     /// i.e., at least one other online display is cloning it.
     func isMirrorSource(_ displayID: CGDirectDisplayID) -> Bool {
         mirrorTargets(of: displayID) != nil

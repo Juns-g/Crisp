@@ -66,7 +66,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     ///
     /// On Apple Silicon the DDC channel (DCPAVServiceProxy) and the display's identity
     /// (DisplayAttributes → ProductAttributes) live in *sibling* subtrees under the same
-    /// dispextN node — the identity is NOT an ancestor of the AVService, so an upward
+    /// dispextN node, the identity is NOT an ancestor of the AVService, so an upward
     /// parent-chain walk never finds it (the old approach always fell through to a
     /// sorted-CGDirectDisplayID index, which mis-pairs channels and drives the wrong
     /// monitor). A depth-first traversal instead visits each display's framebuffer
@@ -349,7 +349,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 
         // Validate the reply frame before trusting the payload. Many monitors ack the
         // I2C read (readRet == success) but return stale EDID bytes or a null frame
-        // instead of a real VCP reply — especially over the Apple Silicon AV path.
+        // instead of a real VCP reply, especially over the Apple Silicon AV path.
         // Reading bytes 6–9 from such garbage yields a bogus "max" (e.g. 8824 instead
         // of 100), which then compresses the usable brightness range so the top of the
         // slider does nothing. Require the DDC/CI reply signature and the VCP echo.
@@ -383,7 +383,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     // MARK: - Intel (x86_64) IOFramebuffer Path
 
     /// Finds the IOFramebuffer service for a given external display.
-    /// Returns a retained io_service_t — caller must IOObjectRelease.
+    /// Returns a retained io_service_t, caller must IOObjectRelease.
     private func framebufferService(for displayID: CGDirectDisplayID) -> io_service_t? {
         // Strategy 1: Use CGDisplayIOServicePort (deprecated but functional on macOS 15)
         let servicePort = CGDisplayIOServicePort(displayID)
@@ -729,7 +729,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
                             current: r.current, max: r.max, timestamp: Date()
                         )
                         self.cacheLock.unlock()
-                        // No extra delay here — arm64Read already waits 40ms per DDC/CI spec
+                        // No extra delay here, arm64Read already waits 40ms per DDC/CI spec
                     } else {
                         result[code] = nil
                     }

@@ -13,7 +13,7 @@ struct ICCProfile: Identifiable, Equatable {
     let deviceClass: String
 
     /// Whether this profile is safe to assign as a display's ColorSync profile.
-    /// Displays take RGB, matrix-based profiles — the monitor ("mntr") and RGB
+    /// Displays take RGB, matrix-based profiles, the monitor ("mntr") and RGB
     /// working-space ("spac") classes. Printer/scanner/CMYK/LUT profiles can make
     /// WindowServer abort while building the display transform, crashing the whole
     /// GUI on every reconnect (recoverable only in Safe Mode; seen on AOC Q27G3XMN),
@@ -50,7 +50,7 @@ final class ColorProfileService: @unchecked Sendable {
     // MARK: - Profile Enumeration
 
     /// Returns the display-assignable ICC profiles for the given display, sorted
-    /// alphabetically — matching macOS's own Displays color list: the standard RGB
+    /// alphabetically, matching macOS's own Displays color list: the standard RGB
     /// profiles plus only THIS display's own factory profile. Other monitors'
     /// per-display profiles are hidden. `displayUUID` is `DisplayInfo.displayUUID`.
     func enumerateProfiles(for displayUUID: String) async -> [ICCProfile] {
@@ -153,7 +153,7 @@ final class ColorProfileService: @unchecked Sendable {
 
     private static func friendlyColorSpace(_ sig: String) -> String {
         // ICC data-color-space signatures are case-sensitive: Lab is "Lab", not "LAB".
-        // Unknown spaces must NOT masquerade as "RGB" — isDisplayProfile keys on it.
+        // Unknown spaces must NOT masquerade as "RGB", isDisplayProfile keys on it.
         switch sig {
         case "RGB":  return "RGB"
         case "CMYK": return "CMYK"

@@ -26,7 +26,7 @@ struct ColorProfileView: View {
                 .padding(.leading, 24)
                 .padding(.vertical, 6)
             } else {
-                // Flat list, like macOS's display color dropdown — no Recommended /
+                // Flat list, like macOS's display color dropdown, no Recommended /
                 // All grouping. The list is already scoped to this display.
                 ForEach(profiles) { profile in
                     CheckmarkRow(label: profile.name, isSelected: profile.path == selectedPath) {

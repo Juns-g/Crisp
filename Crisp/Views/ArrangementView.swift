@@ -307,7 +307,7 @@ private func snapToDominantSide(_ r: CGRect, of o: CGRect) -> CGRect {
 }
 
 /// Positive overlap width/height of two rects, or nil when they merely touch or
-/// are disjoint (a shared edge is allowed — that's the target adjacent state).
+/// are disjoint (a shared edge is allowed, that's the target adjacent state).
 private func overlapExtents(_ a: CGRect, _ b: CGRect) -> (x: CGFloat, y: CGFloat)? {
     let ox = min(a.maxX, b.maxX) - max(a.minX, b.minX)
     let oy = min(a.maxY, b.maxY) - max(a.minY, b.minY)
@@ -333,7 +333,7 @@ struct DisplayNameBadge: View {
 
     private let fill = Color(white: 0.22)
 
-    /// The bubble + downward tail, sized to its content. No lift — the caller
+    /// The bubble + downward tail, sized to its content. No lift, the caller
     /// decides how to place it (overlay self-lift, or explicit canvas position).
     private var callout: some View {
         VStack(spacing: 0) {
@@ -386,7 +386,7 @@ private struct BadgeHeightKey: PreferenceKey {
 }
 
 /// Places a callout in canvas space so its BOTTOM edge (the tail tip) lands on
-/// (x, topY) — centered above the thumbnail with the tail meeting its top edge.
+/// (x, topY), centered above the thumbnail with the tail meeting its top edge.
 /// Measures the callout's height (seeded so the first frame is already placed).
 private struct BadgeAbove: ViewModifier {
     let x: CGFloat
@@ -442,7 +442,7 @@ struct DisplayThumbnailView: View {
         }
         .overlay(alignment: .top) {
             // Native cue: the main display shows a thin menu-bar strip at the top.
-            // No name labels — the system Arrange Displays sheet has none either.
+            // No name labels, the system Arrange Displays sheet has none either.
             if display.isMain {
                 Rectangle()
                     .fill(.white.opacity(0.8))
@@ -518,8 +518,8 @@ enum DesktopWallpaper {
 
 // MARK: - Physical Display Identifier
 
-/// Draws a red border around a physical display — like the native Arrange
-/// Displays sheet — so hovering or dragging a thumbnail shows which real screen
+/// Draws a red border around a physical display, like the native Arrange
+/// Displays sheet, so hovering or dragging a thumbnail shows which real screen
 /// it maps to. A single transparent, click-through overlay window is reused and
 /// moved between screens.
 @MainActor

@@ -40,7 +40,7 @@ final class BrightnessKeyService: @unchecked Sendable {
 
     /// CGEventType raw value for NSSystemDefined / NX_SYSDEFINED events (media keys).
     private nonisolated(unsafe) static let cgEventTypeSystemDefinedRaw: UInt32 = 14
-    /// NX_SUBTYPE_AUX_CONTROL_BUTTONS — the subtype value for media/function keys.
+    /// NX_SUBTYPE_AUX_CONTROL_BUTTONS, the subtype value for media/function keys.
     private nonisolated(unsafe) static let nxSubtypeAuxControlButtons: Int16 = 8
     /// NX_KEYTYPE_BRIGHTNESS_UP
     private nonisolated(unsafe) static let nxKeytypeBrightnessUp: Int = 2
@@ -53,11 +53,11 @@ final class BrightnessKeyService: @unchecked Sendable {
     // MARK: - Start / Stop
 
     /// Installs the event tap. Requires Accessibility permissions.
-    /// Safe to call multiple times — a running tap will not be re-created.
+    /// Safe to call multiple times, a running tap will not be re-created.
     func start() {
         guard eventTap == nil else { return }
 
-        // Try creating the tap directly — AXIsProcessTrusted can be unreliable
+        // Try creating the tap directly, AXIsProcessTrusted can be unreliable
         // with ad-hoc signed Debug builds (TCC entry invalidates after each rebuild).
         let retained = Unmanaged.passRetained(self)
         selfRetained = retained
@@ -76,7 +76,7 @@ final class BrightnessKeyService: @unchecked Sendable {
         guard let tap else {
             retained.release()
             selfRetained = nil
-            NSLog("[BrightnessKeyService] Event tap creation failed — no accessibility permission")
+            NSLog("[BrightnessKeyService] Event tap creation failed, no accessibility permission")
             retryUntilArmed()
             return
         }
@@ -187,10 +187,10 @@ final class BrightnessKeyService: @unchecked Sendable {
             return Unmanaged.passRetained(event)
         }
 
-        // For key-up events always pass through — only consume key-down on external displays.
+        // For key-up events always pass through, only consume key-down on external displays.
         guard isKeyDown else { return Unmanaged.passRetained(event) }
 
-        // Route by user preference. Read on the main actor — this callback runs on
+        // Route by user preference. Read on the main actor, this callback runs on
         // the main run loop (see class docs), so assumeIsolated is safe here.
         switch MainActor.assumeIsolated({ SettingsService.shared.brightnessKeyTarget }) {
         case .allDisplays:
@@ -256,7 +256,7 @@ final class BrightnessKeyService: @unchecked Sendable {
             let displays = DisplayManagerAccessor.shared.displays
             guard let display = displays.first(where: { $0.displayID == displayID }) else { return }
             let newBrightness = max(0.0, min(100.0, display.brightness + step))
-            // Use smooth animation — cancels any in-progress animation automatically.
+            // Use smooth animation, cancels any in-progress animation automatically.
             BrightnessService.shared.setBrightnessSmooth(newBrightness, for: display)
 
             // Show OSD on the external display where brightness was adjusted.

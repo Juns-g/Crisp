@@ -102,7 +102,7 @@ final class ResolutionService: @unchecked Sendable {
     ///   4. Fallback: try CGSConfigureDisplayMode (private API) on the source.
     func setDisplayMode(_ mode: DisplayMode, for displayID: CGDirectDisplayID) async -> Bool {
         PresetService.shared.noteManualChange()
-        // Resolve mirror source — the physical display may mirror a virtual display
+        // Resolve mirror source, the physical display may mirror a virtual display
         let (targetID, isMirrorRedirect) = resolvedTargetDisplayID(for: displayID)
         #if DEBUG
         if isMirrorRedirect {

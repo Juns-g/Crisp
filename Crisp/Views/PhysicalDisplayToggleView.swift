@@ -104,7 +104,7 @@ struct ReconnectDisplaysSection: View {
 /// One disconnected-display row. The whole row highlights and is tappable to
 /// reconnect (like clicking a network in the native Wi-Fi menu), with a
 /// "Reconnect" hint that is always visible and brightens to the accent color on
-/// hover — so the action is discoverable at rest, not a small stray button.
+/// hover, so the action is discoverable at rest, not a small stray button.
 private struct DisconnectedDisplayRow: View {
     let record: PhysicalDisplayToggleService.DisconnectedDisplay
     let busy: Bool

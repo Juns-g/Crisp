@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// "Auto Brightness" section — follows builtin screen brightness and adjusts external display brightness automatically.
+/// "Auto Brightness" section, follows builtin screen brightness and adjusts external display brightness automatically.
 struct AutoBrightnessView: View {
     @StateObject private var service = AutoBrightnessService.shared
 

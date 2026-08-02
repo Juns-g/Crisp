@@ -69,7 +69,7 @@ extension Notification.Name {
     static let crispPanelDidClose = Notification.Name("crisp.panelDidClose")
 
     /// Posted each time the panel opens, so content mirroring live external state
-    /// (e.g. the system auto-brightness toggle) can re-read it — the view mounts once,
+    /// (e.g. the system auto-brightness toggle) can re-read it, the view mounts once,
     /// so its .onAppear can't re-fire on later opens.
     static let crispPanelDidOpen = Notification.Name("crisp.panelDidOpen")
 }
@@ -265,7 +265,7 @@ struct UpdateRow: View {
 
 /// Optional "buy me a coffee" link at the bottom of Settings, styled as a normal
 /// menu row (icon badge + label + hover + trailing ↗) so it's as findable as the
-/// update row — the genre standard for free apps. Never a popup or launch-time
+/// update row, the genre standard for free apps. Never a popup or launch-time
 /// nag, and every feature stays free.
 struct SupportRow: View {
     // Owned by the parent (SettingsView) so its panel-close handler can collapse
@@ -496,7 +496,7 @@ struct MenuBarView: View {
                         .curtainReveal(showVirtualDisplays)
 
                     // Arrange Displays (Phase 4): shown whenever more than one
-                    // display exists to arrange — including an active virtual one
+                    // display exists to arrange, including an active virtual one
                     // (visibleDisplays excludes virtuals, so count all displays).
                     if displayManager.displays.count > 1 {
                         ExpandableRow(
@@ -565,7 +565,7 @@ struct MenuBarView: View {
         Divider().opacity(0.25).padding(.horizontal, 12)
 
         // Quit: a plain left-aligned menu row (like the Wi-Fi menu's
-        // "Wi-Fi Settings…" footer) — highlights on hover, not a button.
+        // "Wi-Fi Settings…" footer), highlights on hover, not a button.
         // Fixed at the bottom, does not scroll with content.
         HStack {
             Text("Quit Crisp")
@@ -811,7 +811,7 @@ struct SettingsView: View {
 
             // Optional support link, tucked next to the version stamp where
             // "about" info lives. Muted, but with a link affordance so it doesn't
-            // read as static text — no popup, no launch nag; every feature stays free.
+            // read as static text, no popup, no launch nag; every feature stays free.
             SupportRow(expanded: $showSupport)
         }
         .padding(.vertical, 6)

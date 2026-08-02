@@ -22,7 +22,7 @@ final class PhysicalDisplayToggleService: ObservableObject {
         loadDesired()
     }
 
-    /// Snapshot of a display we disconnected — kept because a disconnected display no longer
+    /// Snapshot of a display we disconnected, kept because a disconnected display no longer
     /// appears in DisplayManager.displays, so we need its metadata to render a Reconnect row.
     struct DisconnectedDisplay: Identifiable, Codable, Sendable, Equatable {
         let uuid: String            // stable identity across CGDirectDisplayID reassignment
@@ -126,7 +126,7 @@ final class PhysicalDisplayToggleService: ObservableObject {
         let displayID = display.displayID
         if wouldLeaveNoActiveDisplay(displayID) { return .failure(.wouldLeaveNoActiveDisplay) }
 
-        // Snapshot BEFORE disabling — afterwards the display is gone from the normal APIs.
+        // Snapshot BEFORE disabling, afterwards the display is gone from the normal APIs.
         let snapshot = DisconnectedDisplay(
             uuid: display.displayUUID,
             displayID: displayID,
@@ -195,7 +195,7 @@ final class PhysicalDisplayToggleService: ObservableObject {
 
     /// Runs SLSConfigureDisplayEnabled inside a CG configuration transaction.
     /// `.permanently` is the flag the proven implementations (Lunar BlackOut, screen_tune,
-    /// BetterDisplay) use — it commits the change so the disconnect actually takes effect.
+    /// BetterDisplay) use, it commits the change so the disconnect actually takes effect.
     private func setEnabled(_ enabled: Bool, displayID: CGDirectDisplayID) async -> Result<Void, ToggleError> {
         await CGHelpers.runWithTimeout(seconds: 10, fallback: .failure(.configurationFailed(.failure))) {
             var config: CGDisplayConfigRef?
@@ -264,7 +264,7 @@ final class PhysicalDisplayToggleService: ObservableObject {
               let decoded = try? JSONDecoder().decode([DisconnectedDisplay].self, from: data)
         else { return }
         disconnected = decoded
-        // By design we do NOT auto-disconnect on launch — restarting the app must never
+        // By design we do NOT auto-disconnect on launch, restarting the app must never
         // black out a screen on its own. The loaded list only populates the "Disconnected"
         // UI so the user can reconnect (or ignore) at their choice. Only the sleep/wake path
         // re-applies disconnect, via reapplyOnWake().

@@ -76,7 +76,7 @@ struct DisplayDetailView: View {
             // Disconnect this physical display (Apple Silicon only; hidden for the last screen)
             DisconnectDisplayRow(display: display)
 
-            // macOS "Automatically adjust brightness" (ambient light) — grouped with the
+            // macOS "Automatically adjust brightness" (ambient light), grouped with the
             // other built-in-only toggles; renders only on ALS panels, absent on externals.
             SystemAutoBrightnessView(display: display)
 

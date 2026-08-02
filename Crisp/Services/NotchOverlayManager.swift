@@ -20,7 +20,7 @@ class NotchOverlayManager {
         var toRemove: [CGDirectDisplayID] = []
         for (displayID, window) in overlayWindows {
             guard let screen = NSScreen.screen(for: displayID) else {
-                // Screen gone — close overlay
+                // Screen gone, close overlay
                 window.close()
                 toRemove.append(displayID)
                 continue

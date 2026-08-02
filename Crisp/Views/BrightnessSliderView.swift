@@ -115,7 +115,7 @@ struct BrightnessSliderView: View {
                         if !dragConfirmed {
                             // It was a click, not a drag. DDC external monitors physically flash
                             // on every brightness write, so a multi-step fade just multiplies the
-                            // flicker — write those once, instantly. Built-in and software (gamma)
+                            // flicker, write those once, instantly. Built-in and software (gamma)
                             // brightness fade smoothly with no flash, so glide those to the target
                             // (the thumb is already there; hold it until the fade lands).
                             if ddcStatus == true {
@@ -149,7 +149,7 @@ struct BrightnessSliderView: View {
                 .onChange(of: localBrightness) { _, newValue in
                     guard isDragging else { return }
                     if dragConfirmed {
-                        // Apply immediately — the service chooses software or DDC internally,
+                        // Apply immediately, the service chooses software or DDC internally,
                         // and its coalescing writer keeps the I2C bus from flooding.
                         display.brightness = newValue
                         Task { @MainActor in

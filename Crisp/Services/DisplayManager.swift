@@ -137,7 +137,7 @@ class DisplayManager: ObservableObject {
         let product = display.modelNumber
         guard vendor != 0, product != 0 else { return }
 
-        // Already enabled — nothing to do
+        // Already enabled, nothing to do
         guard !HiDPIService.shared.isHiDPIEnabled(vendor: vendor, product: product) else { return }
 
         // Determine native resolution from available modes
@@ -182,7 +182,7 @@ class DisplayManager: ObservableObject {
 
     /// Refreshes mode info and main-display flag for already-tracked displays
     /// (for setModeFlag / setMainFlag events).
-    /// Cheaper than a full `refreshDisplays()` — does not add/remove DisplayInfo objects.
+    /// Cheaper than a full `refreshDisplays()`, does not add/remove DisplayInfo objects.
     func refreshExistingDisplayModes() {
         for display in displays {
             // Always refresh isMain synchronously since it's cheap and needed for setMainFlag events.

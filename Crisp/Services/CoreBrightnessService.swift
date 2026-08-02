@@ -54,7 +54,7 @@ final class CoreBrightnessService: ObservableObject {
     /// Keep the published state live while the panel is closed, so it opens already-correct
     /// instead of visibly flipping a beat after it appears (the on-open refresh then finds
     /// nothing to change). Dark mode broadcasts a distributed notification; Night Shift /
-    /// True Tone deliver a CoreBrightness status callback. Each just re-reads via refresh() —
+    /// True Tone deliver a CoreBrightness status callback. Each just re-reads via refresh(), 
     /// event-driven, never a poll. Singleton, so the observers live for the process.
     private func observeSystemChanges() {
         // Dark mode: Control Center / System Settings post this app-wide.

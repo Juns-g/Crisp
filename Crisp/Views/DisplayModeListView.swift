@@ -440,7 +440,7 @@ struct DisplayModeSection: View {
     /// Whether the dense smooth-scaling ladder is actually enumerated for this display (≥ half
     /// its sub-native sizes present among the modes). The real "is it on" signal, independent
     /// of any stored flag; it is exactly what the slider's density reflects. When true the
-    /// enable row is hidden — there is nothing left to do.
+    /// enable row is hidden, there is nothing left to do.
     private var smoothModesPresent: Bool {
         let (w, h) = display.nativeResolution
         let injected = HiDPIService.shared.smoothScaledLogicalSizes(nativeWidth: w, nativeHeight: h)

@@ -6,7 +6,7 @@ import CoreGraphics
 @_silgen_name("CGDisplayIOServicePort")
 private func CGDisplayIOServicePort(_ display: CGDirectDisplayID) -> io_service_t
 
-// DisplayServices private framework — built-in panel brightness on Apple Silicon,
+// DisplayServices private framework, built-in panel brightness on Apple Silicon,
 // where IODisplayConnect no longer exists (CoreDisplay_Display_SetUserBrightness
 // is also a no-op there). Loaded via dlsym, same pattern as AutoBrightnessService.
 private let _DSSetBrightness: (@convention(c) (CGDirectDisplayID, Float) -> Int32)? = {
@@ -111,7 +111,7 @@ final class BrightnessAnimator: @unchecked Sendable {
     ) {
         cancel()
 
-        // If from ≈ to, no animation needed — just apply final value.
+        // If from ≈ to, no animation needed, just apply final value.
         guard abs(to - from) > 0.001, steps > 1 else {
             handler(to, true)
             return
@@ -223,7 +223,7 @@ final class BrightnessService: @unchecked Sendable {
     // MARK: - Public API
 
     /// `animated: true` glides the built-in slider to the freshly-read value
-    /// instead of snapping — used by the ~1s poll so an ambient-sensor auto-adjust
+    /// instead of snapping, used by the ~1s poll so an ambient-sensor auto-adjust
     /// reads as smooth motion. Instant (default) on load/wake where the slider
     /// should show the real value immediately.
     @MainActor
@@ -290,7 +290,7 @@ final class BrightnessService: @unchecked Sendable {
                 // A failed/ignored read does NOT mean DDC is unavailable: many monitors
                 // accept brightness *writes* but never answer *reads* (they ack the I2C
                 // transaction with stale/null bytes, now rejected by DDCService). Leaving
-                // availability undetermined lets the write path decide — marking it false
+                // availability undetermined lets the write path decide, marking it false
                 // here would wrongly force the gamma/software fallback on a display whose
                 // hardware backlight control works fine, just showing a stale slider value.
             }
@@ -344,7 +344,7 @@ final class BrightnessService: @unchecked Sendable {
             let currentStatus: Bool? = ddcAvailableLock.withLock { ddcAvailable[displayID] }
 
             if currentStatus == false {
-                // DDC known unavailable — go straight to software fallback
+                // DDC known unavailable, go straight to software fallback
                 queue.async { [weak self] in
                     self?.setSoftwareBrightness(clamped, for: displayID)
                 }
@@ -386,7 +386,7 @@ final class BrightnessService: @unchecked Sendable {
     /// The DDC/CI (MCCS) spec asks hosts to wait ~50ms after a "Set VCP Feature"
     /// before the next message; writing faster (a fast slider drag fires ~60/sec)
     /// floods the I2C bus and makes many panels visibly flicker. The coalescing
-    /// pump still applies the latest value — this just caps the cadence at ~20/sec.
+    /// pump still applies the latest value, this just caps the cadence at ~20/sec.
     private let minDDCWriteInterval: TimeInterval = 0.05
 
     /// DDC 0 on most monitors means "minimum backlight", which is still visibly bright.
@@ -503,7 +503,7 @@ final class BrightnessService: @unchecked Sendable {
     /// - For built-in displays: 8 IOKit writes over 200ms mirror the software path.
     ///
     /// Cancels any previously running animation for the same display, so rapid key presses
-    /// always feel responsive — the animation re-targets from wherever it currently is.
+    /// always feel responsive, the animation re-targets from wherever it currently is.
     @MainActor
     func setBrightnessSmooth(
         _ targetBrightness: Double,
@@ -579,7 +579,7 @@ final class BrightnessService: @unchecked Sendable {
             return
         }
 
-        // No active gamma adjustment — write a plain dimmed ramp directly.
+        // No active gamma adjustment, write a plain dimmed ramp directly.
         let floatFactor = Float(factor)
         let tableSize: UInt32 = 256
         var red   = [CGGammaValue](repeating: 0, count: Int(tableSize))
@@ -649,7 +649,7 @@ final class BrightnessService: @unchecked Sendable {
 
     /// Returns the io_service_t for the built-in display using CGDisplayIOServicePort.
     /// Falls back to iterating IODisplayConnect services if CGDisplayIOServicePort returns null.
-    /// Caller does NOT need to release — CGDisplayIOServicePort returns a non-retained port.
+    /// Caller does NOT need to release, CGDisplayIOServicePort returns a non-retained port.
     private func builtinIOService() -> io_service_t? {
         // Find the built-in CGDirectDisplayID
         var displayCount: UInt32 = 0

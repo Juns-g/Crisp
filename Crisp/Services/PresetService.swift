@@ -171,7 +171,7 @@ final class PresetService: ObservableObject, @unchecked Sendable {
             let displayID = display.displayID
             print("[PresetService]   -> matched display '\(display.name)' (id=\(displayID)), \(display.availableModes.count) available modes")
 
-            // Set resolution — only when the preset includes it (width present).
+            // Set resolution, only when the preset includes it (width present).
             // The built-in panel is driven too: a preset restores whatever mode was
             // live when it was captured, so an unchanged built-in resolves to the
             // alreadyActive no-op below. Brightness and arrangement apply regardless.

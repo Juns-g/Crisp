@@ -26,7 +26,7 @@ struct SavePresetView: View {
                     .transition(.opacity)
             } else {
                 Button(action: {
-                    // Focus the name field the instant the reveal finishes —
+                    // Focus the name field the instant the reveal finishes, 
                     // completion handler, not a timer.
                     withAnimation(.panelResize) {
                         isShowingForm = true

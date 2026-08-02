@@ -1,7 +1,7 @@
 import SwiftUI
 import CoreGraphics
 
-// DisplayServices private framework — the macOS "Automatically adjust brightness"
+// DisplayServices private framework, the macOS "Automatically adjust brightness"
 // (ambient light compensation) setting, same dlopen already used by BrightnessService.
 // Only built-in / ambient-light-sensor panels support it; elsewhere the getter returns
 // non-zero, which we treat as "unsupported" (toggle hidden) rather than guessing by model.
@@ -19,7 +19,7 @@ private let _DSAmbientSet: (@convention(c) (CGDirectDisplayID, UInt8) -> Int32)?
 enum SystemAutoBrightness {
     /// Supported only where the OS ambient-light auto-brightness applies (built-in and
     /// ALS-equipped panels like Studio Display). The getter returns 0 there and an error
-    /// on sensor-less externals, so its success IS the support check — no model guessing.
+    /// on sensor-less externals, so its success IS the support check, no model guessing.
     static func supported(_ id: CGDirectDisplayID) -> Bool {
         guard let get = _DSAmbientEnabled else { return false }
         var on: UInt8 = 0

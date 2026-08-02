@@ -2,7 +2,7 @@ import Foundation
 import IOKit
 import CoreGraphics
 
-// DisplayServices private API — reads the builtin display's actual brightness
+// DisplayServices private API, reads the builtin display's actual brightness
 // (0.0–1.0), the value the slider/keys/ambient sensor move. Primary read path:
 // CoreDisplay_Display_GetUserBrightness is pinned at 1.0 on macOS 26 (probe:
 // slider changes moved DisplayServices 0.97→0.72 while CoreDisplay stayed 1.0).
@@ -12,7 +12,7 @@ private let _DisplayServices_GetBrightness: (@convention(c) (CGDirectDisplayID, 
     return unsafeBitCast(sym, to: (@convention(c) (CGDirectDisplayID, UnsafeMutablePointer<Float>) -> Int32).self)
 }()
 
-// CoreDisplay private API — reads the user-set brightness of a display (0.0–1.0).
+// CoreDisplay private API, reads the user-set brightness of a display (0.0–1.0).
 // Loaded via dlsym at runtime to avoid linking against the private CoreDisplay framework.
 private let _CoreDisplay_GetBrightness: (@convention(c) (CGDirectDisplayID) -> Double)? = {
     guard let handle = dlopen("/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay", RTLD_LAZY) else { return nil }
@@ -177,7 +177,7 @@ final class AutoBrightnessService: ObservableObject, @unchecked Sendable {
         // Re-pin a display's offset when the user manually adjusts it, so relative mode
         // holds their chosen level instead of overriding it after the cooldown.
         // Synchronous (queue nil, on the posting thread) so the offset lands before any
-        // apply can use a stale one — that race is what the 30s cooldown used to mask.
+        // apply can use a stale one, that race is what the 30s cooldown used to mask.
         externalAdjustObserver = NotificationCenter.default.addObserver(
             forName: .crispExternalManualAdjust, object: nil, queue: nil
         ) { [weak self] note in
