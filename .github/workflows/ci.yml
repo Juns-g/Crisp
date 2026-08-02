@@ -30,6 +30,12 @@ jobs:
       # the CLT-only dev machine lacks. Advisory: `|| true` keeps it from blocking
       # while the baseline is unverified — annotations still show on the PR. Drop
       # `|| true` (and add --strict) to make it enforcing once a run is clean.
+      #
+      # The macos-26 image ships no swiftlint, so the lint step used to hit
+      # "command not found" that `|| true` swallowed, making it a silent no-op.
+      # Install it explicitly; the runner has full Xcode so its SourceKit loads.
+      - name: Install SwiftLint
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install swiftlint
       - name: Lint (SwiftLint, advisory)
         run: swiftlint lint --reporter github-actions-logging || true
       # Reuses the release script's dry run: compiles the universal binary,
