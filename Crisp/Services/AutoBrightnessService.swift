@@ -290,6 +290,12 @@ final class AutoBrightnessService: ObservableObject, @unchecked Sendable {
         }
         if UserDefaults.standard.object(forKey: relativeKey) != nil {
             relativeMode = UserDefaults.standard.bool(forKey: relativeKey)
+        } else if UserDefaults.standard.object(forKey: enabledKey) != nil {
+            // Upgrade migration: prior installs (enabledKey persisted before relativeMode
+            // existed) used Auto Brightness under the absolute-mirror behavior; keep it
+            // instead of silently switching them to relative offsets. Fresh installs
+            // (no keys at all) keep the relative default.
+            relativeMode = false
         }
     }
 

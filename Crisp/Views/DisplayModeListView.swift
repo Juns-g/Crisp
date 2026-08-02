@@ -13,6 +13,7 @@ struct DisplayModeSection: View {
     @State private var showRefresh: Bool = false
     @State private var pendingResolutionID: String?
     @State private var pendingRefreshID: Int32?
+    @State private var isSwitching: Bool = false
     @State private var errorMessage: String?
     @State private var sliderIndex: Double = 0
     @State private var smoothBusy: Bool = false
@@ -283,8 +284,11 @@ struct DisplayModeSection: View {
 
     private func selectResolution(_ group: ResolutionGroup) {
         guard group.id != currentGroup?.id, pendingResolutionID == nil else { return }
-        // Keep the current refresh rate when the new resolution offers it.
-        let target = group.modes.first { $0.refreshRate == currentMode?.refreshRate } ?? group.bestMode
+        // Keep the current refresh rate when the new resolution offers it. Tolerant match:
+        // CG reports fractional rates (59.94) where the CGS-surfaced modes carry whole Hz.
+        let target = currentMode.flatMap { cur in
+            group.modes.first { ResolutionService.refreshMatches($0.refreshRate, cur.refreshRate) }
+        } ?? group.bestMode
         pendingResolutionID = group.id
         switchTo(target) { pendingResolutionID = nil }
     }
@@ -296,6 +300,11 @@ struct DisplayModeSection: View {
     }
 
     private func switchTo(_ mode: DisplayMode, done: @escaping () -> Void) {
+        // Serialize across all three entry points (resolution row, refresh row, slider):
+        // the per-row pending flags only guard their own path, and two concurrent
+        // display-config transactions on one display race in WindowServer.
+        guard !isSwitching else { done(); return }
+        isSwitching = true
         let displayID = display.displayID
         Task { @MainActor in
             var success = await ResolutionService.shared.setDisplayMode(mode, for: displayID)
@@ -324,6 +333,7 @@ struct DisplayModeSection: View {
                 }
             }
             done()
+            isSwitching = false
         }
     }
 
@@ -578,9 +588,13 @@ struct DisplayModeSection: View {
         guard modes.indices.contains(i) else { return }
         let target = modes[i]
         // Keep the current refresh rate at that logical size and scaling kind when offered.
-        let mode = display.availableModes.first {
-            $0.isHiDPI == target.isHiDPI && $0.width == target.width && $0.height == target.height &&
-            $0.refreshRate == currentMode?.refreshRate
+        // Tolerant match: CG reports fractional rates (59.94) where the CGS-surfaced modes
+        // carry whole Hz.
+        let mode = currentMode.flatMap { cur in
+            display.availableModes.first {
+                $0.isHiDPI == target.isHiDPI && $0.width == target.width && $0.height == target.height &&
+                ResolutionService.refreshMatches($0.refreshRate, cur.refreshRate)
+            }
         } ?? target
         guard mode.id != currentMode?.id else { return }
         switchTo(mode) { }

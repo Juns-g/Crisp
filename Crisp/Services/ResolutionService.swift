@@ -34,10 +34,11 @@ final class ResolutionService: @unchecked Sendable {
         UserDefaults.standard.set(try? JSONEncoder().encode(savedModes), forKey: Self.savedModesKey)
     }
 
-    /// Refresh rates match within 1 Hz (macOS reports 59.97 for a stored 60, etc.). A stored 0
-    /// means "display default"; treat it as a wildcard so it never blocks an otherwise exact
-    /// resolution match.
-    private static func refreshMatches(_ a: Double, _ b: Double) -> Bool {
+    /// Refresh rates match within 1 Hz (macOS reports 59.97 for a stored 60, etc., and the
+    /// CGS-surfaced hidden modes carry whole-Hz uint16 rates while CG modes carry fractional
+    /// ones). A 0 means "display default"; treat it as a wildcard so it never blocks an
+    /// otherwise exact resolution match.
+    static func refreshMatches(_ a: Double, _ b: Double) -> Bool {
         if a == 0 || b == 0 { return true }
         return abs(a - b) < 1.0
     }
@@ -58,8 +59,13 @@ final class ResolutionService: @unchecked Sendable {
             return
         }
 
+        // Mirror targets can't take CGConfigureDisplayWithDisplayMode (it silently hangs or
+        // fails; their mode is driven by the source), so apply to the mirror source, same as
+        // setDisplayMode.
+        let (targetID, _) = resolvedTargetDisplayID(for: displayID)
+
         let options: CFDictionary = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        guard let rawModes = CGDisplayCopyAllDisplayModes(displayID, options) as? [CGDisplayMode],
+        guard let rawModes = CGDisplayCopyAllDisplayModes(targetID, options) as? [CGDisplayMode],
               let cgMode = rawModes.first(where: {
                   $0.width == saved.width && $0.height == saved.height &&
                   ($0.pixelWidth > $0.width) == saved.hidpi &&
@@ -68,7 +74,7 @@ final class ResolutionService: @unchecked Sendable {
         else { return }
 
         Task.detached(priority: .userInitiated) {
-            _ = await ResolutionService.applyModeSync(cgMode, on: displayID)
+            _ = await ResolutionService.applyModeSync(cgMode, on: targetID)
         }
     }
 
