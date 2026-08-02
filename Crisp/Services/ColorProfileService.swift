@@ -264,8 +264,6 @@ final class ColorProfileService: @unchecked Sendable {
         // CMYK/LUT profile as a display override makes WindowServer abort building the
         // display transform, crashing the whole GUI on every reconnect. Refuse it.
         guard profile.isDisplayProfile else {
-            NSLog("[ColorProfileService] Refused non-display profile '%@' (class=%@, space=%@)",
-                  profile.name, profile.deviceClass, profile.colorSpaceType)
             return false
         }
 

@@ -45,7 +45,6 @@ final class BrightnessHUDService: @unchecked Sendable {
     ///   - screen: The NSScreen on which the OSD should appear
     func show(brightness: Double, on screen: NSScreen) {
         guard let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
-            NSLog("[BrightnessHUD] Could not get CGDirectDisplayID for screen")
             return
         }
 
@@ -54,16 +53,11 @@ final class BrightnessHUDService: @unchecked Sendable {
 
         let conn = NSXPCConnection(machServiceName: "com.apple.OSDUIHelper", options: [])
         conn.remoteObjectInterface = NSXPCInterface(with: OSDUIHelperProtocol.self)
-        conn.interruptionHandler = { NSLog("[BrightnessHUD] XPC connection interrupted") }
-        conn.invalidationHandler = { NSLog("[BrightnessHUD] XPC connection invalidated") }
         conn.resume()
 
-        let proxy = conn.remoteObjectProxyWithErrorHandler { error in
-            NSLog("[BrightnessHUD] XPC error: %@", error.localizedDescription)
-        }
+        let proxy = conn.remoteObjectProxyWithErrorHandler { _ in }
 
         guard let helper = proxy as? OSDUIHelperProtocol else {
-            NSLog("[BrightnessHUD] Failed to get OSDUIHelper proxy")
             conn.invalidate()
             return
         }

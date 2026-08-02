@@ -76,7 +76,6 @@ final class BrightnessKeyService: @unchecked Sendable {
         guard let tap else {
             retained.release()
             selfRetained = nil
-            NSLog("[BrightnessKeyService] Event tap creation failed, no accessibility permission")
             retryUntilArmed()
             return
         }
@@ -88,8 +87,6 @@ final class BrightnessKeyService: @unchecked Sendable {
         self.eventTap = tap
         self.runLoopSource = source
         stopRetrying()
-
-        NSLog("[BrightnessKeyService] Event tap installed successfully")
     }
 
     /// Removes the event tap and releases the retained self reference.
