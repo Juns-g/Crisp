@@ -4,11 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="google-site-verification" content="Pb7coFWl3eF3E_6mT6jdH6sbJYJ5VY3iLoSKt-bNy2w">
-<title>Crisp – Free BetterDisplay &amp; Lunar alternative for macOS</title>
+<title>Crisp: Free BetterDisplay &amp; Lunar alternative for macOS</title>
 <meta name="description" content="Crisp is a free, open-source, lightweight alternative to BetterDisplay and Lunar for macOS: DDC brightness, HiDPI scaling, presets, virtual displays, and arrangement, all in the menu bar.">
-<meta property="og:title" content="Crisp – Free BetterDisplay &amp; Lunar alternative for macOS">
+<meta property="og:title" content="Crisp: Free BetterDisplay &amp; Lunar alternative for macOS">
 <meta property="og:description" content="A free, open-source alternative to BetterDisplay and Lunar: DDC brightness, HiDPI scaling, presets, virtual displays, and arrangement, all in the menu bar.">
 <meta property="og:image" content="https://didriksg.github.io/Crisp/screenshot.png">
+<link rel="canonical" href="https://didriksg.github.io/Crisp/">
+<link rel="alternate" hreflang="en" href="https://didriksg.github.io/Crisp/">
+<link rel="alternate" hreflang="zh-Hans" href="https://didriksg.github.io/Crisp/zh.html">
+<link rel="alternate" hreflang="x-default" href="https://didriksg.github.io/Crisp/">
 <link rel="icon" href="icon.png">
 <style>
   :root {
@@ -27,6 +31,10 @@
     -webkit-font-smoothing: antialiased;
   }
   main { max-width: 880px; margin: 0 auto; padding: 0 24px 64px; }
+  .lang { position: absolute; top: 18px; right: 20px; font-size: 13px; color: var(--muted); }
+  .lang a { color: var(--muted); text-decoration: none; }
+  .lang a:hover { color: var(--text); }
+  .lang .cur { color: var(--text); font-weight: 600; }
   .hero { text-align: center; padding: 72px 0 40px; }
   .hero img.icon { width: 128px; height: 128px; }
   h1 { font-size: 44px; font-weight: 700; letter-spacing: -0.02em; margin-top: 16px; }
@@ -64,6 +72,7 @@
 </head>
 <body>
 <main>
+  <div class="lang"><span class="cur">EN</span> · <a href="zh.html">中文</a></div>
   <section class="hero">
     <img class="icon" src="icon.png" alt="Crisp icon">
     <h1>Crisp</h1>

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crisp：BetterDisplay 和 Lunar 的免费开源平替（macOS 显示器管理）</title>
+<meta name="description" content="Crisp 是 BetterDisplay 和 Lunar 的免费开源平替：一个轻量的 macOS 菜单栏 App，集成 DDC 亮度、HiDPI 缩放、预设、虚拟显示器和排列，连它们收费的功能也免费。">
+<meta property="og:title" content="Crisp：BetterDisplay 和 Lunar 的免费开源平替">
+<meta property="og:description" content="免费开源的 macOS 菜单栏工具：DDC 亮度、HiDPI 缩放、预设、虚拟显示器、排列，一个面板全搞定。">
+<meta property="og:image" content="https://didriksg.github.io/Crisp/screenshot-zh.png">
+<link rel="canonical" href="https://didriksg.github.io/Crisp/zh.html">
+<link rel="alternate" hreflang="zh-Hans" href="https://didriksg.github.io/Crisp/zh.html">
+<link rel="alternate" hreflang="en" href="https://didriksg.github.io/Crisp/">
+<link rel="alternate" hreflang="x-default" href="https://didriksg.github.io/Crisp/">
+<link rel="icon" href="icon.png">
+<style>
+  :root {
+    --bg: #0d0d10;
+    --panel: #17171c;
+    --border: #2a2a32;
+    --text: #f0f0f2;
+    --muted: #9a9aa5;
+    --accent: #3b82f6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Microsoft YaHei", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 880px; margin: 0 auto; padding: 0 24px 64px; }
+  .lang { position: absolute; top: 18px; right: 20px; font-size: 13px; color: var(--muted); }
+  .lang a { color: var(--muted); text-decoration: none; }
+  .lang a:hover { color: var(--text); }
+  .lang .cur { color: var(--text); font-weight: 600; }
+  .hero { text-align: center; padding: 72px 0 40px; }
+  .hero img.icon { width: 128px; height: 128px; }
+  h1 { font-size: 44px; font-weight: 700; letter-spacing: -0.02em; margin-top: 16px; }
+  .tagline { color: var(--muted); font-size: 20px; margin-top: 8px; }
+  .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 28px; }
+  .btn {
+    display: inline-block; padding: 10px 20px; border-radius: 10px;
+    text-decoration: none; font-weight: 600; font-size: 15px;
+    border: 1px solid var(--border); color: var(--text); background: var(--panel);
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn:hover { filter: brightness(1.15); }
+  .brew {
+    margin-top: 20px; display: inline-flex; align-items: center; gap: 10px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; font: 14px ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted);
+    cursor: pointer;
+  }
+  .brew:hover { color: var(--text); }
+  .brew .prompt { color: var(--accent); }
+  .shot { display: block; margin: 32px auto 0; max-width: 406px; width: 100%; border-radius: 12px; }
+  h2 { font-size: 24px; margin: 64px 0 20px; letter-spacing: -0.01em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+  .card h3 { font-size: 16px; margin-bottom: 6px; }
+  .card p { color: var(--muted); font-size: 14.5px; }
+  .demo { width: 100%; border-radius: 12px; border: 1px solid var(--border); }
+  footer {
+    border-top: 1px solid var(--border); margin-top: 72px; padding-top: 28px;
+    color: var(--muted); font-size: 14.5px; text-align: center;
+  }
+  footer a { color: var(--muted); }
+  @media (max-width: 520px) { h1 { font-size: 34px; } .tagline { font-size: 17px; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="lang"><a href="index.html">EN</a> · <span class="cur">中文</span></div>
+  <section class="hero">
+    <img class="icon" src="icon.png" alt="Crisp 图标">
+    <h1>Crisp</h1>
+    <p class="tagline">macOS 藏起来的显示器控制，都装进了这一个菜单栏面板。</p>
+    <p style="color:var(--muted);font-size:16px;margin-top:6px">BetterDisplay 和 Lunar 的免费开源平替，连它们收费的功能也免费。</p>
+    <video class="demo" style="margin-top:32px" src="demo.mp4" autoplay muted loop playsinline controls preload="metadata"></video>
+    <div class="actions">
+      <a class="btn primary" href="https://github.com/didriksg/Crisp/releases/latest/download/Crisp.dmg">下载 macOS 版</a>
+      <a class="btn" href="https://github.com/didriksg/Crisp">GitHub 仓库</a>
+    </div>
+    <div class="brew" onclick="navigator.clipboard.writeText('brew install --cask didriksg/tap/crisp');this.querySelector('.hint').textContent='已复制'">
+      <span class="prompt">$</span> brew install --cask didriksg/tap/crisp
+      <span class="hint" style="font-size:12px">点击复制</span>
+    </div>
+    <p style="color:var(--muted);font-size:13px;margin-top:10px">
+      用 Homebrew 安装，不会有任何安全警告。开源（MIT），已收录于
+      <a href="https://github.com/jaywcjlove/awesome-mac" style="color:var(--muted);text-decoration:underline">awesome-mac</a>。
+    </p>
+  </section>
+
+  <h2>功能</h2>
+  <div class="grid">
+    <div class="card"><h3>任意显示器都能 HiDPI</h3><p>给外接显示器补上 Retina 级的缩放分辨率，2K 及以上会自动配好。</p></div>
+    <div class="card"><h3>哪块屏都能调亮度</h3><p>外接屏走 DDC 硬件控制，不支持的用软件兜底；键盘亮度键作用在光标所在的那块屏上。</p></div>
+    <div class="card"><h3>预设</h3><p>把分辨率、亮度、排列存成一套，一键切换。</p></div>
+    <div class="card"><h3>排列</h3><p>拖拽摆位、一键切换主显示器。</p></div>
+    <div class="card"><h3>系统开关</h3><p>深色模式、夜览、原彩显示，直接在面板里切，不用进系统设置。</p></div>
+    <div class="card"><h3>色彩</h3><p>ICC 配置切换，外加 gamma、对比度、增益微调。</p></div>
+    <div class="card"><h3>虚拟显示器</h3><p>创建 HiDPI 虚拟屏，用于直播、随航或无头 Mac。</p></div>
+    <div class="card"><h3>更多</h3><p>合并亮度滑块、自动亮度跟随内建屏、隐藏刘海、开机启动。</p></div>
+  </div>
+
+  <h2>面板长这样</h2>
+  <img class="shot" src="screenshot-zh.png" alt="Crisp 菜单栏面板">
+
+  <p style="text-align:center;color:var(--text);font-size:15px;margin:56px auto 0;max-width:600px">
+    Crisp 完全免费，所有功能都免费。如果它帮到了你，欢迎<a href="https://ifdian.net/a/didriksg" style="color:var(--accent);text-decoration:none;font-weight:600">在爱发电支持我 →</a><br>
+    <span style="color:var(--muted);font-size:13.5px">帮我覆盖每年 99 美元的 Apple 开发者会员，纯属自愿。</span>
+  </p>
+
+  <footer>
+    <p>免费开源，MIT 许可。要求 macOS 15 及以上。</p>
+    <p>直接下载 DMG？未签名，首次打开时右键 Crisp.app 选「打开」即可。用 Homebrew 安装则不用这一步。</p>
+    <p>最初 fork 自 <a href="https://github.com/huberdf/FreeDisplay">FreeDisplay</a>，感谢当初的启发。</p>
+    <p>指南：<a href="mac-hidpi.html">外接显示器在 Mac 上总是发虚？怎么修</a></p>
+    <p><a href="fix-blurry-external-monitor-macos.html">English guide: Why is my external monitor blurry or tiny on a Mac?</a></p>
+  </footer>
+</main>
+</body>
+</html>
