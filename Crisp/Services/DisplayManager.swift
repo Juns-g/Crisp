@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import AppKit
 
 // Global C-compatible callback for display reconfiguration.
 // Must be a top-level function (not a closure) to be used as a C function pointer.
@@ -38,18 +39,52 @@ class DisplayManager: ObservableObject {
     /// Display whose menu bar the panel was opened on; listed first, like the native displays panel.
     @Published var activePanelDisplayID: CGDirectDisplayID?
 
+    /// A smooth-scaling toggle soft-reconnects the display, which drops it from the list and
+    /// re-adds it as a fresh DisplayInfo, wiping its row's expansion @State. The enable flow
+    /// sets this to the display's stable UUID afterward so the menu re-expands that display's
+    /// detail and Resolution section, landing the user back where they were. Cleared once applied.
+    @Published var pendingResolutionExpandUUID: String?
+
     // nonisolated(unsafe) allows deinit (which is nonisolated in Swift 6) to access this value.
     nonisolated(unsafe) private var callbackContext: UnsafeMutableRawPointer?
+    nonisolated(unsafe) private var screenParamsObserver: NSObjectProtocol?
 
     init() {
         refreshDisplays()
         setupReconfigCallback()
+        // On connect, the CG reconfiguration callback fires before AppKit's
+        // NSScreen.screens includes the new display, so DisplayInfo.init can miss
+        // the monitor's localized name and fall back to "Display N" for good.
+        // AppKit posts this notification exactly when its screen list is current,
+        // which is the first moment the lookup is guaranteed to see the display.
+        screenParamsObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor [weak self] in self?.refreshDisplayNames() }
+        }
     }
 
     deinit {
         if let ctx = callbackContext {
             CGDisplayRemoveReconfigurationCallback(displayReconfigCallback, ctx)
             Unmanaged<DisplayManager>.fromOpaque(ctx).release()
+        }
+        if let obs = screenParamsObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+    }
+
+    /// Re-resolve display names against the now-current NSScreen list, replacing
+    /// any "Display N" fallback a connect-time race left behind (and tracking
+    /// renames macOS applies to its own list).
+    private func refreshDisplayNames() {
+        for display in displays where !display.isBuiltin {
+            if let real = NSScreen.screen(for: display.displayID)?.localizedName,
+               real != display.name {
+                display.name = real
+            }
         }
     }
 
@@ -89,19 +124,27 @@ class DisplayManager: ObservableObject {
         displays = updatedDisplays
         DisplayManagerAccessor.shared.displays = updatedDisplays
 
-        // Regenerate built-in presets (HiDPI mode / Native mode) from updated display list.
-        PresetService.shared.refreshBuiltins()
-
         // Only load details / refresh brightness for newly appeared displays
         for display in addedDisplays {
             Task { await BrightnessService.shared.refreshBrightness(for: display) }
+            // Monitors often answer DDC with nothing (or garbage) for the first
+            // seconds after link training, and a failed connect-time read has no
+            // retry: with auto-brightness on the panel poll skips externals, so a
+            // stale slider seed would stick until the next panel open. One delayed
+            // re-read heals it; the adopt deadband makes it a no-op if the first
+            // read was fine.
+            if !display.isBuiltin {
+                Task {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    await BrightnessService.shared.refreshBrightness(for: display)
+                }
+            }
             Task {
                 await display.loadDetails()
                 // Auto-enable HiDPI for new external 2K+ displays that don't have it yet
                 if !display.isBuiltin {
                     await self.autoEnableHiDPIIfNeeded(for: display)
                 }
-                PresetService.shared.refreshBuiltins()
             }
             // Restore saved gamma/software-brightness adjustments for the reconnected display.
             // Brief delay lets WindowServer settle before we write transfer tables.
@@ -122,6 +165,10 @@ class DisplayManager: ObservableObject {
         // Keep the physical-disconnect list honest: drop any record whose display came back
         // online (re-plugged, or macOS re-enabled it).
         PhysicalDisplayToggleService.shared.reconcile()
+
+        // Keep the built-in brightness observer pointed at the current built-in so the
+        // slider tracks system brightness changes (keys, auto-brightness) live.
+        BrightnessService.shared.startObservingBuiltinBrightness()
     }
 
     /// Auto-enables HiDPI plist override for external 2K+ displays that don't have it yet.
@@ -131,7 +178,7 @@ class DisplayManager: ObservableObject {
         let product = display.modelNumber
         guard vendor != 0, product != 0 else { return }
 
-        // Already enabled — nothing to do
+        // Already enabled, nothing to do
         guard !HiDPIService.shared.isHiDPIEnabled(vendor: vendor, product: product) else { return }
 
         // Determine native resolution from available modes
@@ -140,25 +187,27 @@ class DisplayManager: ObservableObject {
         // Only auto-enable for 2K+ displays (width >= 2560 or total pixels >= 2560*1440)
         guard nativeW >= 2560 || (nativeW * nativeH >= 2560 * 1440) else { return }
 
-        print("[DisplayManager] Auto-enabling HiDPI for \(display.name) (\(nativeW)×\(nativeH), vendor=\(vendor), product=\(product))")
+        // CGS-direct already surfaces the panel's HiDPI scaled modes with no override (the normal
+        // case for 2K+ panels). When those are present, skip the override write + soft-reconnect
+        // entirely: no admin prompt, no blank. The override path below is only a fallback for a
+        // panel that genuinely lacks HiDPI in CGS.
+        if display.availableModes.contains(where: {
+            $0.isHiDPI && $0.pixelWidth >= nativeW && $0.width >= nativeW / 2
+        }) { return }
 
-        let err = await HiDPIService.shared.enableHiDPI(
-            for: display.displayID,
-            vendor: vendor,
-            product: product,
-            nativeWidth: nativeW,
-            nativeHeight: nativeH
-        )
+        // Install the dense smooth-scaling ladder directly, not just the coarse HiDPI set: this
+        // admin prompt is the one interruption, so make it deliver the full scaled slider in one
+        // shot. Anyone enabling HiDPI on a 2K+ external wants that range anyway.
+        let err = HiDPIService.shared.enableSmoothScaling(
+            vendor: vendor, product: product, nativeWidth: nativeW, nativeHeight: nativeH)
 
-        if let err {
-            print("[DisplayManager] Auto-enable HiDPI failed: \(err)")
-        } else {
-            print("[DisplayManager] Auto-enable HiDPI succeeded, refreshing modes")
+        // On success, soft-reconnect so the freshly written override enumerates now (screen
+        // blanks ~1s), instead of the weak probe that left the modes dormant until a physical
+        // reconnect.
+        if err == nil {
+            await PhysicalDisplayToggleService.shared.softReconnect(display)
             HiDPIService.shared.refreshModes(for: display)
-            // Give IOServiceRequestProbe time to re-enumerate modes
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
             await display.loadDetails()
-            PresetService.shared.refreshBuiltins()
         }
     }
 
@@ -170,7 +219,7 @@ class DisplayManager: ObservableObject {
 
     /// Refreshes mode info and main-display flag for already-tracked displays
     /// (for setModeFlag / setMainFlag events).
-    /// Cheaper than a full `refreshDisplays()` — does not add/remove DisplayInfo objects.
+    /// Cheaper than a full `refreshDisplays()`, does not add/remove DisplayInfo objects.
     func refreshExistingDisplayModes() {
         for display in displays {
             // Always refresh isMain synchronously since it's cheap and needed for setMainFlag events.

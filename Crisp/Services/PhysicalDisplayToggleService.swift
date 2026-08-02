@@ -22,7 +22,7 @@ final class PhysicalDisplayToggleService: ObservableObject {
         loadDesired()
     }
 
-    /// Snapshot of a display we disconnected — kept because a disconnected display no longer
+    /// Snapshot of a display we disconnected, kept because a disconnected display no longer
     /// appears in DisplayManager.displays, so we need its metadata to render a Reconnect row.
     struct DisconnectedDisplay: Identifiable, Codable, Sendable, Equatable {
         let uuid: String            // stable identity across CGDirectDisplayID reassignment
@@ -126,7 +126,7 @@ final class PhysicalDisplayToggleService: ObservableObject {
         let displayID = display.displayID
         if wouldLeaveNoActiveDisplay(displayID) { return .failure(.wouldLeaveNoActiveDisplay) }
 
-        // Snapshot BEFORE disabling — afterwards the display is gone from the normal APIs.
+        // Snapshot BEFORE disabling, afterwards the display is gone from the normal APIs.
         let snapshot = DisconnectedDisplay(
             uuid: display.displayUUID,
             displayID: displayID,
@@ -167,9 +167,35 @@ final class PhysicalDisplayToggleService: ObservableObject {
         allDisplaysIncludingDisabled().first { uuid(for: $0) == record.uuid }
     }
 
+    /// Soft-reconnects a display (disable then re-enable its framebuffer) to force macOS to
+    /// re-read a freshly written EDID override and re-enumerate its modes. This is what lets
+    /// smooth-scaling / HiDPI injection take effect without the user physically unplugging the
+    /// cable: IOServiceRequestProbe and SLSDetectDisplays are both too weak (verified no-ops),
+    /// but the off→on framebuffer toggle re-reads the override (verified live: an external's
+    /// mode count went 149→113 when its override was removed and 113→149 when restored, each
+    /// time via this toggle). The screen blanks ~1s. Re-resolves the ID by UUID before
+    /// re-enabling since the disconnect can reassign it, and retries the re-enable so a transient
+    /// failure can't strand a black screen. Unlike disconnect() it leaves the `disconnected` set
+    /// untouched: this is a re-enumeration blip, not a user-visible disconnect. Refuses (false)
+    /// if it would leave no active display, or on Intel.
+    @discardableResult
+    func softReconnect(_ display: DisplayInfo) async -> Bool {
+        guard isSupported else { return false }
+        let startID = display.displayID
+        guard !wouldLeaveNoActiveDisplay(startID) else { return false }
+        guard case .success = await setEnabled(false, displayID: startID) else { return false }
+        try? await Task.sleep(nanoseconds: 900_000_000)  // let the framebuffer drop before re-enabling
+        for _ in 0..<3 {
+            let targetID = allDisplaysIncludingDisabled().first { uuid(for: $0) == display.displayUUID } ?? startID
+            if case .success = await setEnabled(true, displayID: targetID) { return true }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        return false
+    }
+
     /// Runs SLSConfigureDisplayEnabled inside a CG configuration transaction.
     /// `.permanently` is the flag the proven implementations (Lunar BlackOut, screen_tune,
-    /// BetterDisplay) use — it commits the change so the disconnect actually takes effect.
+    /// BetterDisplay) use, it commits the change so the disconnect actually takes effect.
     private func setEnabled(_ enabled: Bool, displayID: CGDirectDisplayID) async -> Result<Void, ToggleError> {
         await CGHelpers.runWithTimeout(seconds: 10, fallback: .failure(.configurationFailed(.failure))) {
             var config: CGDisplayConfigRef?
@@ -238,7 +264,7 @@ final class PhysicalDisplayToggleService: ObservableObject {
               let decoded = try? JSONDecoder().decode([DisconnectedDisplay].self, from: data)
         else { return }
         disconnected = decoded
-        // By design we do NOT auto-disconnect on launch — restarting the app must never
+        // By design we do NOT auto-disconnect on launch, restarting the app must never
         // black out a screen on its own. The loaded list only populates the "Disconnected"
         // UI so the user can reconnect (or ignore) at their choice. Only the sleep/wake path
         // re-applies disconnect, via reapplyOnWake().

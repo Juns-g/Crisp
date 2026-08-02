@@ -18,11 +18,14 @@ struct VirtualDisplayView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if service.configs.isEmpty && !showCreateForm {
+                // Centered secondary text is the native empty-state idiom ("No
+                // Recent Items"); a label-column indent here reads as an orphaned
+                // row floating mid-panel with no icon to anchor it.
                 Text("No virtual displays yet")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 10)
             } else {
                 ForEach(service.configs) { config in
                     if editingID == config.id {
@@ -212,7 +215,7 @@ struct VirtualDisplayRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            MenuItemIcon(systemName: "display.2", color: isActive ? .blue : .gray)
+            MenuItemIcon(systemName: "display.2", color: .blue, active: isActive)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(config.name)
@@ -269,7 +272,8 @@ struct VirtualDisplayRow: View {
         }
     }
 
-    private func pill(_ text: String, color: Color) -> some View {
+    // LocalizedStringKey, not String: Text(String) is the non-localizing overload.
+    private func pill(_ text: LocalizedStringKey, color: Color) -> some View {
         Text(text)
             .font(.caption2)
             .fontWeight(.medium)

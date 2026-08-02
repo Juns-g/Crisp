@@ -48,7 +48,7 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
 
     @Published var configs: [VirtualDisplayConfig] = []
 
-    /// Active config IDs — populated when a CGVirtualDisplay is alive.
+    /// Active config IDs, populated when a CGVirtualDisplay is alive.
     @Published private(set) var activeConfigIDs: Set<UUID> = []
 
     /// Strong references to live CGVirtualDisplay objects.
@@ -56,6 +56,11 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
     private var activeDisplayObjects: [UUID: CGVirtualDisplay] = [:]
 
     private let configsKey = "crisp.VirtualDisplayConfigs"
+
+    /// Vendor ID stamped on every Crisp virtual display's descriptor. Also the
+    /// race-free signature we filter on: CGDisplayVendorNumber reports it the
+    /// instant WindowServer brings the display online.
+    static let crispVirtualVendorID: UInt32 = 0xEEEE
 
     // MARK: - Queries
 
@@ -65,7 +70,12 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
 
     /// Returns true if `displayID` is a virtual display managed by this service.
     func isVirtualDisplay(_ displayID: CGDirectDisplayID) -> Bool {
-        activeDisplayObjects.values.contains { $0.displayID == displayID }
+        // Match by our stamped vendor ID first: it's live from CG the moment the
+        // display is online, so a freshly created one is filtered on the very
+        // first refresh instead of flashing as a top-level display in the gap
+        // before activeDisplayObjects records it. The object set is a backstop.
+        if CGDisplayVendorNumber(displayID) == Self.crispVirtualVendorID { return true }
+        return activeDisplayObjects.values.contains { $0.displayID == displayID }
     }
 
     // MARK: - Create / Destroy
@@ -102,7 +112,7 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
         // dummy-display tools (BetterDisplay) present virtual displays.
         // Note: the "what to show" / mirror-or-extend prompt is gated on the
         // display's reported type (macOS treats these as HDMI/TV), not on physical
-        // size, so shrinking the reported size does NOT avoid it — it only changes
+        // size, so shrinking the reported size does NOT avoid it, it only changes
         // the default scaling. Suppressing the prompt would need an EDID override
         // (mark as DisplayPort), which this CGVirtualDisplay API doesn't expose.
         let ppi: Double = 110.0
@@ -113,7 +123,7 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
         descriptor.maxPixelsWide = UInt32(w)
         descriptor.maxPixelsHigh = UInt32(h)
         descriptor.name = config.name.isEmpty ? String(localized: "Crisp Virtual") : config.name
-        descriptor.vendorID = 0xEEEE  // non-zero required — 0 causes CGVirtualDisplay(descriptor:) to return nil
+        descriptor.vendorID = Self.crispVirtualVendorID  // non-zero required, 0 causes CGVirtualDisplay(descriptor:) to return nil
         // Identity must be both UNIQUE per config (else a second virtual display
         // collides with the first, which WindowServer mirrors/rejects) and STABLE
         // across recreations (macOS keys per-display settings, including the
@@ -124,7 +134,7 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
         let ident = config.id.uuid
         descriptor.productID = UInt32(ident.0) << 24 | UInt32(ident.1) << 16 | UInt32(ident.2) << 8 | UInt32(ident.3)
         descriptor.serialNum = UInt32(ident.4) << 24 | UInt32(ident.5) << 16 | UInt32(ident.6) << 8 | UInt32(ident.7)
-        // DO NOT set queue or color primaries — they are not needed and may interfere with creation
+        // DO NOT set queue or color primaries, they are not needed and may interfere with creation
 
         guard let virtualDisplay = CGVirtualDisplay(descriptor: descriptor) else {
             return false
@@ -164,7 +174,7 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
         guard applyResult else { return false }
         guard virtualDisplay.displayID != kCGNullDirectDisplay else { return false }
 
-        // Back on main actor — store the strong reference
+        // Back on main actor, store the strong reference
         activeDisplayObjects[config.id] = virtualDisplay
         activeConfigIDs.insert(config.id)
 
@@ -299,9 +309,6 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
                     // still be registered with WindowServer. Skip creation if an online
                     // virtual display with matching dimensions already exists.
                     guard !virtualDisplayAlreadyExists(width: config.width, height: config.height) else {
-                        #if DEBUG
-                        print("[VirtualDisplayService] autoCreate skipped — virtual display \(config.width)×\(config.height) already online")
-                        #endif
                         continue
                     }
                     _ = await create(config: config)

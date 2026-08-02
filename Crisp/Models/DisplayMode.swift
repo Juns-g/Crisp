@@ -30,8 +30,12 @@ struct DisplayMode: Identifiable, Equatable {
 
     var refreshRateString: String {
         guard refreshRate > 0 else { return "-- Hz" }
-        // Round fractional rates to nearest integer: 59.97 → "60Hz", 119.88 → "120Hz"
-        return "\(Int(refreshRate.rounded()))Hz"
+        let rounded = refreshRate.rounded()
+        // Whole-number timings render clean ("60Hz"). NTSC fractional timings keep two
+        // decimals ("59.94Hz", "47.95Hz") so they don't collapse onto the neighbouring
+        // whole rate and show up as duplicate rows, matching System Settings.
+        if abs(refreshRate - rounded) < 0.01 { return "\(Int(rounded))Hz" }
+        return String(format: "%.2fHz", refreshRate)
     }
 
     // MARK: - Enumeration helpers
@@ -56,7 +60,7 @@ struct DisplayMode: Identifiable, Equatable {
         let maxPixelWidth = nativePixelWidth(from: rawModes)
 
         var seen = Set<Int32>()
-        return rawModes.compactMap { mode -> DisplayMode? in
+        var modes: [DisplayMode] = rawModes.compactMap { mode -> DisplayMode? in
             let modeID = mode.ioDisplayModeID
             guard seen.insert(modeID).inserted else { return nil }  // deduplicate
             guard mode.isUsableForDesktopGUI() else { return nil }
@@ -78,13 +82,62 @@ struct DisplayMode: Identifiable, Equatable {
                 isNative: pw >= maxPixelWidth
             )
         }
-        .sorted { lhs, rhs in
+
+        // Merge in every GPU-scaled HiDPI mode CG hides (see cgsHiddenHiDPIModes): the panel's
+        // clean scaled resolutions (1600x900, 2048x1152, full 2560x1440 refresh set, ...) that
+        // CGS carries without any override, so we can offer and apply them directly like BetterDisplay.
+        let knownIDs = Set(modes.map { $0.id })
+        let nativeAR = rawModes.max(by: { $0.pixelWidth * $0.pixelHeight < $1.pixelWidth * $1.pixelHeight })
+            .map { Double($0.pixelWidth) / Double($0.pixelHeight) } ?? 0
+        modes += cgsHiddenHiDPIModes(for: displayID, excludingIDs: knownIDs,
+                                     maxPixelWidth: maxPixelWidth, nativeAspect: nativeAR)
+
+        return modes.sorted { lhs, rhs in
             if lhs.width != rhs.width { return lhs.width > rhs.width }
             if lhs.height != rhs.height { return lhs.height > rhs.height }
             if lhs.refreshRate != rhs.refreshRate { return lhs.refreshRate > rhs.refreshRate }
             if lhs.isHiDPI != rhs.isHiDPI { return lhs.isHiDPI }
             return false
         }
+    }
+
+    /// GPU-scaled HiDPI modes that `CGDisplayCopyAllDisplayModes` omits. When a scaled resolution
+    /// collides with a real EDID timing (e.g. 1920x1080 HiDPI, whose 3840x2160 backing the panel
+    /// advertises as a real 4K timing at only 50/60Hz), CG surfaces just that low-refresh timing
+    /// and drops the GPU-scaled full-refresh variant. The private CGS list still carries it.
+    /// Return every usable HiDPI mode CG omits (not just refresh variants of sizes CG already
+    /// lists): these are the panel's clean scaled resolutions the private CGS list carries with no
+    /// override plist, which is exactly what BetterDisplay applies. Same id space as CG
+    /// (modeNumber == ioDisplayModeID), so ResolutionService applies them directly via
+    /// CGSConfigureDisplayMode: no override write, no reconnect, no blank.
+    private static func cgsHiddenHiDPIModes(for displayID: CGDirectDisplayID,
+                                            excludingIDs known: Set<Int32>,
+                                            maxPixelWidth: Int,
+                                            nativeAspect: Double) -> [DisplayMode] {
+        var count: Int32 = 0
+        guard CGSGetNumberOfDisplayModes(displayID, &count) == .success, count > 0 else { return [] }
+        let length = Int32(MemoryLayout<CGSDisplayModeDescription>.size)
+
+        var out: [DisplayMode] = []
+        for i in 0..<count {
+            var d = CGSDisplayModeDescription()
+            guard CGSGetDisplayModeDescriptionOfLength(displayID, i, &d, length) == .success else { continue }
+            if d.flags & 0x40000000 != 0 { continue }   // macOS-unusable (isUsableForDesktopGUI == false)
+            guard d.density >= 1.5 else { continue }      // HiDPI (2x backing) only
+            let id = Int32(bitPattern: d.modeNumber)
+            if known.contains(id) { continue }            // already surfaced by CG
+            let w = Int(d.width), h = Int(d.height)
+            // Panel aspect only: CGS also lists off-aspect HiDPI modes (e.g. 4:3 on a 16:9 panel)
+            // that render pillar-boxed; drop them, the way the built-in notch filter does.
+            if nativeAspect > 0, abs(Double(w) / Double(h) - nativeAspect) / nativeAspect >= 0.02 { continue }
+            let pw = Int((Float(d.width) * d.density).rounded())
+            let ph = Int((Float(d.height) * d.density).rounded())
+            out.append(DisplayMode(id: id, width: w, height: h,
+                                   pixelWidth: pw, pixelHeight: ph,
+                                   refreshRate: Double(d.freq),
+                                   isHiDPI: pw > w, isNative: pw >= maxPixelWidth))
+        }
+        return out
     }
 
     /// Returns the current active display mode.

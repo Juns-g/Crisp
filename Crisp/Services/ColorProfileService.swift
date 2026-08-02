@@ -8,12 +8,26 @@ struct ICCProfile: Identifiable, Equatable {
     let name: String
     let path: URL
     let colorSpaceType: String  // "RGB", "CMYK", "Gray", etc.
+    /// ICC device-class signature: "mntr" (display), "prtr" (printer),
+    /// "scnr" (scanner), "spac" (color-space conversion), etc. "" if unreadable.
+    let deviceClass: String
 
-    init(name: String, path: URL, colorSpaceType: String) {
+    /// Whether this profile is safe to assign as a display's ColorSync profile.
+    /// Displays take RGB, matrix-based profiles, the monitor ("mntr") and RGB
+    /// working-space ("spac") classes. Printer/scanner/CMYK/LUT profiles can make
+    /// WindowServer abort while building the display transform, crashing the whole
+    /// GUI on every reconnect (recoverable only in Safe Mode; seen on AOC Q27G3XMN),
+    /// so they must never be offered or assigned.
+    var isDisplayProfile: Bool {
+        colorSpaceType == "RGB" && (deviceClass == "mntr" || deviceClass == "spac")
+    }
+
+    init(name: String, path: URL, colorSpaceType: String, deviceClass: String) {
         self.id = UUID()
         self.name = name
         self.path = path
         self.colorSpaceType = colorSpaceType
+        self.deviceClass = deviceClass
     }
 
     /// Convenience failable initializer: loads profile metadata from a file URL.
@@ -35,8 +49,11 @@ final class ColorProfileService: @unchecked Sendable {
 
     // MARK: - Profile Enumeration
 
-    /// Returns all installed ICC profiles sorted alphabetically.
-    func enumerateProfiles() async -> [ICCProfile] {
+    /// Returns the display-assignable ICC profiles for the given display, sorted
+    /// alphabetically, matching macOS's own Displays color list: the standard RGB
+    /// profiles plus only THIS display's own factory profile. Other monitors'
+    /// per-display profiles are hidden. `displayUUID` is `DisplayInfo.displayUUID`.
+    func enumerateProfiles(for displayUUID: String) async -> [ICCProfile] {
         await Task.detached(priority: .userInitiated) {
             var profiles: [ICCProfile] = []
             let searchURLs: [URL] = [
@@ -67,9 +84,22 @@ final class ColorProfileService: @unchecked Sendable {
                 }
             }
 
-            return profiles.sorted {
-                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-            }
+            // Only offer profiles that are safe to assign to a display. A non-display
+            // profile (printer/scanner/CMYK/LUT) crashes WindowServer on assignment.
+            return profiles
+                .filter { $0.isDisplayProfile }
+                .filter { profile in
+                    // Match macOS's list: standard profiles show for every display, but
+                    // a per-display factory profile (.../ColorSync/Profiles/Displays/)
+                    // shows only for the display whose UUID is in its filename. Keeps
+                    // other monitors' profiles out of this display's list.
+                    let path = profile.path.path
+                    guard path.contains("/ColorSync/Profiles/Displays/") else { return true }
+                    return path.range(of: displayUUID, options: .caseInsensitive) != nil
+                }
+                .sorted {
+                    $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                }
         }.value
     }
 
@@ -80,6 +110,7 @@ final class ColorProfileService: @unchecked Sendable {
     private static func makeProfileImpl(from url: URL) -> ICCProfile? {
         let name: String
         let csType: String
+        let deviceClass: String
 
         if let rawProfile = ColorSyncProfileCreateWithURL(url as CFURL, nil) {
             let profile = rawProfile.takeRetainedValue()
@@ -88,32 +119,48 @@ final class ColorProfileService: @unchecked Sendable {
             } else {
                 name = url.deletingPathExtension().lastPathComponent
             }
-            csType = colorSpaceType(from: profile)
+            let sigs = headerSignatures(from: profile)
+            csType = friendlyColorSpace(sigs.colorSpace)
+            deviceClass = sigs.deviceClass
         } else {
             name = url.deletingPathExtension().lastPathComponent
             csType = "RGB"
+            deviceClass = ""  // unreadable header -> treated as non-display, filtered out
         }
 
-        return ICCProfile(name: name, path: url, colorSpaceType: csType)
+        return ICCProfile(name: name, path: url, colorSpaceType: csType, deviceClass: deviceClass)
     }
 
-    private static func colorSpaceType(from profile: ColorSyncProfile) -> String {
-        guard let rawData = ColorSyncProfileCopyHeader(profile) else { return "RGB" }
+    /// Reads the ICC header's device-class (bytes 12-15) and data-color-space
+    /// (bytes 16-19) signatures, trimmed, e.g. ("mntr", "RGB"). Either is "" when
+    /// the header is missing/short or a field isn't printable ASCII.
+    private static func headerSignatures(from profile: ColorSyncProfile) -> (deviceClass: String, colorSpace: String) {
+        guard let rawData = ColorSyncProfileCopyHeader(profile) else { return ("", "") }
         let data = rawData.takeRetainedValue() as Data
-        // ICC header: data color space at byte offset 16, 4 bytes (ASCII-encoded tag).
-        guard data.count >= 20 else { return "RGB" }
-        let bytes = [UInt8](data[16..<20])
-        // Validate that all bytes are printable ASCII (0x20–0x7E) before decoding.
-        // Non-ASCII bytes indicate a corrupt or non-standard header; fall back to "RGB".
-        guard bytes.allSatisfy({ $0 >= 0x20 && $0 <= 0x7E }),
-              let str = String(bytes: bytes, encoding: .ascii) else { return "RGB" }
-        switch str.trimmingCharacters(in: .whitespaces) {
+        guard data.count >= 20 else { return ("", "") }
+        func sig(_ range: Range<Int>) -> String {
+            // The header's 4CC fields come back as host-endian OSTypes, so on a
+            // little-endian Mac their bytes are reversed ("rtnm" for "mntr"). Reverse
+            // to recover the ASCII signature. (Reading them forward is why the old
+            // colorSpaceType always fell through to its "RGB" default.)
+            let bytes = Array([UInt8](data[range]).reversed())
+            guard bytes.allSatisfy({ $0 >= 0x20 && $0 <= 0x7E }),
+                  let str = String(bytes: bytes, encoding: .ascii) else { return "" }
+            return str.trimmingCharacters(in: .whitespaces)
+        }
+        return (sig(12..<16), sig(16..<20))
+    }
+
+    private static func friendlyColorSpace(_ sig: String) -> String {
+        // ICC data-color-space signatures are case-sensitive: Lab is "Lab", not "LAB".
+        // Unknown spaces must NOT masquerade as "RGB", isDisplayProfile keys on it.
+        switch sig {
         case "RGB":  return "RGB"
         case "CMYK": return "CMYK"
         case "GRAY": return "Gray"
-        case "LAB":  return "Lab"
+        case "Lab":  return "Lab"
         case "XYZ":  return "XYZ"
-        default:     return "RGB"
+        default:     return sig.isEmpty ? "Unknown" : sig
         }
     }
 
@@ -212,6 +259,14 @@ final class ColorProfileService: @unchecked Sendable {
     /// Returns true on success.
     @discardableResult
     func setProfile(_ profile: ICCProfile, for displayID: CGDirectDisplayID) -> Bool {
+        // Safety net (defends the ColorSyncDeviceSetCustomProfiles call even if a
+        // non-display profile reaches here another way): assigning a printer/scanner/
+        // CMYK/LUT profile as a display override makes WindowServer abort building the
+        // display transform, crashing the whole GUI on every reconnect. Refuse it.
+        guard profile.isDisplayProfile else {
+            return false
+        }
+
         guard let rawUUID = CGDisplayCreateUUIDFromDisplayID(displayID) else { return false }
         let uuid = rawUUID.takeRetainedValue()
 

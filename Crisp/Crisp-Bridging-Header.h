@@ -61,8 +61,35 @@ typedef struct {
 } CGSDisplayMode;
 
 typedef int CGSConnectionID_t;
-extern CGError CGSConfigureDisplayMode(CGSConnectionID_t connection, CGDirectDisplayID display, uint32_t modeID);
+// Applies a mode by its raw modeNumber. arg1 is a CONFIG TOKEN from CGBeginDisplayConfiguration,
+// NOT the connection id: the call reads it as a CGSConfigData*, so passing the connection id
+// segfaults in checkCapacity() on macOS 26. Sequence: CGBeginDisplayConfiguration -> this ->
+// CGCompleteDisplayConfiguration. Verified against BetterDisplay's behaviour on Tahoe.
+extern CGError CGSConfigureDisplayMode(CGDisplayConfigRef config, CGDirectDisplayID display, int32_t modeNumber);
 extern CGSConnectionID_t CGSMainConnectionID(void);
+
+// Full CGS mode description for enumeration. CGDisplayCopyAllDisplayModes hides the GPU-scaled
+// HiDPI variants of any resolution that collides with a real EDID timing (e.g. 1920x1080 HiDPI,
+// whose 3840x2160 backing the panel exposes as a real 4K@50 timing); the private CGS list still
+// carries them at full refresh. Layout reverse-engineered; offsets verified at runtime. `density`
+// is the backing scale (2.0 == HiDPI); `flags` bit 0x40000000 marks modes macOS deems unusable
+// (matches isUsableForDesktopGUI == false). modeNumber == ioDisplayModeID (pass to CGSConfigureDisplayMode).
+typedef struct {
+    uint32_t modeNumber;   // 0
+    uint32_t flags;        // 4
+    uint32_t width;        // 8   logical
+    uint32_t height;       // 12  logical
+    uint32_t depth;        // 16
+    uint32_t dc2[42];      // 20
+    uint16_t dc3;          // 188
+    uint16_t freq;         // 190 refresh in Hz
+    uint32_t dc4[4];       // 192
+    float    density;      // 208 backing scale
+} CGSDisplayModeDescription;   // 212 bytes
+
+extern CGError CGSGetNumberOfDisplayModes(CGDirectDisplayID display, int *nModes);
+extern CGError CGSGetDisplayModeDescriptionOfLength(CGDirectDisplayID display, int idx,
+                                                    CGSDisplayModeDescription *mode, int length);
 
 // MARK: - SkyLight Private API (physical display disconnect/reconnect, Apple Silicon)
 

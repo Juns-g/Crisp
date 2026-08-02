@@ -96,22 +96,31 @@ struct ArrangementView: View {
                             DisplayIdentifierOverlay.hide()
                         }
                 )
-                .overlay(alignment: .top) {
-                    // Native cue: hovering (or dragging) a screen floats its name in
-                    // a callout above the thumbnail, its tail meeting the top edge.
-                    // The badge lifts itself by its own measured height (see
-                    // DisplayNameBadge) — an alignment guide did not lift it reliably
-                    // inside this overlay, leaving it overlapping the wallpaper.
-                    if identified {
-                        DisplayNameBadge(name: display.name)
-                            .transition(.scale(scale: 0.85, anchor: .bottom).combined(with: .opacity))
-                    }
-                }
                 .position(
                     x: rect.midX + (isDragged ? dragOffset.width : 0),
                     y: rect.midY + (isDragged ? dragOffset.height : 0)
                 )
                 .zIndex(identified ? 2 : 0)
+        }
+
+        // Native cue: hovering (or dragging) a screen floats its name in a callout
+        // above the thumbnail, its tail meeting the top edge. This is a separate
+        // canvas-positioned layer, NOT an overlay on the thumbnail: the thumbnail's
+        // own .position swallowed an overlay lift and left the bubble overlapping
+        // the wallpaper. Positioning the callout here (same coordinate space the
+        // thumbnails use) plants its bottom edge exactly on the thumbnail's top.
+        ForEach(displayManager.displays) { display in
+            let rect = layout[display.displayID] ?? CGRect(x: canvasSize.width / 2, y: canvasSize.height / 2, width: 60, height: 40)
+            let isDragged = draggedID == display.displayID
+            if hoveredID == display.displayID || isDragged {
+                DisplayNameBadge(name: display.name, lift: false)
+                    .modifier(BadgeAbove(
+                        x: rect.midX + (isDragged ? dragOffset.width : 0),
+                        topY: rect.minY + (isDragged ? dragOffset.height : 0)
+                    ))
+                    .zIndex(3)
+                    .transition(.opacity)
+            }
         }
     }
 
@@ -203,9 +212,9 @@ struct ArrangementView: View {
         Task { @MainActor in
             let ok = await ArrangementService.shared.setPosition(
                 x: newX, y: newY, for: display.displayID, among: displayManager.displays)
-            if ok {
-                displayManager.refreshDisplays()
-            } else {
+            // On success the reconfiguration callback (.movedFlag) rebuilds the display
+            // list; refreshing here too rebuilt it twice per drag.
+            if !ok {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     dragError = String(localized: "Failed to arrange displays. Please try again.")
                 }
@@ -298,7 +307,7 @@ private func snapToDominantSide(_ r: CGRect, of o: CGRect) -> CGRect {
 }
 
 /// Positive overlap width/height of two rects, or nil when they merely touch or
-/// are disjoint (a shared edge is allowed — that's the target adjacent state).
+/// are disjoint (a shared edge is allowed, that's the target adjacent state).
 private func overlapExtents(_ a: CGRect, _ b: CGRect) -> (x: CGFloat, y: CGFloat)? {
     let ox = min(a.maxX, b.maxX) - max(a.minX, b.minX)
     let oy = min(a.maxY, b.maxY) - max(a.minY, b.minY)
@@ -309,36 +318,63 @@ private func overlapExtents(_ a: CGRect, _ b: CGRect) -> (x: CGFloat, y: CGFloat
 
 /// The dark name callout the native Arrange Displays sheet floats above a
 /// display when you hover it: a rounded bubble with a downward tail.
-private struct DisplayNameBadge: View {
+struct DisplayNameBadge: View {
     let name: String
-    /// Measured height of the whole callout (bubble + tail), used to lift it so
-    /// the tail tip lands on the thumbnail's top edge.
+    /// Optional second line: the preset preview shows a display's resolution ·
+    /// brightness here. nil in the arranger, which shows just the name.
+    var detail: String? = nil
+    /// When true (the preset preview), the callout lifts itself above its overlay
+    /// anchor by its own measured height. The arranger sets this false and instead
+    /// positions the callout in canvas space itself, because the `.position` applied
+    /// to each draggable thumbnail swallows an overlay lift, leaving the bubble
+    /// rendered top-against-top over the wallpaper.
+    var lift: Bool = true
     @State private var height: CGFloat = 0
 
     private let fill = Color(white: 0.22)
 
-    var body: some View {
+    /// The bubble + downward tail, sized to its content. No lift, the caller
+    /// decides how to place it (overlay self-lift, or explicit canvas position).
+    private var callout: some View {
         VStack(spacing: 0) {
-            Text(name)
-                .font(.caption)
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous).fill(fill)
-                )
+            VStack(spacing: 1) {
+                Text(name)
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous).fill(fill)
+            )
             BadgeTail()
                 .fill(fill)
                 .frame(width: 12, height: 6)
         }
         .fixedSize()
         .shadow(color: .black.opacity(0.3), radius: 2.5, y: 1)
-        .background(GeometryReader { g in
-            Color.clear.preference(key: BadgeHeightKey.self, value: g.size.height)
-        })
-        .onPreferenceChange(BadgeHeightKey.self) { height = $0 }
-        .offset(y: -height)   // lift fully above the thumbnail; tail meets its top edge
+    }
+
+    var body: some View {
+        Group {
+            if lift {
+                callout
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: BadgeHeightKey.self, value: g.size.height)
+                    })
+                    .onPreferenceChange(BadgeHeightKey.self) { if $0 > 0 { height = $0 } }
+                    .offset(y: -height)   // lift fully above; tail meets the anchor's top edge
+            } else {
+                callout
+            }
+        }
         .allowsHitTesting(false)
     }
 }
@@ -347,6 +383,24 @@ private struct DisplayNameBadge: View {
 private struct BadgeHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// Places a callout in canvas space so its BOTTOM edge (the tail tip) lands on
+/// (x, topY), centered above the thumbnail with the tail meeting its top edge.
+/// Measures the callout's height (seeded so the first frame is already placed).
+private struct BadgeAbove: ViewModifier {
+    let x: CGFloat
+    let topY: CGFloat
+    @State private var height: CGFloat = 28
+
+    func body(content: Content) -> some View {
+        content
+            .background(GeometryReader { g in
+                Color.clear.preference(key: BadgeHeightKey.self, value: g.size.height)
+            })
+            .onPreferenceChange(BadgeHeightKey.self) { if $0 > 0 { height = $0 } }
+            .position(x: x, y: topY - height / 2)
+    }
 }
 
 /// Downward-pointing triangle for the badge's tail.
@@ -363,7 +417,7 @@ private struct BadgeTail: Shape {
 
 // MARK: - Display Thumbnail
 
-private struct DisplayThumbnailView: View {
+struct DisplayThumbnailView: View {
     let display: DisplayInfo
     let isDragged: Bool
 
@@ -388,7 +442,7 @@ private struct DisplayThumbnailView: View {
         }
         .overlay(alignment: .top) {
             // Native cue: the main display shows a thin menu-bar strip at the top.
-            // No name labels — the system Arrange Displays sheet has none either.
+            // No name labels, the system Arrange Displays sheet has none either.
             if display.isMain {
                 Rectangle()
                     .fill(.white.opacity(0.8))
@@ -464,8 +518,8 @@ enum DesktopWallpaper {
 
 // MARK: - Physical Display Identifier
 
-/// Draws a red border around a physical display — like the native Arrange
-/// Displays sheet — so hovering or dragging a thumbnail shows which real screen
+/// Draws a red border around a physical display, like the native Arrange
+/// Displays sheet, so hovering or dragging a thumbnail shows which real screen
 /// it maps to. A single transparent, click-through overlay window is reused and
 /// moved between screens.
 @MainActor

@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import CoreGraphics
+import ApplicationServices
 
 /// Borderless key-capable panel for the menu bar UI.
 /// Owning the panel (instead of MenuBarExtra's window) removes the WindowServer
@@ -105,6 +106,9 @@ final class MenuPanel: NSPanel {
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var wakeObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
+    /// Debounces panel re-anchoring across the storm of screen-param changes a
+    /// display connect/disconnect fires (see screenObserver).
+    private var repositionWorkItem: DispatchWorkItem?
     private var clickMonitor: Any?
     private var clickInterceptor: Any?
     // The NSMenu currently tracking (a SwiftUI Menu / context menu), captured so an
@@ -153,13 +157,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let lockPath = NSTemporaryDirectory() + "crisp.lock"
         let lockFD = open(lockPath, O_CREAT | O_RDWR, 0o600)
         if lockFD == -1 || flock(lockFD, LOCK_EX | LOCK_NB) != 0 {
-            print("[Crisp] Another instance is already running, exiting.")
             exit(0)
         }
         // The descriptor stays open for the app's lifetime to hold the lock.
 
-        // Start intercepting brightness keys to route them to the display under the cursor.
-        BrightnessKeyService.shared.start()
+        // Start intercepting brightness keys to route them to the display under the cursor,
+        // but only if Accessibility is already granted. Creating the tap (tapCreate) is what
+        // surfaces the OS prompt, so gating on trust keeps launch prompt-free; new users opt
+        // in via the toggle in the Brightness Keys section, which arms it in context. (jv1b)
+        if AXIsProcessTrusted() { BrightnessKeyService.shared.start() }
 
         // Touch the singleton so auto-brightness polling starts at launch; otherwise
         // it only starts the first time the menu panel is opened (its only other ref).
@@ -185,13 +191,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.isPanelShown, let p = self.panel else { return }
-                self.positionPanel(p)
-                // Reconfiguration settles in phases; anchor once more after.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, self.isPanelShown, self.panel != nil else { return }
+                // A display connect/disconnect fires a storm of these, and the
+                // geometry is garbage mid-flight: a just-connected virtual display
+                // can transiently read as NSScreen.main, spiking maxContentHeight
+                // (the panel balloons past its cap) and the x/anchor clamp (the
+                // panel offsets). Debounce so we re-anchor ONCE, after the storm
+                // settles, instead of sampling the volatile mid-reconfig state.
+                self.repositionWorkItem?.cancel()
+                let work = DispatchWorkItem { [weak self] in
                     guard let self, self.isPanelShown, let p = self.panel else { return }
                     self.positionPanel(p)
                 }
+                self.repositionWorkItem = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
             }
         }
 
@@ -222,8 +235,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Pre-warm the panel while hidden so the very first open, like every
         // reopen, appears at its final, settled size (fittingSize is only an
-        // estimate; real layout can differ by a few points).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+        // estimate; real layout can differ by a few points). Warm on the very
+        // next runloop turn, not a 1s timer: a runloop turn is <16ms, but the
+        // menu-bar icon isn't clickable until well after that, so the warm-up
+        // (Liquid Glass materialize bloom + first layout) reliably finishes
+        // hidden. On the 1s timer, a fast first click landed mid-warm and the
+        // bloom + estimate reflow played on screen.
+        DispatchQueue.main.async { [weak self] in
             self?.warmPanel()
         }
 
@@ -298,6 +316,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private var isWarmed = false
+    /// False until the panel has been shown once this launch. The first show fades
+    /// in to mask one-time on-screen costs; later shows are instant.
+    private var hasShownOnce = false
 
     private func warmPanel() {
         let p = panel ?? makePanel()
@@ -409,9 +430,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         positionPanel(p)
 
         p.ignoresMouseEvents = false
-        // Duration-zero animator set replaces any in-flight close fade.
+        // First open only: fade in briefly so the panel's one-time on-screen costs
+        // (Liquid Glass materialize bloom, first backdrop sample, first rasterization)
+        // play under the fade instead of glitching in visibly, the way native menus'
+        // appearance animation masks the same cost. The offscreen/alpha-0 warm-up can't
+        // pre-play them (glass only materializes when genuinely on screen). The panel
+        // sits at alpha 0 (warm-up / last close), so this is a clean 0 -> 1; every later
+        // open stays instant (duration 0), replacing any in-flight close fade.
+        let appearDuration: TimeInterval = hasShownOnce ? 0 : 0.12
+        hasShownOnce = true
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0
+            ctx.duration = appearDuration
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             p.animator().alphaValue = 1
         }
         p.orderFrontRegardless()
@@ -423,14 +453,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // resets this behind our back.
         statusItem?.button?.highlight(true)
 
+        // Re-sync views that mirror live external state (e.g. the system auto-brightness
+        // toggle) on every open; the panel content mounts once, so their .onAppear
+        // won't re-fire here.
+        NotificationCenter.default.post(name: .crispPanelDidOpen, object: nil)
+
         PanelOpenGuard.openedAt = Date()
         // Re-check for updates on open so a long-running instance surfaces a new
         // release without a restart (the panel view mounts once, so its launch
         // .task can't). checkForUpdates() self-throttles to one network call per
         // hour, so opening the menu repeatedly costs nothing.
-        if SettingsService.shared.checkUpdatesOnLaunch {
-            Task { await UpdateService.shared.checkForUpdates() }
-        }
+        Task { await UpdateService.shared.checkForUpdates() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, self.isPanelShown else { return }
             CoreBrightnessService.shared.refresh()

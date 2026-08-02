@@ -30,9 +30,6 @@ final class MirrorService: @unchecked Sendable {
     func enableMirror(source: CGDirectDisplayID, target: CGDirectDisplayID) async -> Bool {
         // Mirroring a display onto itself is invalid and causes undefined CG behaviour.
         guard source != target else {
-#if DEBUG
-            print("[MirrorService] enableMirror: source == target (\(source)), ignoring")
-#endif
             return false
         }
         return await CGHelpers.runWithTimeout(seconds: 10, fallback: false) {
@@ -51,7 +48,7 @@ final class MirrorService: @unchecked Sendable {
 
     // MARK: - Query (source perspective)
 
-    /// Returns true when `displayID` is acting as a mirror source —
+    /// Returns true when `displayID` is acting as a mirror source, 
     /// i.e., at least one other online display is cloning it.
     func isMirrorSource(_ displayID: CGDirectDisplayID) -> Bool {
         mirrorTargets(of: displayID) != nil

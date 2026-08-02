@@ -2,6 +2,14 @@ import Foundation
 import CoreGraphics
 import Combine
 
+/// Which displays the hardware brightness keys act on.
+/// Persisted (raw value) via `SettingsService.brightnessKeyTarget`.
+enum BrightnessKeyTarget: String, CaseIterable, Codable {
+    case underCursor   // only the display under the pointer (current behaviour)
+    case allDisplays   // every connected display
+    case selected      // only a user-chosen subset (see brightnessKeySelectedDisplays)
+}
+
 /// Centralized settings persistence service.
 /// Simple settings use UserDefaults via @AppStorage-compatible keys.
 /// Complex configurations are stored as JSON in ~/Library/Application Support/Crisp/.
@@ -25,6 +33,20 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
 
     private init() {
         loadAll()
+        // Re-sync launch-at-login from the authoritative SMAppService state on every panel
+        // open, so toggling Crisp in System Settings > Login Items reflects without a
+        // relaunch. No OS notification exists for login-item changes, so panel-open is the
+        // cheapest reliable hook. Only the didSet (a UserDefaults write) runs on assignment,
+        // never a re-register, so this can't fight the user's own toggle. Singleton -> no teardown.
+        NotificationCenter.default.addObserver(
+            forName: .crispPanelDidOpen, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let actual = LaunchService.shared.isEnabled
+                if self.launchAtLogin != actual { self.launchAtLogin = actual }
+            }
+        }
     }
 
     // MARK: - Keys
@@ -35,8 +57,9 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
         static let menuWidth              = "crisp.menuWidth"
         static let showCombinedBrightness = "crisp.showCombinedBrightness"
         static let ddcCacheTTL            = "crisp.ddcCacheTTL"
-        static let checkUpdatesOnLaunch   = "crisp.checkUpdatesOnLaunch"
         static let colorPickerHistory     = "crisp.colorPickerHistory"
+        static let brightnessKeyTarget    = "crisp.brightnessKeyTarget"
+        static let brightnessKeySelected  = "crisp.brightnessKeySelectedDisplays"
         // Per-display keys use prefix + displayID
         static let brightnessPrefix       = "crisp.brightness_"
         static let contrastPrefix         = "crisp.contrast_"
@@ -65,14 +88,24 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
         didSet { defaults.set(ddcCacheTTL, forKey: Keys.ddcCacheTTL) }
     }
 
-    @Published var checkUpdatesOnLaunch: Bool = true {
-        didSet { defaults.set(checkUpdatesOnLaunch, forKey: Keys.checkUpdatesOnLaunch) }
-    }
-
     /// Recently sampled colors (hex strings, newest first, max 20).
     @Published var colorPickerHistory: [String] = [] {
         didSet {
             defaults.set(colorPickerHistory, forKey: Keys.colorPickerHistory)
+        }
+    }
+
+    /// Which displays the brightness keys act on. Default: the display under the cursor.
+    @Published var brightnessKeyTarget: BrightnessKeyTarget = .underCursor {
+        didSet { defaults.set(brightnessKeyTarget.rawValue, forKey: Keys.brightnessKeyTarget) }
+    }
+
+    /// Displays chosen for the `.selected` brightness-key mode, stored by stable
+    /// DisplayInfo.displayUUID (not the volatile CGDirectDisplayID, which macOS can
+    /// reassign across reconnects). Ignored unless brightnessKeyTarget == .selected.
+    @Published var brightnessKeySelectedDisplayUUIDs: Set<String> = [] {
+        didSet {
+            defaults.set(Array(brightnessKeySelectedDisplayUUIDs), forKey: Keys.brightnessKeySelected)
         }
     }
 
@@ -115,9 +148,7 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
             let data = try JSONEncoder().encode(value)
             try data.write(to: url, options: .atomic)
         } catch {
-            #if DEBUG
-            print("[SettingsService] Failed to save \(filename): \(error)")
-            #endif
+            // best-effort persistence; a failed write is non-fatal
         }
     }
 
@@ -140,8 +171,9 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
             ? defaults.bool(forKey: Keys.showCombinedBrightness) : true
         ddcCacheTTL = defaults.object(forKey: Keys.ddcCacheTTL) != nil
             ? defaults.double(forKey: Keys.ddcCacheTTL) : 5.0
-        checkUpdatesOnLaunch = defaults.object(forKey: Keys.checkUpdatesOnLaunch) != nil
-            ? defaults.bool(forKey: Keys.checkUpdatesOnLaunch) : true
         colorPickerHistory = defaults.stringArray(forKey: Keys.colorPickerHistory) ?? []
+        brightnessKeyTarget = defaults.string(forKey: Keys.brightnessKeyTarget)
+            .flatMap(BrightnessKeyTarget.init(rawValue:)) ?? .underCursor
+        brightnessKeySelectedDisplayUUIDs = Set(defaults.stringArray(forKey: Keys.brightnessKeySelected) ?? [])
     }
 }

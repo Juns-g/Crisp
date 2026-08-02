@@ -27,7 +27,7 @@ final class UpdateService: ObservableObject, @unchecked Sendable {
 
     func checkForUpdates() async {
         guard !repoOwner.isEmpty, repoOwner != "OWNER", !repoName.isEmpty else {
-            // Repo not yet configured — silently skip update check
+            // Repo not yet configured, silently skip update check
             return
         }
         if let last = lastCheckDate, Date().timeIntervalSince(last) < 3600 { return }
@@ -52,9 +52,6 @@ final class UpdateService: ObservableObject, @unchecked Sendable {
             do {
                 json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             } catch {
-                #if DEBUG
-                print("[UpdateService] JSON parse error: \(error)")
-                #endif
                 lastCheckDate = Date()
                 return
             }
@@ -66,7 +63,7 @@ final class UpdateService: ObservableObject, @unchecked Sendable {
             }
             lastCheckDate = Date()
         } catch {
-            // Network unavailable or repo doesn't exist — silently ignore
+            // Network unavailable or repo doesn't exist, silently ignore
             lastCheckDate = Date()
         }
     }

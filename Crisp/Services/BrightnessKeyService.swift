@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import ApplicationServices
 
 // MARK: - C Event Tap Callback
 
@@ -33,10 +34,6 @@ final class BrightnessKeyService: @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     /// Retained Unmanaged reference passed into the C callback. Released in stop().
     private var selfRetained: Unmanaged<BrightnessKeyService>?
-    /// Number of poll retries attempted.
-    private var pollRetryCount = 0
-    /// Max poll retries before giving up (2s × 15 = 30s).
-    private static let maxPollRetries = 15
 
     // MARK: - NX Media Key Constants
     // Marked nonisolated(unsafe) so they can be read from the nonisolated callback method.
@@ -44,7 +41,7 @@ final class BrightnessKeyService: @unchecked Sendable {
 
     /// CGEventType raw value for NSSystemDefined / NX_SYSDEFINED events (media keys).
     private nonisolated(unsafe) static let cgEventTypeSystemDefinedRaw: UInt32 = 14
-    /// NX_SUBTYPE_AUX_CONTROL_BUTTONS — the subtype value for media/function keys.
+    /// NX_SUBTYPE_AUX_CONTROL_BUTTONS, the subtype value for media/function keys.
     private nonisolated(unsafe) static let nxSubtypeAuxControlButtons: Int16 = 8
     /// NX_KEYTYPE_BRIGHTNESS_UP
     private nonisolated(unsafe) static let nxKeytypeBrightnessUp: Int = 2
@@ -57,11 +54,11 @@ final class BrightnessKeyService: @unchecked Sendable {
     // MARK: - Start / Stop
 
     /// Installs the event tap. Requires Accessibility permissions.
-    /// Safe to call multiple times — a running tap will not be re-created.
+    /// Safe to call multiple times, a running tap will not be re-created.
     func start() {
         guard eventTap == nil else { return }
 
-        // Try creating the tap directly — AXIsProcessTrusted can be unreliable
+        // Try creating the tap directly, AXIsProcessTrusted can be unreliable
         // with ad-hoc signed Debug builds (TCC entry invalidates after each rebuild).
         let retained = Unmanaged.passRetained(self)
         selfRetained = retained
@@ -80,8 +77,7 @@ final class BrightnessKeyService: @unchecked Sendable {
         guard let tap else {
             retained.release()
             selfRetained = nil
-            NSLog("[BrightnessKeyService] Event tap creation failed — no accessibility permission")
-            pollForAccessibility()
+            retryUntilArmed()
             return
         }
 
@@ -91,8 +87,7 @@ final class BrightnessKeyService: @unchecked Sendable {
 
         self.eventTap = tap
         self.runLoopSource = source
-
-        NSLog("[BrightnessKeyService] Event tap installed successfully")
+        stopRetrying()
     }
 
     /// Removes the event tap and releases the retained self reference.
@@ -108,30 +103,42 @@ final class BrightnessKeyService: @unchecked Sendable {
 
         selfRetained?.release()
         selfRetained = nil
-
-        print("[BrightnessKeyService] Event tap removed.")
     }
 
-    // MARK: - Accessibility Polling
+    // MARK: - Accessibility retry
+    // There is no system notification for Accessibility-trust changes, so we keep trying to
+    // arm the tap on two triggers until it takes: a slow recurring poll (reliable) and
+    // app-activation (fast path when the user returns from System Settings after granting).
+    // Whichever arms the tap calls stopRetrying(). This replaces the old bounded 30s give-up
+    // that left the feature dead until an app restart. (b00d.2)
 
     private var pollTimer: Timer?
+    private var activationObserver: NSObjectProtocol?
 
-    /// Polls every 2 seconds by attempting to create the tap. Stops after maxPollRetries.
-    private func pollForAccessibility() {
-        pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
-            guard let self else { timer.invalidate(); return }
-            self.pollRetryCount += 1
-            if self.pollRetryCount > Self.maxPollRetries {
-                NSLog("[BrightnessKeyService] Gave up after %d retries — grant Accessibility permission and restart app", Self.maxPollRetries)
-                timer.invalidate()
-                self.pollTimer = nil
-                return
+    private func retryUntilArmed() {
+        // ponytail: unbounded 2s poll; tapCreate is cheap and it stops the instant the grant
+        // lands. The activation observer just makes it feel instant when the user clicks back in.
+        if pollTimer == nil {
+            pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
+                guard let self else { timer.invalidate(); return }
+                self.start()
             }
-            NSLog("[BrightnessKeyService] Poll %d/%d: retrying…", self.pollRetryCount, Self.maxPollRetries)
-            timer.invalidate()
-            self.pollTimer = nil
-            self.start()
+        }
+        if activationObserver == nil {
+            activationObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.start() }
+            }
+        }
+    }
+
+    private func stopRetrying() {
+        pollTimer?.invalidate()
+        pollTimer = nil
+        if let obs = activationObserver {
+            NotificationCenter.default.removeObserver(obs)
+            activationObserver = nil
         }
     }
 
@@ -146,12 +153,22 @@ final class BrightnessKeyService: @unchecked Sendable {
         type: CGEventType,
         event: CGEvent
     ) -> Unmanaged<CGEvent>? {
-        // Re-enable the tap if the system disabled it (e.g. after a timeout).
+        // The system disabled the tap. If we still hold Accessibility this is a normal
+        // timeout, so re-enable it. If trust was revoked (the user unchecked Crisp under
+        // Privacy > Accessibility), re-enabling churns: the system disables it again at once,
+        // and an active .cgSessionEventTap stuck in that disable/re-enable loop stalls the
+        // window-server input pipeline and freezes clicks system-wide. So tear the tap down
+        // instead and let retryUntilArmed re-install it cleanly once trust returns. (kome)
         if type.rawValue == CGEventType.tapDisabledByTimeout.rawValue ||
            type.rawValue == CGEventType.tapDisabledByUserInput.rawValue {
             DispatchQueue.main.async {
-                if let tap = self.eventTap {
-                    CGEvent.tapEnable(tap: tap, enable: true)
+                MainActor.assumeIsolated {
+                    if AXIsProcessTrusted(), let tap = self.eventTap {
+                        CGEvent.tapEnable(tap: tap, enable: true)
+                    } else {
+                        self.stop()
+                        self.retryUntilArmed()
+                    }
                 }
             }
             return Unmanaged.passRetained(event)
@@ -176,8 +193,39 @@ final class BrightnessKeyService: @unchecked Sendable {
             return Unmanaged.passRetained(event)
         }
 
-        // For key-up events always pass through — only consume key-down on external displays.
+        // For key-up events always pass through, only consume key-down on external displays.
         guard isKeyDown else { return Unmanaged.passRetained(event) }
+
+        // Route by user preference. Read on the main actor, this callback runs on
+        // the main run loop (see class docs), so assumeIsolated is safe here.
+        switch MainActor.assumeIsolated({ SettingsService.shared.brightnessKeyTarget }) {
+        case .allDisplays:
+            let step = (keyCode == Self.nxKeytypeBrightnessUp) ? Self.brightnessStep : -Self.brightnessStep
+            Task { @MainActor in self.adjustDisplays(DisplayManagerAccessor.shared.displays, step: step) }
+            // Consume: we adjust every display (built-in included) ourselves, so
+            // macOS must not also bump the built-in on top.
+            return nil
+        case .selected:
+            // Adjust only the chosen displays that are currently attached. If none
+            // are attached, fall through to the under-cursor path so the key still
+            // does something instead of being dead.
+            let selected = MainActor.assumeIsolated { SettingsService.shared.brightnessKeySelectedDisplayUUIDs }
+            let anyAttached = MainActor.assumeIsolated {
+                DisplayManagerAccessor.shared.displays.contains { selected.contains($0.displayUUID) }
+            }
+            if anyAttached {
+                let step = (keyCode == Self.nxKeytypeBrightnessUp) ? Self.brightnessStep : -Self.brightnessStep
+                Task { @MainActor in
+                    let targets = DisplayManagerAccessor.shared.displays.filter { selected.contains($0.displayUUID) }
+                    self.adjustDisplays(targets, step: step)
+                }
+                return nil
+            }
+        case .underCursor:
+            break
+        }
+        // .underCursor (or .selected with none of the chosen displays attached):
+        // fall through to the under-cursor path below.
 
         // Determine which display is under the cursor.
         // NSEvent.mouseLocation and NSScreen.screens are safe to call on the main thread.
@@ -189,14 +237,24 @@ final class BrightnessKeyService: @unchecked Sendable {
             return Unmanaged.passRetained(event)
         }
 
-        let isBuiltin = CGDisplayIsBuiltin(screenNumber) != 0
-        if isBuiltin {
-            // Cursor on built-in display — let macOS handle it normally.
+        // Consume the key ONLY when we can synchronously confirm the cursor is on a
+        // currently-connected, controllable EXTERNAL display. Leaving clamshell mode
+        // (external unplugged, then lid opened) briefly leaves NSScreen reporting a
+        // stale external screen while Crisp's display list has already dropped it. The
+        // old code consumed the key on that stale screen, then no-op'd asynchronously on
+        // the vanished display, swallowing the press so the built-in stayed dead until
+        // macOS settled (~30s). Fail safe instead: if we can't confirm a live external,
+        // pass the key through so macOS drives the built-in immediately. (issue #12)
+        let displayID = screenNumber
+        let isControllableExternal = MainActor.assumeIsolated {
+            guard let display = DisplayManagerAccessor.shared.displays.first(where: { $0.displayID == displayID })
+            else { return false }
+            return !display.isBuiltin
+        }
+        guard isControllableExternal else {
             return Unmanaged.passRetained(event)
         }
 
-        // Cursor is on an external display — schedule brightness adjustment and consume.
-        let displayID = screenNumber
         let step = (keyCode == Self.nxKeytypeBrightnessUp) ? Self.brightnessStep : -Self.brightnessStep
 
         // All data captured here is Sendable (CGDirectDisplayID = UInt32, Double).
@@ -204,7 +262,7 @@ final class BrightnessKeyService: @unchecked Sendable {
             let displays = DisplayManagerAccessor.shared.displays
             guard let display = displays.first(where: { $0.displayID == displayID }) else { return }
             let newBrightness = max(0.0, min(100.0, display.brightness + step))
-            // Use smooth animation — cancels any in-progress animation automatically.
+            // Use smooth animation, cancels any in-progress animation automatically.
             BrightnessService.shared.setBrightnessSmooth(newBrightness, for: display)
 
             // Show OSD on the external display where brightness was adjusted.
@@ -217,5 +275,23 @@ final class BrightnessKeyService: @unchecked Sendable {
 
         // Return nil to consume (suppress) the event so macOS doesn't also adjust built-in brightness.
         return nil
+    }
+
+    /// Applies the same relative step to each given display (built-in or external),
+    /// through BrightnessService's smooth fade (reusing its DDC/gamma/IOKit paths +
+    /// coalescing), and shows the brightness HUD on each display's own screen.
+    /// Backs the `.allDisplays` and `.selected` brightness-key modes.
+    @MainActor
+    private func adjustDisplays(_ displays: [DisplayInfo], step: Double) {
+        let screens = NSScreen.screens
+        for display in displays {
+            let newBrightness = max(0.0, min(100.0, display.brightness + step))
+            BrightnessService.shared.setBrightnessSmooth(newBrightness, for: display)
+            if let screen = screens.first(where: {
+                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == display.displayID
+            }) {
+                BrightnessHUDService.shared.show(brightness: newBrightness, on: screen)
+            }
+        }
     }
 }

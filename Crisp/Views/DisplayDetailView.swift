@@ -5,7 +5,6 @@ import SwiftUI
 struct DisplayDetailView: View {
     @ObservedObject var display: DisplayInfo
     @EnvironmentObject var displayManager: DisplayManager
-    @State private var showModeList: Bool = false
     @State private var showPreset: Bool = false
     @State private var showColorProfile: Bool = false
     @State private var showImageAdjustment: Bool = false
@@ -17,31 +16,8 @@ struct DisplayDetailView: View {
 
             // Brightness slider is inline at the top level (avoid duplication); HiDPI toggle moved to Settings
 
-            // Display mode list toggle row
-            ExpandableRow(
-                icon: "rectangle.on.rectangle",
-                label: "Display Mode",
-                subtitle: {
-                    var parts: [String] = []
-                    if let mode = display.currentDisplayMode {
-                        parts.append(mode.resolutionString)
-                    }
-                    if display.currentDisplayMode?.isHiDPI == true {
-                        parts.append("HiDPI")
-                    }
-                    return parts.joined(separator: " · ")
-                }(),
-                isExpanded: $showModeList
-            )
-
-            VStack(spacing: 0) {
-                if showModeList {
-                    DisplayModeListView(display: display)
-                        .padding(.leading, 8)
-                        .transition(.opacity)
-                }
-            }
-            .clipped()
+            // Resolution + Refresh Rate, each a top-level one-click section
+            DisplayModeSection(display: display)
 
             SectionDivider()
 
@@ -50,20 +26,14 @@ struct DisplayDetailView: View {
             if !presetName.isEmpty {
                 ExpandableRow(
                     icon: "camera.filters",
-                    iconColor: .indigo,
+                    iconActive: false,
                     label: "Preset",
                     subtitle: presetName,
                     isExpanded: $showPreset
                 )
 
-                VStack(spacing: 0) {
-                    if showPreset {
-                        DisplayPresetView(displayID: display.displayID, activeName: $presetName)
-                            .padding(.leading, 8)
-                            .transition(.opacity)
-                    }
-                }
-                .clipped()
+                DisplayPresetView(displayID: display.displayID, activeName: $presetName)
+                    .curtainReveal(showPreset)
             }
 
             // Color profile section; hidden when the display has presets,
@@ -71,7 +41,7 @@ struct DisplayDetailView: View {
             if presetName.isEmpty {
                 ExpandableRow(
                     icon: "paintpalette.fill",
-                    iconColor: .purple,
+                    iconActive: false,
                     label: "Color Profile",
                     subtitle: activeProfileName,
                     isExpanded: $showColorProfile
@@ -79,11 +49,7 @@ struct DisplayDetailView: View {
 
                 VStack(spacing: 0) {
                     if showColorProfile {
-                        ColorProfileView(
-                            display: display,
-                            activeProfileName: $activeProfileName
-                        )
-                            .padding(.leading, 8)
+                        ColorProfileView(display: display, activeProfileName: $activeProfileName)
                             .transition(.opacity)
                     }
                 }
@@ -93,18 +59,14 @@ struct DisplayDetailView: View {
             // Image adjustment section
             ExpandableRow(
                 icon: "slider.horizontal.3",
+                iconActive: false,
                 label: "Image Adjustment",
                 isExpanded: $showImageAdjustment
             )
 
-            VStack(spacing: 0) {
-                if showImageAdjustment {
-                    ImageAdjustmentView(display: display)
-                        .padding(.leading, 8)
-                        .transition(.opacity)
-                }
-            }
-            .clipped()
+            ImageAdjustmentView(display: display, isExpanded: showImageAdjustment)
+                .padding(.leading, 8)
+                .curtainReveal(showImageAdjustment)
 
             SectionDivider()
 
@@ -113,6 +75,10 @@ struct DisplayDetailView: View {
 
             // Disconnect this physical display (Apple Silicon only; hidden for the last screen)
             DisconnectDisplayRow(display: display)
+
+            // macOS "Automatically adjust brightness" (ambient light), grouped with the
+            // other built-in-only toggles; renders only on ALS panels, absent on externals.
+            SystemAutoBrightnessView(display: display)
 
             // Notch management (built-in with notch only)
             NotchView(display: display)
@@ -127,7 +93,6 @@ struct DisplayDetailView: View {
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             // Reopen fresh, like a native menu (this view persists across opens, so
             // its sections stay expanded until reset).
-            showModeList = false
             showPreset = false
             showColorProfile = false
             showImageAdjustment = false
@@ -145,3 +110,4 @@ struct DisplayDetailView: View {
         }
     }
 }
+

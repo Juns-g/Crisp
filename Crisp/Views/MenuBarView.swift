@@ -1,18 +1,32 @@
 import SwiftUI
+import ApplicationServices
 
 // MARK: - Shared Icon Helper
 
 /// A colored circular SF Symbol icon chip, macOS 26 Control Center style.
+/// `active` follows the native menu-bar rule (Wi-Fi/Battery): the colored chip
+/// is spent on state (connected, on, selected); inactive rows render a bare
+/// monochrome glyph in the same footprint so color still means something.
 struct MenuItemIcon: View {
     let systemName: String
     var color: Color = .blue
+    var active: Bool = true
 
     var body: some View {
+        // One view, not two branches, so active<->inactive cross-fades the glyph
+        // and fill instead of hard-swapping. Inactive keeps the same chip footprint
+        // with a faint gray fill (Wi-Fi non-selected style); active fills with the
+        // accent. Color still marks state, the change just animates.
         Image(systemName: systemName)
             .font(.system(size: 12, weight: .medium))
-            .foregroundColor(.white)
+            // Inactive glyph at full label strength (not .secondary) so it stays legible
+            // on the faint chip; the lack of color, not a dimmer glyph, marks it inactive.
+            .foregroundColor(active ? .white : .primary)
             .frame(width: 26, height: 26)
-            .background(Circle().fill(color))
+            .background(Circle().fill(active ? color : Color.primary.opacity(0.12)))
+            // Same curve as the panel's section reveal, so a toggle that recolors its
+            // icon and glides a section open move together.
+            .animation(.panelResize, value: active)
     }
 }
 
@@ -27,7 +41,14 @@ enum PanelOpenGuard {
     /// outside-click). Set around a system-modal prompt we raise ourselves (the
     /// admin auth dialog for installing a HiDPI override) so clicking/typing in
     /// that dialog doesn't dismiss the panel out from under it.
-    static var suppressAutoDismiss = false
+    static var suppressAutoDismiss = false {
+        didSet { if suppressAutoDismiss { suppressGeneration &+= 1 } }
+    }
+    /// Bumped on every new suppression window. A DELAYED reset (the admin-auth
+    /// helper's 500ms tail) captures this when it suppresses and skips its reset
+    /// if another window started since, so it can't clear that newer window
+    /// mid-flight (the smooth-scaling soft-reconnect holds one for ~2s).
+    static var suppressGeneration = 0
     /// True while an AppKit menu (a SwiftUI `Menu`, e.g. a row's ⋯) is tracking.
     /// Those popups render in their own window outside the panel frame, so a click
     /// on a menu item reads as an outside-click; suppress dismissal while tracking.
@@ -53,14 +74,20 @@ extension Notification.Name {
     /// Posted once the panel has finished hiding, so the menu content can reset
     /// transient UI (collapse the tool/nav sections) and reopen fresh like a native menu.
     static let crispPanelDidClose = Notification.Name("crisp.panelDidClose")
+
+    /// Posted each time the panel opens, so content mirroring live external state
+    /// (e.g. the system auto-brightness toggle) can re-read it, the view mounts once,
+    /// so its .onAppear can't re-fire on later opens.
+    static let crispPanelDidOpen = Notification.Name("crisp.panelDidOpen")
 }
 
 extension Animation {
     /// Duration shared by the SwiftUI spring and the panel window's mirror
     /// spring (MenuPanel.applyContentSize); change both by changing this.
-    static let panelResizeDuration: Double = 0.18
-    /// The one curve every panel size change shares (rows, footer, window):
-    /// the smooth spring Control Center panels use when a list expands.
+    static let panelResizeDuration: Double = 0.16
+    /// The one curve every panel size change shares (rows, footer, window, and
+    /// icon state fades): the smooth spring Control Center panels use when a list
+    /// expands.
     static let panelResize = Animation.smooth(duration: panelResizeDuration)
 }
 
@@ -131,6 +158,17 @@ struct SectionDivider: View {
 
 // MARK: - SectionHeader
 
+/// Secondary text that clears WCAG AA on the light popover background. The system
+/// .secondary measures ~3.9:1 there (below the 4.5:1 required at caption sizes);
+/// dark mode measures ~5.8:1, so keep the system color and darken only light mode.
+extension Color {
+    static let secondaryReadable = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? .secondaryLabelColor
+            : NSColor(white: 0.40, alpha: 1.0)  // ~5.4:1 on the 245-251 light material
+    })
+}
+
 /// A group label in the native menu-bar idiom (the "Known Networks" /
 /// "Energy Mode" captions in the Wi-Fi and Battery menus): a small semibold
 /// secondary caption sitting above a group of rows.
@@ -140,7 +178,7 @@ struct SectionHeader: View {
         Text(LocalizedStringKey(title))
             .font(.callout)
             .fontWeight(.semibold)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.secondaryReadable)
             .padding(.horizontal, 12)
             .padding(.top, 4)
             .padding(.bottom, 3)
@@ -152,6 +190,7 @@ struct SectionHeader: View {
 struct ExpandableRow: View {
     let icon: String
     var iconColor: Color = .blue
+    var iconActive: Bool = true
     let label: String
     var subtitle: String? = nil
     @Binding var isExpanded: Bool
@@ -166,18 +205,18 @@ struct ExpandableRow: View {
 
     var body: some View {
         HStack {
-            MenuItemIcon(systemName: icon, color: iconColor)
+            MenuItemIcon(systemName: icon, color: iconColor, active: iconActive)
             Text(localizedLabel).font(.body)
             Spacer()
             if let sub = subtitle, !sub.isEmpty {
                 Text(sub)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.secondaryReadable)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
             Image(systemName: "chevron.right")
-                .font(.caption)
+                .font(.system(size: 12, weight: .regular))
                 .foregroundColor(.secondary)
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 .accessibilityHidden(true)
@@ -244,7 +283,7 @@ struct UpdateRow: View {
 
 /// Optional "buy me a coffee" link at the bottom of Settings, styled as a normal
 /// menu row (icon badge + label + hover + trailing ↗) so it's as findable as the
-/// update row — the genre standard for free apps. Never a popup or launch-time
+/// update row, the genre standard for free apps. Never a popup or launch-time
 /// nag, and every feature stays free.
 struct SupportRow: View {
     // Owned by the parent (SettingsView) so its panel-close handler can collapse
@@ -254,16 +293,25 @@ struct SupportRow: View {
 
     private let kofi = "https://ko-fi.com/didriksg"
     private let afdian = "https://ifdian.net/a/didriksg"
+    private let github = "https://github.com/sponsors/didriksg"
 
     /// A supporter's payment region can't be detected reliably in a sideloaded
     /// app (no App Store storefront; Locale.current.region is only a formatting
-    /// hint mainland users often switch away), so the submenu lists both and lets
-    /// them pick. Mainland China can't complete Ko-fi's PayPal/Stripe checkout
-    /// (needs Afdian's WeChat/Alipay), so the hint only ORDERS the list, surfacing
-    /// the likely option first; neither is ever hidden.
+    /// hint mainland users often switch away), so the submenu lists them all and
+    /// lets them pick. Mainland China can't complete the Stripe-based checkouts
+    /// (Ko-fi, GitHub Sponsors) and needs Afdian's WeChat/Alipay, so the hint only
+    /// ORDERS the list, surfacing the likely option first; none is ever hidden.
     private var prefersChinese: Bool {
         Locale.current.region?.identifier == "CN"
             || Bundle.main.preferredLocalizations.first?.hasPrefix("zh-Hans") == true
+    }
+
+    /// Afdian's own brand name is 爱发电; the "(Afdian)" romanization only helps a
+    /// non-Chinese reader, so drop it when the UI itself is Chinese (keyed on the UI
+    /// language, not region: an English UI in CN still needs the handle).
+    private var afdianTitle: String {
+        Bundle.main.preferredLocalizations.first?.hasPrefix("zh") == true
+            ? "爱发电" : "爱发电 (Afdian)"
     }
 
     var body: some View {
@@ -275,15 +323,19 @@ struct SupportRow: View {
                 isExpanded: $expanded
             )
 
+            // Always laid out so the curtain glides the links open with the panel
+            // spring, instead of popping to full height while the row animates.
+            // prefersChinese only orders the rows (static per launch), so branching
+            // on it here doesn't affect the reveal.
             VStack(spacing: 0) {
-                if expanded {
-                    if prefersChinese {
-                        SupportLinkRow(title: "爱发电 (Afdian)", url: afdian)
-                        SupportLinkRow(title: "Ko-fi", url: kofi)
-                    } else {
-                        SupportLinkRow(title: "Ko-fi", url: kofi)
-                        SupportLinkRow(title: "爱发电 (Afdian)", url: afdian)
-                    }
+                if prefersChinese {
+                    SupportLinkRow(title: afdianTitle, url: afdian)
+                    SupportLinkRow(title: "Ko-fi", url: kofi)
+                    SupportLinkRow(title: "GitHub Sponsors", url: github)
+                } else {
+                    SupportLinkRow(title: "Ko-fi", url: kofi)
+                    SupportLinkRow(title: "GitHub Sponsors", url: github)
+                    SupportLinkRow(title: afdianTitle, url: afdian)
                 }
             }
             .padding(.leading, 8)
@@ -332,6 +384,7 @@ struct MenuBarView: View {
     @ObservedObject private var updateService = UpdateService.shared
     @ObservedObject private var settings = SettingsService.shared
     @ObservedObject private var virtualDisplayService = VirtualDisplayService.shared
+    @ObservedObject private var keepAwake = KeepAwakeService.shared
     @State private var expandedDisplayIDs: Set<CGDirectDisplayID> = []
     @State private var showArrangement: Bool = false
     @State private var showTools: Bool = false
@@ -362,7 +415,7 @@ struct MenuBarView: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 // Display list: name row + inline brightness slider (modeled on the system displays panel)
-                ForEach(visibleDisplays) { display in
+                ForEach(Array(visibleDisplays.enumerated()), id: \.element.id) { index, display in
                     VStack(spacing: 0) {
                         DisplayRowView(
                             display: display,
@@ -384,16 +437,26 @@ struct MenuBarView: View {
                         DisplayDetailView(display: display)
                             .curtainReveal(expandedDisplayIDs.contains(display.displayID))
                     }
+                    // Breathing room between stacked display sections; the first
+                    // display sits flush to the top.
+                    .padding(.top, index == 0 ? 0 : 8)
                 }
 
                 // Displays the user disconnected (they no longer have their own row above).
                 ReconnectDisplaysSection()
 
-                // Combined brightness control (Phase 2)
-                if settings.showCombinedBrightness {
+                // Combined brightness control (Phase 2). Always laid out so the
+                // curtain can reveal it with the panel spring, gliding in like the
+                // other sections instead of popping to full height. Parent VStack is
+                // spacing:0, so a collapsed curtain leaves no gap.
+                // visibleDisplays, not displays: "combined" means the slider rows
+                // above, and a virtual display has no slider (it mirrors the
+                // built-in; dimming it would double-dim the mirror).
+                VStack(spacing: 0) {
                     sectionDivider
-                    CombinedBrightnessView(displays: displayManager.displays)
+                    CombinedBrightnessView(displays: visibleDisplays)
                 }
+                .curtainReveal(settings.showCombinedBrightness && visibleDisplays.count > 1)
 
                 // Dark Mode / Night Shift / True Tone circular toggle row (modeled on the system displays panel).
                 // No divider above it: the native panel runs the effect row straight under the sliders.
@@ -413,16 +476,35 @@ struct MenuBarView: View {
                 // a behavior preference and lives in Settings instead.
                 ExpandableRow(
                     icon: "wrench.and.screwdriver.fill",
-                    iconColor: .gray,
+                    iconActive: false,
                     label: "Tools",
                     isExpanded: $showTools
                 )
 
                 VStack(alignment: .leading, spacing: 0) {
+                    // Keep Awake: hold a power assertion so the display and system
+                    // don't idle-sleep. Session-only (KeepAwakeService), off each launch.
+                    Toggle(isOn: Binding(
+                        get: { keepAwake.isActive },
+                        set: { keepAwake.setActive($0) }
+                    )) {
+                        HStack(spacing: 8) {
+                            MenuItemIcon(systemName: "cup.and.saucer.fill", color: .orange, active: keepAwake.isActive)
+                                .accessibilityHidden(true)
+                            Text("Keep Awake")
+                                .font(.body)
+                            Spacer()
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+
                     // Virtual Displays tool entry (Phase 10)
                     ExpandableRow(
                         icon: "display.2",
-                        iconColor: .blue,
+                        iconActive: false,
                         label: "Virtual Displays",
                         isExpanded: $showVirtualDisplays
                     )
@@ -435,12 +517,12 @@ struct MenuBarView: View {
                         .curtainReveal(showVirtualDisplays)
 
                     // Arrange Displays (Phase 4): shown whenever more than one
-                    // display exists to arrange — including an active virtual one
+                    // display exists to arrange, including an active virtual one
                     // (visibleDisplays excludes virtuals, so count all displays).
                     if displayManager.displays.count > 1 {
                         ExpandableRow(
                             icon: "rectangle.3.offgrid",
-                            iconColor: .blue,
+                            iconActive: false,
                             label: "Arrange Displays",
                             isExpanded: $showArrangement
                         )
@@ -455,7 +537,7 @@ struct MenuBarView: View {
                 // Settings area (Phase 12)
                 ExpandableRow(
                     icon: "gearshape.fill",
-                    iconColor: .gray,
+                    iconActive: false,
                     label: "Settings",
                     isExpanded: $showSettings
                 )
@@ -504,7 +586,7 @@ struct MenuBarView: View {
         Divider().opacity(0.25).padding(.horizontal, 12)
 
         // Quit: a plain left-aligned menu row (like the Wi-Fi menu's
-        // "Wi-Fi Settings…" footer) — highlights on hover, not a button.
+        // "Wi-Fi Settings…" footer), highlights on hover, not a button.
         // Fixed at the bottom, does not scroll with content.
         HStack {
             Text("Quit Crisp")
@@ -528,6 +610,12 @@ struct MenuBarView: View {
             let validIDs = Set(newDisplays.map { $0.displayID })
             expandedDisplayIDs = expandedDisplayIDs.intersection(validIDs)
         }
+        .onChange(of: displayManager.pendingResolutionExpandUUID) { _, uuid in
+            // A smooth-scaling reconnect rebuilt this display's row collapsed; re-expand its
+            // detail so the reopened Resolution section (DisplayModeSection reacts too) shows.
+            guard let uuid, let d = displayManager.displays.first(where: { $0.displayUUID == uuid }) else { return }
+            withAnimation(.panelResize) { expandedDisplayIDs.insert(d.displayID) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             // Reopen collapsed, like a native menu. Fires while the panel is hidden,
             // so the content resizes off screen and reopens at the collapsed height.
@@ -536,11 +624,10 @@ struct MenuBarView: View {
             showArrangement = false
             showSettings = false
             expandedDisplayIDs.removeAll()
+            displayManager.pendingResolutionExpandUUID = nil
         }
         .task {
-            if settings.checkUpdatesOnLaunch {
-                await updateService.checkForUpdates()
-            }
+            await updateService.checkForUpdates()
         }
         .task {
             // Mirror changes made elsewhere (Control Center, brightness keys,
@@ -567,10 +654,17 @@ struct MenuBarView: View {
         if let last = BrightnessService.shared.lastManualAdjustDate,
            Date().timeIntervalSince(last) < 3 { return }
         CoreBrightnessService.shared.refresh()
+        let autoBrightnessOn = AutoBrightnessService.shared.isEnabled
         for display in visibleDisplays {
-            // animated: glide the built-in slider to sensor-driven changes instead
-            // of snapping every poll (external displays ignore the flag).
-            Task { await BrightnessService.shared.refreshBrightness(for: display, animated: true) }
+            // Skip any display something else is actively driving, or the poll's DDC
+            // readback fights that writer. Built-in: driven live by the brightness
+            // subscription (polling it jittered the knob). Externals while auto-brightness
+            // is on: driven by AutoBrightnessService, and the readback trails the commanded
+            // glide, so polling yanked the slider back and it read as lag. Poll externals
+            // only when auto-brightness is off (Control Center / other-app DDC changes we
+            // don't subscribe to). (issue #12 follow-up)
+            if display.isBuiltin || autoBrightnessOn { continue }
+            Task { await BrightnessService.shared.refreshBrightness(for: display) }
         }
     }
 }
@@ -579,40 +673,165 @@ struct MenuBarView: View {
 
 struct SettingsView: View {
     @ObservedObject private var settings = SettingsService.shared
-    @ObservedObject private var presetService = PresetService.shared
     // SettingsView stays mounted (only height-clipped) across panel opens, so the
     // support submenu's expansion must be reset explicitly on close like every
     // other section, or it reopens still expanded.
     @State private var showSupport = false
+    @State private var showBrightnessKeys = false
+    // Accessibility trust drives which Brightness Keys UI shows (toggle vs target menu).
+    // AXIsProcessTrusted() isn't observable and the panel content mounts once, so re-read
+    // it on every open (below) or the section shows a stale state after the user grants or
+    // revokes in System Settings. (vx44)
+    @State private var isTrusted = AXIsProcessTrusted()
     @EnvironmentObject var displayManager: DisplayManager
 
-    private var builtinPresets: [DisplayPreset] {
-        presetService.presets.filter { $0.isBuiltin }
+    /// Localized display name for a brightness-key target (row subtitle + choices).
+    private func brightnessTargetName(_ target: BrightnessKeyTarget) -> String {
+        switch target {
+        case .underCursor: return String(localized: "Follow the pointer")
+        case .allDisplays: return String(localized: "All connected displays")
+        case .selected:    return String(localized: "Selected displays only")
+        }
     }
 
-    private var externalDisplays: [DisplayInfo] {
-        displayManager.displays.filter { !$0.isBuiltin }
+    /// Opt-in control for brightness-key redirection, shown inside the Brightness Keys section
+    /// only while Accessibility is missing. The toggle is the deliberate, in-context trigger for
+    /// the native trust prompt (nothing is requested at launch); it also opens the exact Settings
+    /// pane, and the tap arms live once granted, no restart. On grant the parent swaps this for
+    /// the target menu. (b00d.1, jv1b)
+    private struct BrightnessKeysPermissionNotice: View {
+        // ponytail: local intent so the switch animates on tap. On grant the parent replaces
+        // this whole view with the target menu; on deny it stays on until the section next
+        // renders, which is harmless since the keys simply aren't armed.
+        @State private var requesting = false
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle(isOn: Binding(
+                    get: { requesting },
+                    set: { on in
+                        requesting = on
+                        if on {
+                            requestAccess()
+                            BrightnessKeyService.shared.start()
+                        } else {
+                            BrightnessKeyService.shared.stop()
+                        }
+                    }
+                )) {
+                    HStack(spacing: 8) {
+                        MenuItemIcon(systemName: "keyboard", color: .accentColor, active: requesting)
+                            .accessibilityHidden(true)
+                        Text("Use brightness keys on external displays")
+                            .font(.body)
+                        Spacer()
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
+                Text("Brightness keys need Accessibility access to redirect them to external displays. Grant it once and they start working, no restart.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+        }
+
+        private func requestAccess() {
+            // Fire the native trust prompt (shows the system dialog the first time)...
+            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(opts)
+            // ...and open the exact pane, so the toggle still lands somewhere useful after the
+            // one-shot prompt has already been dismissed once.
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        // spacing 0: each row carries its own .vertical padding (like the Tools group),
+        // so rows sit ~10px apart instead of 5+6+5. Dividers/headers pad themselves.
+        VStack(alignment: .leading, spacing: 0) {
             // Auto Brightness: a behavior preference (moved out of the Tools
-            // group, which is display features only).
+            // group, which is display features only). Always shown, even with no
+            // external connected: it's a preference, not a dead control, so you
+            // can arm it before docking and it activates when a display appears.
             AutoBrightnessView()
 
-            // Show combined brightness
-            Toggle(isOn: $settings.showCombinedBrightness) {
-                HStack(spacing: 6) {
-                    MenuItemIcon(systemName: "sun.min.fill", color: .yellow)
-                        .accessibilityHidden(true)
-                    Text("Show Combined Brightness")
-                        .font(.body)
-                    Spacer()
+            // Show combined brightness. Hidden unless more than one brightness
+            // slider exists (one per connected display, virtuals excluded since
+            // they get no slider): with a single slider, "combined" would just
+            // duplicate it. The preference persists, so it returns on reconnect.
+            if displayManager.displays.filter({ !VirtualDisplayService.shared.isVirtualDisplay($0.displayID) }).count > 1 {
+                Toggle(isOn: Binding(
+                    get: { settings.showCombinedBrightness },
+                    set: { newValue in withAnimation(.panelResize) { settings.showCombinedBrightness = newValue } }
+                )) {
+                    HStack(spacing: 8) {
+                        MenuItemIcon(systemName: "sun.min.fill", color: .yellow, active: settings.showCombinedBrightness)
+                            .accessibilityHidden(true)
+                        Text("Show Combined Brightness")
+                            .font(.body)
+                        Spacer()
+                    }
                 }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
             }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .padding(.horizontal, 12)
+
+            // Which displays the hardware brightness keys adjust. Once Accessibility is granted,
+            // an expandable row + checkmark list (the Resolution / Color Profile idiom). Before
+            // that there is no row or target subtitle at all, only the opt-in toggle, so enabling
+            // is discoverable without expanding and no target reads as live before it is. (jv1b)
+            if isTrusted {
+                ExpandableRow(
+                    icon: "keyboard",
+                    iconColor: .accentColor,
+                    iconActive: true,
+                    label: "Brightness Keys",
+                    subtitle: brightnessTargetName(settings.brightnessKeyTarget),
+                    isExpanded: $showBrightnessKeys
+                )
+                if showBrightnessKeys {
+                    ForEach(BrightnessKeyTarget.allCases, id: \.self) { target in
+                        CheckmarkRow(
+                            label: brightnessTargetName(target),
+                            isSelected: settings.brightnessKeyTarget == target
+                        ) {
+                            settings.brightnessKeyTarget = target
+                        }
+                    }
+                    // "Selected displays only": a checklist of the current displays.
+                    // Real toggles (not CheckmarkRow, which can't deselect) since this is
+                    // multi-select. Membership is keyed by the stable displayUUID so it
+                    // survives reconnects; built-in included, since "All" affects it too.
+                    if settings.brightnessKeyTarget == .selected {
+                        ForEach(displayManager.displays) { display in
+                            Toggle(isOn: Binding(
+                                get: { settings.brightnessKeySelectedDisplayUUIDs.contains(display.displayUUID) },
+                                set: { isOn in
+                                    if isOn { settings.brightnessKeySelectedDisplayUUIDs.insert(display.displayUUID) }
+                                    else { settings.brightnessKeySelectedDisplayUUIDs.remove(display.displayUUID) }
+                                }
+                            )) {
+                                Text(display.name).font(.callout)
+                            }
+                            .toggleStyle(.checkbox)
+                            .controlSize(.small)
+                            .padding(.leading, 46)
+                            .padding(.trailing, 12)
+                            .padding(.vertical, 1)
+                        }
+                    }
+                }
+            } else {
+                BrightnessKeysPermissionNotice()
+            }
 
             // Launch at login
             Toggle(isOn: Binding(
@@ -626,8 +845,8 @@ struct SettingsView: View {
                     settings.launchAtLogin = newValue
                 }
             )) {
-                HStack(spacing: 6) {
-                    MenuItemIcon(systemName: "power", color: .green)
+                HStack(spacing: 8) {
+                    MenuItemIcon(systemName: "power", color: .green, active: settings.launchAtLogin)
                         .accessibilityHidden(true)
                     Text("Launch at Login")
                         .font(.body)
@@ -637,54 +856,29 @@ struct SettingsView: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .padding(.horizontal, 12)
-
-            // Check for updates at launch
-            Toggle(isOn: $settings.checkUpdatesOnLaunch) {
-                HStack(spacing: 6) {
-                    MenuItemIcon(systemName: "arrow.clockwise.circle", color: .blue)
-                        .accessibilityHidden(true)
-                    Text("Check for Updates at Launch")
-                        .font(.body)
-                    Spacer()
-                }
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .padding(.horizontal, 12)
-
-            // HiDPI / Scaling (moved here from the top-level segmented control and per-display panel)
-            if !builtinPresets.isEmpty || !externalDisplays.isEmpty {
-                SectionDivider()
-
-                SectionHeader(title: "HiDPI & Scaling")
-
-                // One switch for the whole HiDPI story: flips the Native/HiDPI
-                // presets, and the first enable also installs the per-monitor
-                // override (admin prompt) when it's missing.
-                if !externalDisplays.isEmpty {
-                    HiDPIToggleRow(
-                        displays: externalDisplays,
-                        nativePreset: builtinPresets.first(where: { $0.name == "Native Mode" }),
-                        hidpiPreset: builtinPresets.first(where: { $0.name == "HiDPI Mode" })
-                    )
-                }
-            }
+            .padding(.vertical, 5)
 
             SectionDivider()
 
             Text("Crisp v\(UpdateService.shared.currentVersion)")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(.secondaryReadable)
                 .padding(.horizontal, 12)
 
             // Optional support link, tucked next to the version stamp where
             // "about" info lives. Muted, but with a link affordance so it doesn't
-            // read as static text — no popup, no launch nag; every feature stays free.
+            // read as static text, no popup, no launch nag; every feature stays free.
             SupportRow(expanded: $showSupport)
         }
         .padding(.vertical, 6)
+        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidOpen)) { _ in
+            // Re-read trust on every open so the section reflects a grant/revoke made in
+            // System Settings since the last open (the content mounts once). (vx44)
+            isTrusted = AXIsProcessTrusted()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             showSupport = false
+            showBrightnessKeys = false
         }
     }
 }
@@ -717,7 +911,7 @@ struct DisplayRowView: View {
             }
             Spacer()
             Image(systemName: "chevron.right")
-                .font(.caption)
+                .font(.system(size: 12, weight: .regular))
                 .foregroundColor(.secondary)
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 .accessibilityHidden(true)

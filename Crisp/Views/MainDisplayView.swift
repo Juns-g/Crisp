@@ -21,7 +21,7 @@ struct MainDisplayView: View {
                 .padding(.vertical, 7)
             } else {
                 HStack {
-                    MenuItemIcon(systemName: "m.circle.fill", color: .blue)
+                    MenuItemIcon(systemName: "m.circle.fill", color: .blue, active: false)
                     Text("Set as Main Display")
                         .font(.body)
                     Spacer()

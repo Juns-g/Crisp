@@ -97,10 +97,37 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "==> Signing (ad-hoc)…"
+# Sign with a Developer ID + hardened runtime when CRISP_SIGN_ID is set (release),
+# else ad-hoc so dry runs and contributor/CI builds still work without a cert. A
+# notarizable build needs the hardened runtime (--options runtime) and a secure
+# timestamp; ad-hoc gets neither and can't be notarized anyway. (b00d.0)
 xattr -cr "$APP"
-codesign --force --deep --sign - --entitlements Crisp/Crisp.entitlements "$APP"
+if [ -n "${CRISP_SIGN_ID:-}" ]; then
+  echo "==> Signing (Developer ID: $CRISP_SIGN_ID, hardened runtime)…"
+  codesign --force --deep --options runtime --timestamp \
+    --entitlements Crisp/Crisp.entitlements --sign "$CRISP_SIGN_ID" "$APP"
+else
+  echo "==> Signing (ad-hoc — set CRISP_SIGN_ID for a notarizable build)…"
+  codesign --force --deep --sign - --entitlements Crisp/Crisp.entitlements "$APP"
+fi
 codesign --verify --deep --strict "$APP"
+
+# Notarize the app and staple the ticket BEFORE packaging, so the app validates
+# offline once dragged out of the DMG and the DMG's sha256 (computed below) is the
+# final artifact. Runs only with a Developer ID signature plus a stored notarytool
+# profile — create it once with:
+#   xcrun notarytool store-credentials <profile> \
+#     --apple-id <id> --team-id <TEAMID> --password <app-specific-pw>
+# Skipped otherwise so unsigned dry runs still produce a DMG. (b00d.0)
+if [ -n "${CRISP_SIGN_ID:-}" ] && [ -n "${CRISP_NOTARY_PROFILE:-}" ]; then
+  echo "==> Notarizing (profile: $CRISP_NOTARY_PROFILE)…"
+  ditto -c -k --keepParent "$APP" "$BUILD/Crisp.zip"
+  xcrun notarytool submit "$BUILD/Crisp.zip" --keychain-profile "$CRISP_NOTARY_PROFILE" --wait
+  xcrun stapler staple "$APP"
+  xcrun stapler validate "$APP"
+elif [ -n "${CRISP_SIGN_ID:-}" ]; then
+  echo "==> WARNING: signed with Developer ID but CRISP_NOTARY_PROFILE unset — NOT notarized."
+fi
 
 echo "==> Building DMG…"
 STAGE="$BUILD/dmg"; mkdir -p "$STAGE"

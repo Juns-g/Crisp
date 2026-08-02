@@ -204,13 +204,29 @@ final class GammaService: @unchecked Sendable {
         // Incorporate software brightness factor so BrightnessService and GammaService
         // do not overwrite each other's transfer function.
         let brightnessFactor = max(0.05, BrightnessService.shared.currentSoftwareBrightness(for: displayID) ?? 1.0)
-        p.rHi = min(1.0, p.rHi * brightnessFactor)
-        p.gHi = min(1.0, p.gHi * brightnessFactor)
-        p.bHi = min(1.0, p.bHi * brightnessFactor)
-        CGSetDisplayTransferByFormula(displayID,
-            CGGammaValue(p.rLo), CGGammaValue(p.rHi), CGGammaValue(p.rGam),
-            CGGammaValue(p.gLo), CGGammaValue(p.gHi), CGGammaValue(p.gGam),
-            CGGammaValue(p.bLo), CGGammaValue(p.bHi), CGGammaValue(p.bGam))
+        p.rHi *= brightnessFactor
+        p.gHi *= brightnessFactor
+        p.bHi *= brightnessFactor
+
+        // Build the table by hand instead of CGSetDisplayTransferByFormula: the formula API
+        // forces min/max into [0,1] with min<=max, which silently drops inversion (rLo>rHi),
+        // positive gain (rHi>1), and positive contrast. Sampling the same curve into
+        // CGSetDisplayTransferByTable and clamping per entry honors all three.
+        let capacity = 256
+        var redTable   = [CGGammaValue](repeating: 0, count: capacity)
+        var greenTable = [CGGammaValue](repeating: 0, count: capacity)
+        var blueTable  = [CGGammaValue](repeating: 0, count: capacity)
+        for i in 0..<capacity {
+            let input = Double(i) / Double(capacity - 1)
+            func tableValue(lo: Double, hi: Double, gam: Double) -> CGGammaValue {
+                CGGammaValue(max(0.0, min(1.0, lo + (hi - lo) * pow(input, gam))))
+            }
+            redTable[i]   = tableValue(lo: p.rLo, hi: p.rHi, gam: p.rGam)
+            greenTable[i] = tableValue(lo: p.gLo, hi: p.gHi, gam: p.gGam)
+            blueTable[i]  = tableValue(lo: p.bLo, hi: p.bHi, gam: p.bGam)
+        }
+        CGSetDisplayTransferByTable(displayID, UInt32(capacity),
+                                    &redTable, &greenTable, &blueTable)
     }
 
     private func channelParams(for adj: GammaAdjustment) -> ChannelParams {
@@ -254,10 +270,10 @@ final class GammaService: @unchecked Sendable {
             swap(&bLo, &bHi)
         }
 
-        // ── Clamp to [0, 1] required by CGSetDisplayTransferByFormula ──
-        rLo = max(0.0, rLo); rHi = min(1.0, rHi)
-        gLo = max(0.0, gLo); gHi = min(1.0, gHi)
-        bLo = max(0.0, bLo); bHi = min(1.0, bHi)
+        // No [0,1] clamp here: the apply paths sample these endpoints into a transfer table
+        // and clamp per entry, so out-of-range endpoints are preserved and drive real effects,
+        // inversion (rLo>rHi), positive gain (rHi>1), and positive contrast (rHi>1, rLo<0).
+        // Clamping here would pin rHi to 1.0 and silently no-op gain and contrast above 0.
 
         return ChannelParams(
             rLo: rLo, rHi: rHi, rGam: rGammaExp,
@@ -328,9 +344,9 @@ final class GammaService: @unchecked Sendable {
         var p = channelParams(for: adj)
         // Incorporate software brightness factor, matching applyFormula behaviour.
         let brightnessFactor = max(0.05, BrightnessService.shared.currentSoftwareBrightness(for: displayID) ?? 1.0)
-        p.rHi = min(1.0, p.rHi * brightnessFactor)
-        p.gHi = min(1.0, p.gHi * brightnessFactor)
-        p.bHi = min(1.0, p.bHi * brightnessFactor)
+        p.rHi *= brightnessFactor
+        p.gHi *= brightnessFactor
+        p.bHi *= brightnessFactor
 
         for i in 0..<capacity {
             let input = Double(i) / Double(capacity - 1)

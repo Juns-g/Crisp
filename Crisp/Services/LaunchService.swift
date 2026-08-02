@@ -25,9 +25,6 @@ final class LaunchService: @unchecked Sendable {
                 try SMAppService.mainApp.register()
                 return true
             } catch {
-                #if DEBUG
-                print("[LaunchService] register failed: \(error)")
-                #endif
                 return false
             }
         }
@@ -41,9 +38,6 @@ final class LaunchService: @unchecked Sendable {
                 try SMAppService.mainApp.unregister()
                 return true
             } catch {
-                #if DEBUG
-                print("[LaunchService] unregister failed: \(error)")
-                #endif
                 return false
             }
         }

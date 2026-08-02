@@ -48,6 +48,32 @@ final class CoreBrightnessService: ObservableObject {
             trueToneAvailable = Self.boolCall(client, "supported") && Self.boolCall(client, "available")
         }
         refresh()
+        observeSystemChanges()
+    }
+
+    /// Keep the published state live while the panel is closed, so it opens already-correct
+    /// instead of visibly flipping a beat after it appears (the on-open refresh then finds
+    /// nothing to change). Dark mode broadcasts a distributed notification; Night Shift /
+    /// True Tone deliver a CoreBrightness status callback. Each just re-reads via refresh(), 
+    /// event-driven, never a poll. Singleton, so the observers live for the process.
+    private func observeSystemChanges() {
+        // Dark mode: Control Center / System Settings post this app-wide.
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+        // Night Shift / True Tone: each client invokes this block on any status change.
+        // Guarded by responds(to:) so a client lacking the selector is simply skipped.
+        let onChange: @convention(block) () -> Void = { [weak self] in
+            Task { @MainActor in self?.refresh() }
+        }
+        let sel = NSSelectorFromString("setStatusNotificationBlock:")
+        for client in [blueLightClient, trueToneClient].compactMap({ $0 }) where client.responds(to: sel) {
+            typealias Fn = @convention(c) (NSObject, Selector, @convention(block) () -> Void) -> Void
+            unsafeBitCast(client.method(for: sel), to: Fn.self)(client, sel, onChange)
+        }
     }
 
     /// Re-read the current system state (the user may have toggled it via Control Center).

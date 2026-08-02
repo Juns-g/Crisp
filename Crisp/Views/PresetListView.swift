@@ -2,12 +2,29 @@ import SwiftUI
 
 extension DisplayPreset {
     static let colorOptions: [(name: String, color: Color)] = [
-        ("indigo", .indigo), ("blue", .blue), ("purple", .purple), ("pink", .pink),
+        ("blue", .blue), ("indigo", .indigo), ("purple", .purple), ("pink", .pink),
         ("red", .red), ("orange", .orange), ("yellow", .yellow), ("green", .green),
         ("teal", .teal), ("gray", .gray),
     ]
     var chipColor: Color {
         Self.colorOptions.first(where: { $0.name == colorName })?.color ?? .indigo
+    }
+    /// VoiceOver display name for a color option; option.name is an internal key,
+    /// so interpolating it raw leaves the color untranslated (e.g. "blue 颜色").
+    static func localizedColorName(_ name: String) -> String {
+        switch name {
+        case "blue": return String(localized: "blue")
+        case "indigo": return String(localized: "indigo")
+        case "purple": return String(localized: "purple")
+        case "pink": return String(localized: "pink")
+        case "red": return String(localized: "red")
+        case "orange": return String(localized: "orange")
+        case "yellow": return String(localized: "yellow")
+        case "green": return String(localized: "green")
+        case "teal": return String(localized: "teal")
+        case "gray": return String(localized: "gray")
+        default: return name
+        }
     }
 }
 
@@ -17,9 +34,12 @@ extension DisplayPreset {
 /// (Built-in Native/HiDPI segmented control has been moved to the HiDPI section in Settings.)
 struct PresetListView: View {
     @ObservedObject private var presetService = PresetService.shared
+    // Single open editor at a time (accordion): a row's edit form or the New
+    // Preset form, never both. Opening one collapses whatever else was open.
+    @State private var activeEditor: PresetEditor?
 
     private var userPresets: [DisplayPreset] {
-        presetService.presets.filter { !$0.isBuiltin }
+        presetService.presets
     }
 
     var body: some View {
@@ -29,14 +49,27 @@ struct PresetListView: View {
                 PresetRow(
                     preset: preset,
                     isCurrentMatch: presetService.activePresetID == preset.id,
-                    isApplying: presetService.applyingPresetID == preset.id
+                    isApplying: presetService.applyingPresetID == preset.id,
+                    isEditing: Binding(
+                        get: { activeEditor == .preset(preset.id) },
+                        set: { activeEditor = $0 ? .preset(preset.id) : nil }
+                    )
                 )
             }
 
             // Save preset button
-            SavePresetView()
+            SavePresetView(isShowingForm: Binding(
+                get: { activeEditor == .new },
+                set: { activeEditor = $0 ? .new : nil }
+            ))
         }
     }
+}
+
+/// Which preset editor, if any, is currently open in the list.
+enum PresetEditor: Equatable {
+    case preset(DisplayPreset.ID)
+    case new
 }
 
 // MARK: - PresetRow (for user-created presets)
@@ -46,8 +79,9 @@ struct PresetRow: View {
     let isCurrentMatch: Bool
     let isApplying: Bool
 
+    @Binding var isEditing: Bool
+
     @State private var isHovered = false
-    @State private var isEditing = false
     @FocusState private var nameFocused: Bool
 
     /// Resolutions this preset will set, joined across displays. Shown as a hover

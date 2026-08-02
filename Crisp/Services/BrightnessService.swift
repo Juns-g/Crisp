@@ -6,7 +6,7 @@ import CoreGraphics
 @_silgen_name("CGDisplayIOServicePort")
 private func CGDisplayIOServicePort(_ display: CGDirectDisplayID) -> io_service_t
 
-// DisplayServices private framework — built-in panel brightness on Apple Silicon,
+// DisplayServices private framework, built-in panel brightness on Apple Silicon,
 // where IODisplayConnect no longer exists (CoreDisplay_Display_SetUserBrightness
 // is also a no-op there). Loaded via dlsym, same pattern as AutoBrightnessService.
 private let _DSSetBrightness: (@convention(c) (CGDirectDisplayID, Float) -> Int32)? = {
@@ -19,6 +19,66 @@ private let _DSGetBrightness: (@convention(c) (CGDirectDisplayID, UnsafeMutableP
           let sym = dlsym(h, "DisplayServicesGetBrightness") else { return nil }
     return unsafeBitCast(sym, to: (@convention(c) (CGDirectDisplayID, UnsafeMutablePointer<Float>) -> Int32).self)
 }()
+
+// DisplayServices brightness-change notifications: push updates so the UI tracks the
+// built-in panel live (native keys, auto-brightness, Night Shift/TrueTone) instead of
+// only refreshing on panel-open/wake/reconfigure. Signatures verified against SketchyBar
+// (src/misc/extern.h + src/display.c): register(did, passthrough, callback) plus a 5-arg
+// callback (passthrough, did, name, sender, info); brightness is not passed, it's read
+// back via DisplayServicesGetBrightness.
+private typealias DSBrightnessChangeHandler = @convention(c) (
+    UnsafeMutableRawPointer?, CGDirectDisplayID,
+    UnsafeMutableRawPointer?, UnsafeRawPointer?, UnsafeRawPointer?
+) -> Void
+
+private let _DSRegisterBrightnessChange: (@convention(c) (CGDirectDisplayID, UInt32, DSBrightnessChangeHandler) -> Int32)? = {
+    guard let h = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_LAZY),
+          let sym = dlsym(h, "DisplayServicesRegisterForBrightnessChangeNotifications") else { return nil }
+    return unsafeBitCast(sym, to: (@convention(c) (CGDirectDisplayID, UInt32, DSBrightnessChangeHandler) -> Int32).self)
+}()
+private let _DSUnregisterBrightnessChange: (@convention(c) (CGDirectDisplayID, UInt32) -> Int32)? = {
+    guard let h = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_LAZY),
+          let sym = dlsym(h, "DisplayServicesUnregisterForBrightnessChangeNotifications") else { return nil }
+    return unsafeBitCast(sym, to: (@convention(c) (CGDirectDisplayID, UInt32) -> Int32).self)
+}()
+
+/// C callback fired when a display's brightness changes from any source. Brightness is
+/// not a parameter (per the reverse-engineered API), so we read it back and push it onto
+/// the matching DisplayInfo on the main actor. Must be a capture-free top-level function
+/// to be usable as a @convention(c) pointer.
+private func _crispBuiltinBrightnessChanged(
+    _ passthrough: UnsafeMutableRawPointer?,
+    _ did: CGDirectDisplayID,
+    _ name: UnsafeMutableRawPointer?,
+    _ sender: UnsafeRawPointer?,
+    _ info: UnsafeRawPointer?
+) {
+    guard let get = _DSGetBrightness else { return }
+    var v: Float = 0
+    guard get(did, &v) == 0 else { return }
+    let value = Double(v) * 100.0
+    Task { @MainActor in
+        guard let display = DisplayManagerAccessor.shared.displays.first(where: { $0.displayID == did })
+        else { return }
+        // Skip sub-0.5% jitter to avoid redundant @Published churn.
+        guard abs(display.brightness - value) >= 0.5 else { return }
+        display.brightness = value
+        // Drive auto-brightness off this live change so external displays follow the
+        // built-in immediately instead of trailing its 2s poll. (issue #12 follow-up)
+        NotificationCenter.default.post(name: .crispBuiltinBrightnessDidChange, object: nil)
+    }
+}
+
+extension Notification.Name {
+    /// Posted when the built-in display's brightness changes (keys, ambient auto-brightness).
+    static let crispBuiltinBrightnessDidChange = Notification.Name("crisp.builtinBrightnessDidChange")
+    /// Posted when the user manually changes an EXTERNAL display's brightness (slider, keys,
+    /// preset). userInfo: "displayID" (CGDirectDisplayID), "value" (Double, 0–100).
+    static let crispExternalManualAdjust = Notification.Name("crisp.externalManualAdjust")
+    /// Posted when the user manually changes the BUILT-IN display's brightness from Crisp.
+    /// Distinguishes a deliberate built-in change from the ambient signal auto-brightness follows.
+    static let crispBuiltinManualAdjust = Notification.Name("crisp.builtinManualAdjust")
+}
 
 // MARK: - BrightnessAnimator
 
@@ -51,7 +111,7 @@ final class BrightnessAnimator: @unchecked Sendable {
     ) {
         cancel()
 
-        // If from ≈ to, no animation needed — just apply final value.
+        // If from ≈ to, no animation needed, just apply final value.
         guard abs(to - from) > 0.001, steps > 1 else {
             handler(to, true)
             return
@@ -117,11 +177,9 @@ final class BrightnessService: @unchecked Sendable {
 
     // MARK: - Manual Adjust Cooldown
 
-    /// Set when the user manually adjusts brightness; auto-brightness skips updates for 30 s.
+    /// Set when the user manually adjusts any display's brightness. The menu panel's
+    /// external poll skips for a few seconds after this so it doesn't fight a live drag.
     private(set) var lastManualAdjustDate: Date? = nil
-    /// Manual changes to external displays only. Auto-brightness pauses on this
-    /// one: a manual builtin change is the very signal it syncs from.
-    private(set) var lastExternalManualAdjustDate: Date? = nil
     private let manualAdjustLock = NSLock()
 
     // MARK: - Software Brightness Factors
@@ -165,7 +223,7 @@ final class BrightnessService: @unchecked Sendable {
     // MARK: - Public API
 
     /// `animated: true` glides the built-in slider to the freshly-read value
-    /// instead of snapping — used by the ~1s poll so an ambient-sensor auto-adjust
+    /// instead of snapping, used by the ~1s poll so an ambient-sensor auto-adjust
     /// reads as smooth motion. Instant (default) on load/wake where the slider
     /// should show the real value immediately.
     @MainActor
@@ -214,19 +272,50 @@ final class BrightnessService: @unchecked Sendable {
                 if let result = result, result.max > 0 {
                     let brightness = Double(result.current) / Double(result.max) * 100.0
                     self.ddcAvailableLock.lock()
+                    let firstRead = self.ddcAvailable[displayID] != true
                     self.ddcAvailable[displayID] = true
                     self.ddcMaxBrightness[displayID] = result.max
                     self.ddcAvailableLock.unlock()
-                    Task { @MainActor in display.brightness = brightness }
+                    Task { @MainActor in
+                        // DDC reads quantize (many panels expose a coarser internal
+                        // scale than they accept), so a value we just set can read back
+                        // 1-2% off and twitch the slider on every open. Adopt the read
+                        // only on the first seed, or when it differs enough to be a real
+                        // external change (the monitor's own buttons), not read noise.
+                        if firstRead || abs(brightness - display.brightness) > 3.0 {
+                            display.brightness = brightness
+                        }
+                    }
                 }
                 // A failed/ignored read does NOT mean DDC is unavailable: many monitors
                 // accept brightness *writes* but never answer *reads* (they ack the I2C
                 // transaction with stale/null bytes, now rejected by DDCService). Leaving
-                // availability undetermined lets the write path decide — marking it false
+                // availability undetermined lets the write path decide, marking it false
                 // here would wrongly force the gamma/software fallback on a display whose
                 // hardware backlight control works fine, just showing a stale slider value.
             }
         }
+    }
+
+    /// The built-in display we currently observe for brightness changes.
+    private var observedBuiltinID: CGDirectDisplayID?
+
+    /// Subscribes to the built-in panel's brightness-change notifications so the slider
+    /// tracks live (native keys, auto-brightness, Night Shift/TrueTone) rather than only
+    /// refreshing on panel-open/wake/reconfigure. Idempotent: re-points at the current
+    /// built-in (or drops the observer if none) and no-ops when nothing changed, so it's
+    /// safe to call on every display reconfiguration.
+    @MainActor
+    func startObservingBuiltinBrightness() {
+        let builtin = builtinDisplayID()
+        guard observedBuiltinID != builtin else { return }
+        if let old = observedBuiltinID {
+            _ = _DSUnregisterBrightnessChange?(old, old)
+            observedBuiltinID = nil
+        }
+        guard let builtin, let register = _DSRegisterBrightnessChange else { return }
+        _ = register(builtin, builtin, _crispBuiltinBrightnessChanged)
+        observedBuiltinID = builtin
     }
 
     @MainActor
@@ -239,9 +328,9 @@ final class BrightnessService: @unchecked Sendable {
         if !isAutoAdjust {
             manualAdjustLock.withLock {
                 lastManualAdjustDate = Date()
-                if !isBuiltin { lastExternalManualAdjustDate = Date() }
             }
             PresetService.shared.noteManualChange()
+            noteManualBrightnessChange(displayID: displayID, isBuiltin: isBuiltin, value: clamped)
         }
 
         if isBuiltin {
@@ -255,7 +344,7 @@ final class BrightnessService: @unchecked Sendable {
             let currentStatus: Bool? = ddcAvailableLock.withLock { ddcAvailable[displayID] }
 
             if currentStatus == false {
-                // DDC known unavailable — go straight to software fallback
+                // DDC known unavailable, go straight to software fallback
                 queue.async { [weak self] in
                     self?.setSoftwareBrightness(clamped, for: displayID)
                 }
@@ -263,6 +352,21 @@ final class BrightnessService: @unchecked Sendable {
             }
 
             writeDDCBrightnessCoalesced(percent: clamped, for: displayID)
+        }
+    }
+
+    /// Broadcasts a manual (user-initiated) brightness change so auto-brightness can react:
+    /// an external change re-pins that display's offset; a built-in change re-pins all offsets
+    /// (externals hold; the offset absorbs it) instead of dragging the externals along.
+    private func noteManualBrightnessChange(displayID: CGDirectDisplayID, isBuiltin: Bool, value: Double) {
+        if isBuiltin {
+            NotificationCenter.default.post(name: .crispBuiltinManualAdjust, object: nil)
+        } else {
+            NotificationCenter.default.post(
+                name: .crispExternalManualAdjust,
+                object: nil,
+                userInfo: ["displayID": displayID, "value": value]
+            )
         }
     }
 
@@ -282,7 +386,7 @@ final class BrightnessService: @unchecked Sendable {
     /// The DDC/CI (MCCS) spec asks hosts to wait ~50ms after a "Set VCP Feature"
     /// before the next message; writing faster (a fast slider drag fires ~60/sec)
     /// floods the I2C bus and makes many panels visibly flicker. The coalescing
-    /// pump still applies the latest value — this just caps the cadence at ~20/sec.
+    /// pump still applies the latest value, this just caps the cadence at ~20/sec.
     private let minDDCWriteInterval: TimeInterval = 0.05
 
     /// DDC 0 on most monitors means "minimum backlight", which is still visibly bright.
@@ -378,9 +482,6 @@ final class BrightnessService: @unchecked Sendable {
                     DispatchQueue.main.async { [weak self] in
                         self?.setSoftwareBrightness(percent, for: displayID)
                     }
-                    #if DEBUG
-                    print("[BrightnessService] DDC unavailable for display \(displayID), using software fallback")
-                    #endif
                 }
             }
             self.pumpDDCWrite(for: displayID)
@@ -399,7 +500,7 @@ final class BrightnessService: @unchecked Sendable {
     /// - For built-in displays: 8 IOKit writes over 200ms mirror the software path.
     ///
     /// Cancels any previously running animation for the same display, so rapid key presses
-    /// always feel responsive — the animation re-targets from wherever it currently is.
+    /// always feel responsive, the animation re-targets from wherever it currently is.
     @MainActor
     func setBrightnessSmooth(
         _ targetBrightness: Double,
@@ -414,9 +515,9 @@ final class BrightnessService: @unchecked Sendable {
         if !isAutoAdjust {
             manualAdjustLock.withLock {
                 lastManualAdjustDate = Date()
-                if !display.isBuiltin { lastExternalManualAdjustDate = Date() }
             }
             PresetService.shared.noteManualChange()
+            noteManualBrightnessChange(displayID: displayID, isBuiltin: display.isBuiltin, value: clamped)
         }
 
         let anim = animator(for: displayID)
@@ -475,7 +576,7 @@ final class BrightnessService: @unchecked Sendable {
             return
         }
 
-        // No active gamma adjustment — write a plain dimmed ramp directly.
+        // No active gamma adjustment, write a plain dimmed ramp directly.
         let floatFactor = Float(factor)
         let tableSize: UInt32 = 256
         var red   = [CGGammaValue](repeating: 0, count: Int(tableSize))
@@ -489,14 +590,7 @@ final class BrightnessService: @unchecked Sendable {
             blue[i]  = v
         }
 
-        let result = CGSetDisplayTransferByTable(displayID, tableSize, &red, &green, &blue)
-        #if DEBUG
-        if result != CGError.success {
-            print("[BrightnessService] CGSetDisplayTransferByTable failed: \(result)")
-        } else {
-            print("[BrightnessService] software brightness set to \(Int(brightness))% for display \(displayID)")
-        }
-        #endif
+        _ = CGSetDisplayTransferByTable(displayID, tableSize, &red, &green, &blue)
     }
 
     /// Resets the gamma table for a display back to the identity curve.
@@ -545,7 +639,7 @@ final class BrightnessService: @unchecked Sendable {
 
     /// Returns the io_service_t for the built-in display using CGDisplayIOServicePort.
     /// Falls back to iterating IODisplayConnect services if CGDisplayIOServicePort returns null.
-    /// Caller does NOT need to release — CGDisplayIOServicePort returns a non-retained port.
+    /// Caller does NOT need to release, CGDisplayIOServicePort returns a non-retained port.
     private func builtinIOService() -> io_service_t? {
         // Find the built-in CGDirectDisplayID
         var displayCount: UInt32 = 0
@@ -651,9 +745,6 @@ final class BrightnessService: @unchecked Sendable {
             if IODisplaySetFloatParameter(
                 servicePort, 0, Self.ioDisplayBrightnessKey, value
             ) == KERN_SUCCESS {
-                #if DEBUG
-                print("[BrightnessService] internal brightness set to \(value)")
-                #endif
                 return
             }
         }
@@ -681,9 +772,6 @@ final class BrightnessService: @unchecked Sendable {
             IOServiceMatching("IODisplayConnect"),
             &iter
         ) == KERN_SUCCESS else {
-            #if DEBUG
-            print("[BrightnessService] setInternalBrightness: no builtin service responded")
-            #endif
             return
         }
         defer { IOObjectRelease(iter) }
@@ -695,14 +783,8 @@ final class BrightnessService: @unchecked Sendable {
             if IODisplaySetFloatParameter(
                 service, 0, Self.ioDisplayBrightnessKey, value
             ) == KERN_SUCCESS {
-                #if DEBUG
-                print("[BrightnessService] internal brightness set to \(value)")
-                #endif
                 return
             }
         }
-        #if DEBUG
-        print("[BrightnessService] setInternalBrightness: no builtin service responded")
-        #endif
     }
 }

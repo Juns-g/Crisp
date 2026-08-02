@@ -18,7 +18,7 @@ struct DisconnectDisplayRow: View {
         if service.isSupported, !service.wouldLeaveNoActiveDisplay(display.displayID) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    MenuItemIcon(systemName: "rectangle.slash", color: .orange)
+                    MenuItemIcon(systemName: "rectangle.slash", color: .orange, active: false)
                     Text("Disconnect Display")
                         .font(.body)
                     Spacer()
@@ -104,7 +104,7 @@ struct ReconnectDisplaysSection: View {
 /// One disconnected-display row. The whole row highlights and is tappable to
 /// reconnect (like clicking a network in the native Wi-Fi menu), with a
 /// "Reconnect" hint that is always visible and brightens to the accent color on
-/// hover — so the action is discoverable at rest, not a small stray button.
+/// hover, so the action is discoverable at rest, not a small stray button.
 private struct DisconnectedDisplayRow: View {
     let record: PhysicalDisplayToggleService.DisconnectedDisplay
     let busy: Bool
@@ -116,7 +116,7 @@ private struct DisconnectedDisplayRow: View {
             // The display is inactive, so dim its icon + name; it brightens as the
             // row is hovered, cueing that a click brings it back.
             HStack(spacing: 8) {
-                MenuItemIcon(systemName: "rectangle.slash", color: .secondary)
+                MenuItemIcon(systemName: "rectangle.slash", color: .secondary, active: false)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(record.name).font(.body).lineLimit(1)
                     Text(verbatim: "\(record.width)×\(record.height)")

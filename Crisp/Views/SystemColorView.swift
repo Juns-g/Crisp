@@ -154,7 +154,7 @@ struct SystemColorMenuEntry: View {
         VStack(spacing: 0) {
             ExpandableRow(
                 icon: "eyedropper.halffull",
-                iconColor: .orange,
+                iconActive: false,
                 label: "System Color",
                 isExpanded: $isExpanded
             )

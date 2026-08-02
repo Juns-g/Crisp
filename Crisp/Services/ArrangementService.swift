@@ -21,7 +21,7 @@ class ArrangementService {
     /// Moves `displayID` to (x, y) for an interactive drag, keeping the current
     /// main display pinned at origin (0, 0) as macOS requires. macOS silently
     /// renormalizes any config that leaves the main off (0, 0), so setting the
-    /// main's origin alone snaps right back — the built-in display looks stuck.
+    /// main's origin alone snaps right back, the built-in display looks stuck.
     /// Here we set every display's origin in one transaction and subtract the
     /// main's proposed origin from all of them, so dragging the main shifts the
     /// others the opposite way (matching the native Arrange Displays sheet)
@@ -52,8 +52,8 @@ class ArrangementService {
     /// Makes the target display the main display by moving it to origin (0, 0).
     /// Translates every display by the same vector so the relative arrangement is
     /// preserved and only the origin (and thus the menu bar / Dock) moves. The old
-    /// approach swapped just the target and old-main origins, which — being blind
-    /// to display sizes — could leave a wider display overlapping its neighbor; a
+    /// approach swapped just the target and old-main origins, which, being blind
+    /// to display sizes, could leave a wider display overlapping its neighbor; a
     /// uniform shift of a non-overlapping layout can never overlap.
     /// - Returns: true if the configuration was applied successfully.
     @discardableResult
@@ -75,7 +75,7 @@ class ArrangementService {
     /// Applies a set of display origins in a single atomic transaction. The whole
     /// Begin→Origin→Complete runs inside `CGHelpers.runWithTimeout` so
     /// `CGCompleteDisplayConfiguration` cannot block indefinitely on WindowServer
-    /// IPC. Only value types cross the `@Sendable` boundary — no OpaquePointer.
+    /// IPC. Only value types cross the `@Sendable` boundary, no OpaquePointer.
     private func applyOrigins(_ origins: [(id: CGDirectDisplayID, x: Int, y: Int)]) async -> Bool {
         await CGHelpers.runWithTimeout(seconds: 10, fallback: false) {
             var config: CGDisplayConfigRef?

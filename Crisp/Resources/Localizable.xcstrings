@@ -1,6 +1,196 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "blue" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "蓝色"
+          }
+        }
+      }
+    },
+    "indigo" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "靛蓝色"
+          }
+        }
+      }
+    },
+    "purple" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "紫色"
+          }
+        }
+      }
+    },
+    "pink" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粉色"
+          }
+        }
+      }
+    },
+    "red" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "红色"
+          }
+        }
+      }
+    },
+    "orange" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "橙色"
+          }
+        }
+      }
+    },
+    "yellow" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "黄色"
+          }
+        }
+      }
+    },
+    "green" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "绿色"
+          }
+        }
+      }
+    },
+    "teal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "蓝绿色"
+          }
+        }
+      }
+    },
+    "gray" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "灰色"
+          }
+        }
+      }
+    },
+    "HiDPI" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HiDPI"
+          }
+        }
+      }
+    },
+    "Non-HiDPI" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "非 HiDPI"
+          }
+        }
+      }
+    },
+    "External displays follow the built-in but keep the difference you set" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "外接显示器跟随内置显示器，但保持你设置的亮度差异"
+          }
+        }
+      }
+    },
+    "Keep display offsets" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保持亮度偏移"
+          }
+        }
+      }
+    },
+    "Loading profiles…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载配置文件…"
+          }
+        }
+      }
+    },
+    "All connected displays" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有已连接的显示器"
+          }
+        }
+      }
+    },
+    "Brightness Keys" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "亮度键"
+          }
+        }
+      }
+    },
+    "Follow the pointer" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跟随指针"
+          }
+        }
+      }
+    },
+    "Selected displays only" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅所选显示器"
+          }
+        }
+      }
+    },
     "%@, disconnected" : {
       "localizations" : {
         "zh-Hans" : {
@@ -151,16 +341,6 @@
         }
       }
     },
-    "Adjusts external displays to follow the built-in display brightness" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "调整外接显示器以跟随内置显示器亮度"
-          }
-        }
-      }
-    },
     "All Profiles" : {
       "localizations" : {
         "zh-Hans" : {
@@ -221,12 +401,12 @@
         }
       }
     },
-    "Brightness (Combined)" : {
+    "Combined" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "亮度（合并）"
+            "value" : "合并亮度"
           }
         }
       }
@@ -471,16 +651,6 @@
         }
       }
     },
-    "Creating..." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "创建中…"
-          }
-        }
-      }
-    },
     "Current Main Display" : {
       "localizations" : {
         "zh-Hans" : {
@@ -621,12 +791,22 @@
         }
       }
     },
-    "First enable asks for an administrator password" : {
+    "Adds finer in-between steps for how large everything looks" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "首次启用需要管理员密码"
+            "value" : "增加更精细的中间缩放档位，用于微调界面大小"
+          }
+        }
+      }
+    },
+    "Adds finer in-between steps for how large everything looks. Enabling asks for an administrator password and briefly flashes the screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "增加更精细的中间缩放档位，用于微调界面大小。启用需要管理员密码，并会短暂闪烁屏幕"
           }
         }
       }
@@ -727,26 +907,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "隐藏刘海区域"
-          }
-        }
-      }
-    },
-    "HiDPI & Scaling" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HiDPI 与缩放"
-          }
-        }
-      }
-    },
-    "HiDPI Operation Failed" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HiDPI 操作失败"
           }
         }
       }
@@ -1031,16 +1191,6 @@
         }
       }
     },
-    "Reconnect the display to finish" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重新连接显示器以完成"
-          }
-        }
-      }
-    },
     "Refresh Rate" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1087,16 +1237,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "保存"
-          }
-        }
-      }
-    },
-    "Saving..." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保存中…"
           }
         }
       }
@@ -1396,7 +1536,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "宽"
+            "value" : "宽度"
           }
         }
       }
@@ -1406,7 +1546,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "高"
+            "value" : "高度"
           }
         }
       }
@@ -1516,7 +1656,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "采集项目"
+            "value" : "包含项目"
           }
         }
       }
@@ -1547,6 +1687,126 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "排列"
+          }
+        }
+      }
+    },
+    "Smooth scaling" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "平滑缩放"
+          }
+        }
+      }
+    },
+    "Larger Text" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更大文本"
+          }
+        }
+      }
+    },
+    "More Space" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更多空间"
+          }
+        }
+      }
+    },
+    "Beta" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "测试版"
+          }
+        }
+      }
+    },
+    "Most sizes are scaled and look slightly soft" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "多数尺寸经过缩放，会略显模糊"
+          }
+        }
+      }
+    },
+    "Brightness keys need Accessibility access to redirect them to external displays. Grant it once and they start working, no restart." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "亮度键需要辅助功能权限才能重定向到外接显示器。授权一次即可使用，无需重启。"
+          }
+        }
+      }
+    },
+    "Keep Awake" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "防止睡眠"
+          }
+        }
+      }
+    },
+    "Automatically adjust brightness" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动调节亮度"
+          }
+        }
+      }
+    },
+    "Show all resolutions" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示所有分辨率"
+          }
+        }
+      }
+    },
+    "Update to current values" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新为当前值"
+          }
+        }
+      }
+    },
+    "Replace the stored values above with this display's current settings" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用该显示器的当前设置替换上方存储的值"
+          }
+        }
+      }
+    },
+    "Use brightness keys on external displays" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用亮度键控制外接显示器"
           }
         }
       }
