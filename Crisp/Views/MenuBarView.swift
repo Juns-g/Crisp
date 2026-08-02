@@ -758,7 +758,8 @@ struct SettingsView: View {
             if AXIsProcessTrusted() {
                 ExpandableRow(
                     icon: "keyboard",
-                    iconActive: false,
+                    iconColor: .accentColor,
+                    iconActive: true,
                     label: "Brightness Keys",
                     subtitle: brightnessTargetName(settings.brightnessKeyTarget),
                     isExpanded: $showBrightnessKeys
