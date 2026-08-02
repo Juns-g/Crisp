@@ -212,9 +212,9 @@ struct ArrangementView: View {
         Task { @MainActor in
             let ok = await ArrangementService.shared.setPosition(
                 x: newX, y: newY, for: display.displayID, among: displayManager.displays)
-            if ok {
-                displayManager.refreshDisplays()
-            } else {
+            // On success the reconfiguration callback (.movedFlag) rebuilds the display
+            // list; refreshing here too rebuilt it twice per drag.
+            if !ok {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     dragError = String(localized: "Failed to arrange displays. Please try again.")
                 }

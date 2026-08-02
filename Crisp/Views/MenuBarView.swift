@@ -151,6 +151,17 @@ struct SectionDivider: View {
 
 // MARK: - SectionHeader
 
+/// Secondary text that clears WCAG AA on the light popover background. The system
+/// .secondary measures ~3.9:1 there (below the 4.5:1 required at caption sizes);
+/// dark mode measures ~5.8:1, so keep the system color and darken only light mode.
+extension Color {
+    static let secondaryReadable = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? .secondaryLabelColor
+            : NSColor(white: 0.40, alpha: 1.0)  // ~5.4:1 on the 245-251 light material
+    })
+}
+
 /// A group label in the native menu-bar idiom (the "Known Networks" /
 /// "Energy Mode" captions in the Wi-Fi and Battery menus): a small semibold
 /// secondary caption sitting above a group of rows.
@@ -160,7 +171,7 @@ struct SectionHeader: View {
         Text(LocalizedStringKey(title))
             .font(.callout)
             .fontWeight(.semibold)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.secondaryReadable)
             .padding(.horizontal, 12)
             .padding(.top, 4)
             .padding(.bottom, 3)
@@ -193,7 +204,7 @@ struct ExpandableRow: View {
             if let sub = subtitle, !sub.isEmpty {
                 Text(sub)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.secondaryReadable)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -834,7 +845,7 @@ struct SettingsView: View {
 
             Text("Crisp v\(UpdateService.shared.currentVersion)")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(.secondaryReadable)
                 .padding(.horizontal, 12)
 
             // Optional support link, tucked next to the version stamp where

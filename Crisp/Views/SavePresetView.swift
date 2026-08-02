@@ -215,7 +215,7 @@ struct SavePresetForm: View {
                                         )
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("\(option.name) color")
+                                .accessibilityLabel("\(DisplayPreset.localizedColorName(option.name)) color")
                                 .accessibilityAddTraits(selectedColor == option.name ? [.isSelected] : [])
                             }
                         }

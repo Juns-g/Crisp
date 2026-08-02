@@ -31,6 +31,10 @@ struct AutoBrightnessView: View {
                     .labelsHidden()
                     .controlSize(.small)
                     .disabled(builtinUnavailable)
+                    .accessibilityLabel("Auto Brightness")
+                    // VoiceOver-only state confirmation; the visible subtitle
+                    // intentionally stays static (native toggles don't switch text).
+                    .accessibilityValue(service.isEnabled ? "Syncing with built-in display brightness" : "Off")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)

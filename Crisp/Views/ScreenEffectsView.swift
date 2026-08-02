@@ -94,7 +94,7 @@ private struct EffectCircleButton: View {
                         .foregroundColor(.primary)
                     Text(isOn ? "On" : "Off")
                         .font(.system(size: 11))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.secondaryReadable)
                 }
             }
             .contentShape(Rectangle())

@@ -246,7 +246,8 @@ struct DisplayModeSection: View {
         }
     }
 
-    private func resolutionSectionHeader(_ title: String) -> some View {
+    // LocalizedStringKey, not String: Text(String) is the non-localizing overload.
+    private func resolutionSectionHeader(_ title: LocalizedStringKey) -> some View {
         Text(title)
             .font(.caption)
             .fontWeight(.semibold)

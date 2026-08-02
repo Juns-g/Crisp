@@ -9,6 +9,23 @@ extension DisplayPreset {
     var chipColor: Color {
         Self.colorOptions.first(where: { $0.name == colorName })?.color ?? .indigo
     }
+    /// VoiceOver display name for a color option; option.name is an internal key,
+    /// so interpolating it raw leaves the color untranslated (e.g. "blue 颜色").
+    static func localizedColorName(_ name: String) -> String {
+        switch name {
+        case "blue": return String(localized: "blue")
+        case "indigo": return String(localized: "indigo")
+        case "purple": return String(localized: "purple")
+        case "pink": return String(localized: "pink")
+        case "red": return String(localized: "red")
+        case "orange": return String(localized: "orange")
+        case "yellow": return String(localized: "yellow")
+        case "green": return String(localized: "green")
+        case "teal": return String(localized: "teal")
+        case "gray": return String(localized: "gray")
+        default: return name
+        }
+    }
 }
 
 // MARK: - PresetListView

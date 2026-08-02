@@ -66,7 +66,9 @@ class DisplayInfo: ObservableObject, Identifiable {
         if builtin {
             self.name = String(localized: "Built-in Display")
         } else {
-            self.name = NSScreen.screen(for: displayID)?.localizedName ?? String(localized: "Display \(displayID)")
+            // String(displayID), not the raw UInt32: a numeric interpolation generates a
+            // numeric-specifier key that never matches the catalog's "Display %@" entry.
+            self.name = NSScreen.screen(for: displayID)?.localizedName ?? String(localized: "Display \(String(displayID))")
         }
 
     }

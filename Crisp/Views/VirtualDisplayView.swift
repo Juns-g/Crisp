@@ -272,7 +272,8 @@ struct VirtualDisplayRow: View {
         }
     }
 
-    private func pill(_ text: String, color: Color) -> some View {
+    // LocalizedStringKey, not String: Text(String) is the non-localizing overload.
+    private func pill(_ text: LocalizedStringKey, color: Color) -> some View {
         Text(text)
             .font(.caption2)
             .fontWeight(.medium)
