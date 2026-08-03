@@ -13,7 +13,7 @@
 **Build/check commands:**
 - Compile check: `make compile` (swiftc, no Xcode needed). Expected: exits 0, prints "Done. ./Crisp-bin built".
 - Run on machine: `make dev` (swaps binary into /Applications/Crisp.app and relaunches).
-- Boost math check: `swiftc -swift-version 5 Crisp/Utilities/BrightnessBoostMath.swift scripts/check-boost-math.swift -o /tmp/check-boost-math && /tmp/check-boost-math` (created in Task 2).
+- Boost math check: `cat Crisp/Utilities/BrightnessBoostMath.swift scripts/check-boost-math.swift | swift -` (created in Task 2).
 - Translations gate: `python3 scripts/check-translations.py`.
 
 **House rules that apply to every task:**
@@ -168,7 +168,7 @@ The only pure logic in the feature: slider ceiling from headroom, and overlay fa
 ```swift
 // scripts/check-boost-math.swift
 // Runnable check for BrightnessBoostMath. Build and run:
-//   swiftc -swift-version 5 Crisp/Utilities/BrightnessBoostMath.swift scripts/check-boost-math.swift -o /tmp/check-boost-math && /tmp/check-boost-math
+//   cat Crisp/Utilities/BrightnessBoostMath.swift scripts/check-boost-math.swift | swift -
 
 // sliderMax: no meaningful headroom means the scale stays at 100.
 assert(BrightnessBoostMath.sliderMax(potentialHeadroom: 1.0) == 100)
@@ -232,7 +232,7 @@ enum BrightnessBoostMath {
 
 - [ ] **Step 4: Run the check to verify it passes**
 
-Run: `swiftc -swift-version 5 Crisp/Utilities/BrightnessBoostMath.swift scripts/check-boost-math.swift -o /tmp/check-boost-math && /tmp/check-boost-math`
+Run: `cat Crisp/Utilities/BrightnessBoostMath.swift scripts/check-boost-math.swift | swift -`
 Expected: `check-boost-math: all assertions passed`
 
 - [ ] **Step 5: Verify the app still compiles**

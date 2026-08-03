@@ -1,6 +1,6 @@
 // scripts/check-boost-math.swift
-// Runnable check for BrightnessBoostMath. Build and run:
-//   swiftc -swift-version 5 Crisp/Utilities/BrightnessBoostMath.swift scripts/check-boost-math.swift -o /tmp/check-boost-math && /tmp/check-boost-math
+// Runnable check for BrightnessBoostMath. Run:
+//   cat Crisp/Utilities/BrightnessBoostMath.swift scripts/check-boost-math.swift | swift -
 
 // sliderMax: no meaningful headroom means the scale stays at 100.
 assert(BrightnessBoostMath.sliderMax(potentialHeadroom: 1.0) == 100)
