@@ -743,6 +743,12 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                // Returning from System Settings: if access still isn't granted (declined, or a
+                // stale grant from a differently-signed build), un-stick the toggle so it can't
+                // sit "on" while the caption still says access is needed and no target menu shows.
+                if !AXIsProcessTrusted() { requesting = false }
+            }
         }
 
         private func requestAccess() {
@@ -880,6 +886,12 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidOpen)) { _ in
             // Re-read trust on every open so the section reflects a grant/revoke made in
             // System Settings since the last open (the content mounts once). (vx44)
+            isTrusted = AXIsProcessTrusted()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // Also refresh when the app reactivates (e.g. returning from System Settings after
+            // granting), so the section flips from the opt-in toggle to the target menu without
+            // needing the panel closed and reopened. (brightness-keys zombie toggle fix)
             isTrusted = AXIsProcessTrusted()
         }
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
