@@ -550,16 +550,22 @@ final class BrightnessBoostService {
     // MARK: - Overlay sync (called on every brightness change)
 
     /// Recompute and apply the overlay factor for the display's current
-    /// brightness. Reads live headroom each time so the boost tracks what the
-    /// panel can actually deliver. Cheap: two property reads, and the overlay
-    /// only re-renders when the factor moves.
+    /// brightness. Spike finding: current headroom reads 1.0 until EDR content
+    /// is on screen, so gating on it would deadlock the overlay off. Instead
+    /// map onto the capped potential, and clamp by current headroom only once
+    /// macOS has ramped it above 1. Headroom changes post
+    /// didChangeScreenParameters (observed above), so the factor converges to
+    /// what the panel can actually deliver within a beat of engaging.
     func syncOverlay(for display: DisplayInfo) {
         guard display.maxBrightness > 100 else { return }
-        let factor = BrightnessBoostMath.overlayFactor(
+        let ceiling = min(potentialHeadroom(for: display.displayID), 2.0)
+        var factor = BrightnessBoostMath.overlayFactor(
             brightness: display.brightness,
             sliderMax: display.maxBrightness,
-            currentHeadroom: currentHeadroom(for: display.displayID)
+            currentHeadroom: ceiling
         )
+        let current = currentHeadroom(for: display.displayID)
+        if current > 1.0 { factor = min(factor, current) }
         EDROverlayManager.shared.setFactor(factor, for: display.displayID)
     }
 
