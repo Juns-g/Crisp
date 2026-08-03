@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import CoreGraphics
 import ApplicationServices
+import Combine
 
 /// Borderless key-capable panel for the menu bar UI.
 /// Owning the panel (instead of MenuBarExtra's window) removes the WindowServer
@@ -123,6 +124,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     let displayManager = DisplayManager()
     private var statusItem: NSStatusItem?
+    /// Drives the menu-bar Keep Awake indicator (keep-awake indicator).
+    private var keepAwakeCancellable: AnyCancellable?
+    private var keepAwakeBadge: NSView?
     private var panel: MenuPanel?
     /// The panel is NEVER ordered out once warmed: taking the backdrop surface
     /// off screen makes WindowServer replay its materialize bloom (the growing
@@ -165,7 +169,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // but only if Accessibility is already granted. Creating the tap (tapCreate) is what
         // surfaces the OS prompt, so gating on trust keeps launch prompt-free; new users opt
         // in via the toggle in the Brightness Keys section, which arms it in context. (jv1b)
-        if AXIsProcessTrusted() { BrightnessKeyService.shared.start() }
+        if AXIsProcessTrusted() {
+            BrightnessKeyService.shared.start()
+        } else {
+            // AXIsProcessTrusted() is unreliable at the exact launch instant, especially right
+            // after an upgrade while macOS re-validates the replaced bundle: a user who already
+            // granted access in the prior version would otherwise have the tap silently never arm
+            // (the launch check reads false, and nothing re-arms it since the opt-in toggle is
+            // hidden once trust settles true). Re-check a couple of times as trust settles and arm
+            // if it has; start() is idempotent, and this is bounded so users who never granted
+            // don't poll forever. (upgrade zombie)
+            for delay in [1.0, 3.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    if AXIsProcessTrusted() { BrightnessKeyService.shared.start() }
+                }
+            }
+        }
 
         // Touch the singleton so auto-brightness polling starts at launch; otherwise
         // it only starts the first time the menu panel is opened (its only other ref).
@@ -313,6 +332,51 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return nil
         }
         statusItem = item
+
+        // Overlay a small orange dot on the icon while Keep Awake is on, so it's visible at a
+        // glance that sleep is being held. The base icon itself never changes. (keep-awake indicator)
+        updateStatusIcon(active: KeepAwakeService.shared.isActive, animated: false)
+        keepAwakeCancellable = KeepAwakeService.shared.$isActive
+            .sink { [weak self] active in self?.updateStatusIcon(active: active, animated: true) }
+    }
+
+    /// Renders the status-bar icon for the given Keep Awake state. A hidden default
+    /// (`crisp.debug.keepAwakeIconStyle` = "tint" | "badge") selects how "on" is shown, so
+    /// the two can be compared live; default is tint. (keep-awake indicator)
+    /// Fades a small orange dot in/out over the (unchanged) menu-bar icon to reflect Keep Awake.
+    /// Only the dot animates; the base symbol stays put. (keep-awake indicator)
+    private func updateStatusIcon(active: Bool, animated: Bool) {
+        guard let button = statusItem?.button else { return }
+        let badge = keepAwakeBadge ?? makeKeepAwakeBadge(on: button)
+        keepAwakeBadge = badge
+        let target: CGFloat = active ? 1 : 0
+        guard animated else { badge.alphaValue = target; return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.25
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            badge.animator().alphaValue = target
+        }
+    }
+
+    /// A small orange dot pinned to the icon's bottom-right corner, layer-backed so its alpha can
+    /// animate. Starts hidden (alpha 0); updateStatusIcon fades it in when Keep Awake turns on.
+    /// (keep-awake indicator)
+    private func makeKeepAwakeBadge(on button: NSStatusBarButton) -> NSView {
+        let d: CGFloat = 6
+        let dot = NSView()
+        dot.wantsLayer = true
+        dot.layer?.backgroundColor = NSColor.systemOrange.cgColor
+        dot.layer?.cornerRadius = d / 2
+        dot.alphaValue = 0
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        button.addSubview(dot)
+        NSLayoutConstraint.activate([
+            dot.widthAnchor.constraint(equalToConstant: d),
+            dot.heightAnchor.constraint(equalToConstant: d),
+            dot.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -1),
+            dot.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -2),
+        ])
+        return dot
     }
 
     private var isWarmed = false

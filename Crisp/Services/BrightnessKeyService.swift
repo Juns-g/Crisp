@@ -1,6 +1,16 @@
 import AppKit
 import CoreGraphics
 import ApplicationServices
+import os
+
+// DIAG (upgrade): temporary logging to confirm the post-upgrade tap-arming fix. Filter with:
+//   log show --last 5m --predicate 'subsystem == "com.crisp.app" && category == "upgrade"' --info
+private nonisolated(unsafe) let upgradeLog = Logger(subsystem: "com.crisp.app", category: "upgrade")
+
+// DIAG (clamshell): observe-only logging of every keyDown/media-key the tap sees, to identify
+// exactly what macOS delivers for brightness in clamshell mode (issue #21). Filter with:
+//   log show --last 5m --predicate 'subsystem == "com.crisp.app" && category == "clamshell"' --info
+private nonisolated(unsafe) let clamshellLog = Logger(subsystem: "com.crisp.app", category: "clamshell")
 
 // MARK: - C Event Tap Callback
 
@@ -61,6 +71,7 @@ final class BrightnessKeyService: @unchecked Sendable {
     /// Installs the event tap. Requires Accessibility permissions.
     /// Safe to call multiple times, a running tap will not be re-created.
     func start() {
+        upgradeLog.notice("start(): alreadyArmed=\(self.eventTap != nil, privacy: .public) trusted=\(AXIsProcessTrusted(), privacy: .public)")  // DIAG (upgrade)
         guard eventTap == nil else { return }
 
         // Try creating the tap directly, AXIsProcessTrusted can be unreliable
@@ -68,16 +79,23 @@ final class BrightnessKeyService: @unchecked Sendable {
         let retained = Unmanaged.passRetained(self)
         selfRetained = retained
 
-        let systemDefinedMask = CGEventMask(1 << Self.cgEventTypeSystemDefinedRaw)
+        // Also tap keyDown (type 10), not just NX_SYSDEFINED. When there is no built-in display to
+        // target (e.g. clamshell) macOS can suppress the brightness NX_SYSDEFINED aux event while
+        // the raw keyDown still flows, so a SYSDEFINED-only tap goes dead there. See the keyDown
+        // fallback in handleEventFromCallback. (issue #21)
+        let mask = CGEventMask(1 << Self.cgEventTypeSystemDefinedRaw)
+            | CGEventMask(1 << CGEventType.keyDown.rawValue)
 
         let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
-            eventsOfInterest: systemDefinedMask,
+            eventsOfInterest: mask,
             callback: brightnessKeyEventCallback,
             userInfo: retained.toOpaque()
         )
+
+        upgradeLog.notice("start(): tapCreate=\(tap != nil ? "OK" : "nil", privacy: .public)")  // DIAG (upgrade)
 
         guard let tap else {
             retained.release()
@@ -224,6 +242,32 @@ final class BrightnessKeyService: @unchecked Sendable {
             return Unmanaged.passRetained(event)
         }
 
+        // Fallback path: raw keyDown for brightness. macOS normally delivers brightness as an
+        // NX_SYSDEFINED aux event (handled below), but when there is no built-in display to target
+        // (e.g. clamshell on some macOS versions) it can suppress that event while the raw keyDown
+        // still flows. Keycodes 144/145 are the brightness media keys. Mirrors MonitorControl's
+        // dual-path capture, which is why it keeps working in clamshell where a SYSDEFINED-only tap
+        // goes dead. (issue #21)
+        if type.rawValue == CGEventType.keyDown.rawValue {
+            let kc = event.getIntegerValueField(.keyboardEventKeycode)
+            switch kc {
+            case 144:
+                clamshellLog.notice("keyDown brightness kc=144 up")  // DIAG: brightness keycodes only (privacy-safe)
+                return routeBrightnessPress(up: true, event: event)
+            case 145:
+                clamshellLog.notice("keyDown brightness kc=145 down")  // DIAG
+                return routeBrightnessPress(up: false, event: event)
+            case 107, 113:
+                // F14/F15: alternate brightness keys on some keyboards. Log only (do not consume),
+                // so a tester whose OS routes brightness here is detected without us hijacking
+                // F14/F15 from users who bind them to something else. (issue #21)
+                clamshellLog.notice("keyDown fkey candidate kc=\(kc, privacy: .public)")  // DIAG
+                return Unmanaged.passRetained(event)
+            default:
+                return Unmanaged.passRetained(event)
+            }
+        }
+
         guard type.rawValue == Self.cgEventTypeSystemDefinedRaw else {
             return Unmanaged.passRetained(event)
         }
@@ -246,11 +290,22 @@ final class BrightnessKeyService: @unchecked Sendable {
         // For key-up events always pass through, only consume key-down on external displays.
         guard isKeyDown else { return Unmanaged.passRetained(event) }
 
+        clamshellLog.notice("sysdefined brightness kc=\(keyCode, privacy: .public)")  // DIAG: brightness only (privacy-safe)
+        return routeBrightnessPress(up: keyCode == Self.nxKeytypeBrightnessUp, event: event)
+    }
+
+    /// Shared routing for a brightness key-down, called by both the NX_SYSDEFINED media-key path
+    /// and the raw-keyDown fallback path. Applies the step to the configured target(s), shows the
+    /// HUD, and returns nil to CONSUME the event when we adjusted an external display (so macOS does
+    /// not also bump the built-in), or a pass-through of `event` when we did not handle it (target
+    /// not attached / cursor on built-in / no controllable external).
+    nonisolated private func routeBrightnessPress(up: Bool, event: CGEvent) -> Unmanaged<CGEvent>? {
+        let step = up ? Self.brightnessStep : -Self.brightnessStep
+
         // Route by user preference. Read on the main actor, this callback runs on
         // the main run loop (see class docs), so assumeIsolated is safe here.
         switch MainActor.assumeIsolated({ SettingsService.shared.brightnessKeyTarget }) {
         case .allDisplays:
-            let step = (keyCode == Self.nxKeytypeBrightnessUp) ? Self.brightnessStep : -Self.brightnessStep
             Task { @MainActor in self.adjustDisplays(DisplayManagerAccessor.shared.displays, step: step) }
             // Consume: we adjust every display (built-in included) ourselves, so
             // macOS must not also bump the built-in on top.
@@ -264,7 +319,6 @@ final class BrightnessKeyService: @unchecked Sendable {
                 DisplayManagerAccessor.shared.displays.contains { selected.contains($0.displayUUID) }
             }
             if anyAttached {
-                let step = (keyCode == Self.nxKeytypeBrightnessUp) ? Self.brightnessStep : -Self.brightnessStep
                 Task { @MainActor in
                     let targets = DisplayManagerAccessor.shared.displays.filter { selected.contains($0.displayUUID) }
                     self.adjustDisplays(targets, step: step)
@@ -304,8 +358,6 @@ final class BrightnessKeyService: @unchecked Sendable {
         guard isControllableExternal else {
             return Unmanaged.passRetained(event)
         }
-
-        let step = (keyCode == Self.nxKeytypeBrightnessUp) ? Self.brightnessStep : -Self.brightnessStep
 
         // All data captured here is Sendable (CGDirectDisplayID = UInt32, Double).
         Task { @MainActor in

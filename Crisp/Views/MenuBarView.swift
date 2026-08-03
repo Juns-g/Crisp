@@ -278,7 +278,10 @@ struct UpdateRow: View {
             guard PanelOpenGuard.allowsActivation else { return }
             action()
         }
-        .onHover { isHovered = $0 }
+        .onHover { hovering in
+            isHovered = hovering
+            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
         .accessibilityLabel("Update available, version \(version)")
         .accessibilityHint("Click to open the release page")
         .accessibilityAddTraits(.isButton)
@@ -887,12 +890,19 @@ struct SettingsView: View {
             // Re-read trust on every open so the section reflects a grant/revoke made in
             // System Settings since the last open (the content mounts once). (vx44)
             isTrusted = AXIsProcessTrusted()
+            // Arm the tap whenever trust is effective, not only at launch. After an upgrade the
+            // launch-time check reads false while macOS re-validates the replaced bundle, so the
+            // tap never arms; the target menu then shows (trust settles true) while the keys are
+            // dead, and re-granting can't recover it because the opt-in toggle that would re-arm
+            // is hidden once trusted. start() is idempotent. (upgrade zombie)
+            if isTrusted { BrightnessKeyService.shared.start() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             // Also refresh when the app reactivates (e.g. returning from System Settings after
             // granting), so the section flips from the opt-in toggle to the target menu without
             // needing the panel closed and reopened. (brightness-keys zombie toggle fix)
             isTrusted = AXIsProcessTrusted()
+            if isTrusted { BrightnessKeyService.shared.start() }  // re-arm if trust became effective post-launch (upgrade zombie)
         }
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             showSupport = false
