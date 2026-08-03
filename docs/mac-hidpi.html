@@ -4,8 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>外接显示器在 Mac 上总是发虚？用免费开源的 Crisp 补上 HiDPI 缩放</title>
-<meta name="description" content="1080p / 1440p 外接显示器接上 Mac 要么模糊要么太小？这是 macOS 隐藏了 HiDPI 缩放分辨率。Crisp 是一个免费开源的菜单栏工具，给任意外接显示器补上清晰的 HiDPI 缩放，还能控制 DDC 亮度、预设、排列，BetterDisplay 和 Lunar 的免费平替。">
-<meta name="keywords" content="Mac 外接显示器 发虚, 外接显示器 字体发虚, 外接显示器 字太小, macOS HiDPI, HiDPI 缺失, 1440p 模糊, 外接显示器 缩放, 外接显示器 比例不对, BetterDisplay 免费替代, BetterDisplay 破解, Lunar 平替, DDC 亮度, mac 显示器管理软件, Crisp">
+<meta name="description" content="1080p / 1440p 外接显示器接上 Mac 要么模糊要么太小？这是因为 macOS 隐藏了 HiDPI 缩放分辨率。Crisp 是一个免费开源的菜单栏工具，给任意外接显示器补上清晰的 HiDPI 缩放，还能控制 DDC 亮度、预设、排列，BetterDisplay 和 Lunar 的免费平替。">
 <link rel="canonical" href="https://didriksg.github.io/Crisp/mac-hidpi.html">
 <link rel="alternate" hreflang="zh-Hans" href="https://didriksg.github.io/Crisp/mac-hidpi.html">
 <link rel="alternate" hreflang="en" href="https://didriksg.github.io/Crisp/fix-blurry-external-monitor-macos.html">
@@ -13,6 +12,7 @@
 <meta property="og:title" content="外接显示器在 Mac 上总是发虚？用免费开源的 Crisp 补上 HiDPI 缩放">
 <meta property="og:description" content="macOS 只给自家 Retina 屏提供清晰的缩放分辨率。Crisp 免费开源，给任意外接显示器补上 HiDPI 缩放、DDC 亮度、预设和排列。">
 <meta property="og:image" content="https://didriksg.github.io/Crisp/screenshot-zh.png">
+<meta property="og:url" content="https://didriksg.github.io/Crisp/mac-hidpi.html">
 <meta property="og:type" content="article">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="外接显示器在 Mac 上总是发虚？用免费开源的 Crisp 补上 HiDPI 缩放">
@@ -25,7 +25,7 @@
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Crisp","item":"https://didriksg.github.io/Crisp/zh.html"},{"@type":"ListItem","position":2,"name":"外接显示器在 Mac 上发虚？怎么修"}]}
 </script>
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
 <header class="nav">
@@ -44,14 +44,14 @@
     <img class="icon" src="icon.png" alt="Crisp 图标">
     <p class="kicker">macOS 显示器技巧</p>
     <h1>外接显示器在 Mac 上总是发虚？<br>用免费开源的 Crisp 补上 HiDPI 缩放</h1>
-    <p class="byline">作者 <a href="https://github.com/didriksg">Didrik Galteland</a>（Crisp 作者）· 2026 年 7 月更新</p>
+    <p class="byline">作者 <a href="https://github.com/didriksg">Didrik Galteland</a>（Crisp 作者）· <time datetime="2026-07-31">2026 年 7 月 31 日</time>更新</p>
   </header>
 
   <article class="prose">
     <p class="lead">很多人把 1080p 或 1440p 的显示器接到 Mac 上，第一反应是：字怎么这么小、字体还发虚？把缩放调大一点，整个画面又变糊。这不是显示器的问题，而是 macOS 的处理方式。</p>
 
     <h2>为什么外接显示器接上 Mac 就「发虚」</h2>
-    <p>MacBook 自带的 Retina 屏 PPI 很高（约 220），系统用 2 倍渲染再缩放，所以画面又清晰又不小。但对大多数外接显示器，macOS 并不提供这种「HiDPI 缩放分辨率」，你只剩两个都不理想的选择：</p>
+    <p>MacBook 自带的 Retina 屏 PPI 很高（约 220），系统用 2 倍渲染再缩放，所以画面又清晰又不小。但对大多数外接显示器，macOS 并不提供这种「HiDPI 缩放分辨率」，你只剩两个选择，都不算理想：</p>
     <ul>
       <li><strong>用原生分辨率：</strong>清晰，但界面元素按物理像素显示，27 寸 1440p 下会偏小、看久了累。</li>
       <li><strong>直接拉低分辨率：</strong>界面是大了，但等于让显示器跑非原生分辨率，整个画面发虚。</li>
@@ -114,7 +114,7 @@
 
   <div class="cta">
     <h3>试试 Crisp</h3>
-    <p>免费、开源、无内购。给任意外接显示器补上清晰的 HiDPI 缩放。</p>
+    <p>免费、开源、没有 Pro 分层。给任意外接显示器补上清晰的 HiDPI 缩放。</p>
     <div class="actions">
       <a class="btn primary" href="https://github.com/didriksg/Crisp/releases/latest/download/Crisp.dmg">下载 macOS 版</a>
       <a class="btn secondary" href="https://github.com/didriksg/Crisp">GitHub 仓库</a>

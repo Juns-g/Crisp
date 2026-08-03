@@ -4,10 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Crisp：BetterDisplay 和 Lunar 的免费开源平替（macOS 显示器管理）</title>
-<meta name="description" content="Crisp 是 BetterDisplay 和 Lunar 的免费开源平替：一个轻量的 macOS 菜单栏 App，集成 DDC 亮度、HiDPI 缩放、预设、虚拟显示器和排列，连它们收费的功能也免费。">
+<meta name="description" content="Crisp 是 BetterDisplay 和 Lunar 的免费开源平替：一个轻量的 macOS 菜单栏 App，集成 DDC 亮度、HiDPI 缩放、预设、虚拟显示器和排列，连它们的部分收费功能也免费。">
 <meta property="og:title" content="Crisp：BetterDisplay 和 Lunar 的免费开源平替">
 <meta property="og:description" content="免费开源的 macOS 菜单栏工具：DDC 亮度、HiDPI 缩放、预设、虚拟显示器、排列，一个面板全搞定。">
 <meta property="og:image" content="https://didriksg.github.io/Crisp/screenshot-zh.png">
+<meta property="og:url" content="https://didriksg.github.io/Crisp/zh.html">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Crisp：BetterDisplay 和 Lunar 的免费开源平替">
 <meta name="twitter:description" content="免费开源的 macOS 菜单栏工具：DDC 亮度、HiDPI 缩放、预设、虚拟显示器、排列，一个面板全搞定。">
@@ -24,7 +25,7 @@
 {"@context":"https://schema.org","@type":"VideoObject","name":"Crisp 菜单栏演示","description":"Crisp 是一个免费的 macOS 菜单栏工具，支持 HiDPI 缩放、DDC 亮度、预设和显示器排列，这是功能演示。","thumbnailUrl":"https://didriksg.github.io/Crisp/screenshot-zh.png","uploadDate":"2026-07-31","contentUrl":"https://didriksg.github.io/Crisp/demo.mp4","width":1920,"height":1080}
 </script>
 <script>document.documentElement.classList.add('js')</script>
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
 <header class="nav">
@@ -62,9 +63,9 @@
     <div class="wrap">
       <h2>一块面板，把每块屏都调到位。</h2>
       <div class="grid">
-        <div class="card reveal"><h3>任意显示器都能 HiDPI</h3><p>给外接显示器补上 Retina 级的缩放分辨率，不再发虚或太小，2K 及以上自动配好，且始终跑满面板刷新率。</p></div>
+        <div class="card reveal"><h3>任意显示器都能开 HiDPI</h3><p>给外接显示器补上 Retina 级的缩放分辨率，不再发虚或太小，2K 及以上自动配好，且始终跑满面板刷新率。</p></div>
         <div class="card reveal"><h3>平滑缩放</h3><p>以更小的步进微调界面大小，远超 macOS 默认的那几档。很多人当初装 BetterDisplay，就是为了这种灵活缩放，现在内建了。</p></div>
-        <div class="card reveal"><h3>哪块屏都能调亮度</h3><p>外接屏走 DDC 硬件控制，不支持的用软件兜底；键盘亮度键可作用在光标所在的屏、全部屏，或你指定的几块。</p></div>
+        <div class="card reveal"><h3>哪块屏都能调亮度</h3><p>外接屏走 DDC 硬件控制，不支持的用软件兜底；键盘亮度键可作用在光标所在的屏、全部屏或你指定的几块。</p></div>
         <div class="card reveal"><h3>预设</h3><p>把分辨率、亮度、排列存成一套，一键切换。</p></div>
         <div class="card reveal"><h3>排列</h3><p>拖拽摆位、一键切换主显示器。</p></div>
         <div class="card reveal"><h3>系统开关</h3><p>深色模式、夜览、原彩显示，直接在面板里切，不用进系统设置。</p></div>
@@ -90,6 +91,35 @@
     </div>
   </section>
 
+  <section class="block tint">
+    <div class="wrap">
+      <div class="faq-split">
+      <div>
+        <h2>常见问题</h2>
+        <p class="faq-intro">没找到答案？<a href="https://github.com/didriksg/Crisp/issues">去 GitHub 提问</a>。</p>
+      </div>
+      <div class="prose">
+        <details>
+          <summary>Crisp 真的免费吗？</summary>
+          <p>是的。所有功能都免费：没有 Pro 分层、没有授权码、没有试用期，也没有每天的次数限制。整个 App 以 MIT 协议开源。</p>
+        </details>
+        <details>
+          <summary>Crisp 安装安全吗？</summary>
+          <p>安全。每个版本都经过 Apple 签名和公证，完整源代码公开在 <a href="https://github.com/didriksg/Crisp">GitHub</a> 上，并且已通过 Microsoft Defender 检测，确认不含恶意软件，也没有任何遥测。</p>
+        </details>
+        <details>
+          <summary>使用 Crisp 需要什么条件？</summary>
+          <p>macOS 15（Sequoia）及以上，Apple 芯片和 Intel Mac 都支持。少数功能（如从菜单断开显示器）仅限 Apple 芯片。</p>
+        </details>
+        <details>
+          <summary>Crisp 和 BetterDisplay、Lunar 有什么区别？</summary>
+          <p>它们通常收费的功能，灵活的 HiDPI 缩放、DDC 亮度、预设、排列，在 Crisp 里都免费。详见逐项对比：<a href="crisp-vs-betterdisplay-zh.html">Crisp 和 BetterDisplay / Lunar / MonitorControl</a>。</p>
+        </details>
+      </div>
+      </div>
+    </div>
+  </section>
+
   <footer>
     <div class="wrap">
       <p>免费开源，MIT 许可。要求 macOS 15 及以上。</p>
@@ -111,6 +141,27 @@
   } else {
     els.forEach(function (el) { el.classList.add('in'); });
   }
+  (function () {
+    var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    document.querySelectorAll('.prose details').forEach(function (d) {
+      var s = d.querySelector('summary'), a = null;
+      s.addEventListener('click', function (e) {
+        e.preventDefault();
+        if (a) a.cancel();
+        var opening = !d.open;
+        d.classList.toggle('faq-open', opening);
+        if (reduce) { d.open = opening; return; }
+        if (opening) {
+          d.open = true;
+          a = d.animate([{ height: s.offsetHeight + 'px' }, { height: d.scrollHeight + 'px' }], { duration: 260, easing: 'ease' });
+          a.onfinish = function () { a = null; };
+        } else {
+          a = d.animate([{ height: d.offsetHeight + 'px' }, { height: s.offsetHeight + 'px' }], { duration: 240, easing: 'ease', fill: 'forwards' });
+          a.onfinish = function () { d.open = false; a.cancel(); a = null; };
+        }
+      });
+    });
+  })();
 </script>
 </body>
 </html>
