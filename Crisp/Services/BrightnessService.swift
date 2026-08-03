@@ -60,6 +60,7 @@ private func _crispBuiltinBrightnessChanged(
     Task { @MainActor in
         guard let display = DisplayManagerAccessor.shared.displays.first(where: { $0.displayID == did })
         else { return }
+        guard display.brightness <= 100.0 else { return }
         // Skip sub-0.5% jitter to avoid redundant @Published churn.
         guard abs(display.brightness - value) >= 0.5 else { return }
         display.brightness = value
@@ -228,6 +229,10 @@ final class BrightnessService: @unchecked Sendable {
     /// should show the real value immediately.
     @MainActor
     func refreshBrightness(for display: DisplayInfo, animated: Bool = false) async {
+        // While boosted above 100 the hardware pins at max and reads back ~100;
+        // adopting that would snap the slider out of the boost region. Crisp
+        // owns the value while Extra Brightness is engaged.
+        if display.brightness > 100.0 { return }
         let isBuiltin = display.isBuiltin
         let displayID = display.displayID
 
@@ -320,7 +325,9 @@ final class BrightnessService: @unchecked Sendable {
 
     @MainActor
     func setBrightness(_ brightness: Double, for display: DisplayInfo, isAutoAdjust: Bool = false) async {
-        let clamped = max(0.0, min(100.0, brightness))
+        let clamped = max(0.0, min(display.maxBrightness, brightness))
+        // Hardware only ever sees 0...100; the region above is the EDR overlay's.
+        let hardware = min(clamped, 100.0)
         let isBuiltin = display.isBuiltin
         let displayID = display.displayID
 
@@ -334,25 +341,26 @@ final class BrightnessService: @unchecked Sendable {
         }
 
         if isBuiltin {
-            let value = Float(clamped / 100.0)
+            let value = Float(hardware / 100.0)
             display.brightness = clamped
             queue.async { [weak self] in
                 self?.setInternalBrightness(value)
             }
         } else {
+            display.brightness = clamped
             // Check current DDC availability status
             let currentStatus: Bool? = ddcAvailableLock.withLock { ddcAvailable[displayID] }
 
             if currentStatus == false {
                 // DDC known unavailable, go straight to software fallback
                 queue.async { [weak self] in
-                    self?.setSoftwareBrightness(clamped, for: displayID)
+                    self?.setSoftwareBrightness(hardware, for: displayID)
                 }
-                return
+            } else {
+                writeDDCBrightnessCoalesced(percent: hardware, for: displayID)
             }
-
-            writeDDCBrightnessCoalesced(percent: clamped, for: displayID)
         }
+        BrightnessBoostService.shared.syncOverlay(for: display)
     }
 
     /// Broadcasts a manual (user-initiated) brightness change so auto-brightness can react:
@@ -508,7 +516,7 @@ final class BrightnessService: @unchecked Sendable {
         isAutoAdjust: Bool = false,
         duration: TimeInterval = 0.20
     ) {
-        let clamped = max(0.0, min(100.0, targetBrightness))
+        let clamped = max(0.0, min(display.maxBrightness, targetBrightness))
         let displayID = display.displayID
         let fromBrightness = display.brightness
 
@@ -533,8 +541,9 @@ final class BrightnessService: @unchecked Sendable {
             anim.animate(from: fromBrightness, to: clamped, steps: smoothSteps, duration: duration) { [weak self, weak display] value, _ in
                 guard let self, let display else { return }
                 display.brightness = value
-                let floatVal = Float(value / 100.0)
+                let floatVal = Float(min(value, 100.0) / 100.0)
                 self.queue.async { self.setInternalBrightness(floatVal) }
+                BrightnessBoostService.shared.syncOverlay(for: display)
             }
         } else {
             let currentStatus: Bool? = ddcAvailableLock.withLock { ddcAvailable[displayID] }
@@ -542,16 +551,19 @@ final class BrightnessService: @unchecked Sendable {
             if currentStatus == false {
                 // Software (gamma) path
                 anim.animate(from: fromBrightness, to: clamped, steps: smoothSteps, duration: duration) { [weak display] value, _ in
-                    display?.brightness = value
-                    BrightnessService.shared.setSoftwareBrightness(value, for: displayID)
+                    guard let display else { return }
+                    display.brightness = value
+                    BrightnessService.shared.setSoftwareBrightness(min(value, 100.0), for: displayID)
+                    BrightnessBoostService.shared.syncOverlay(for: display)
                 }
             } else {
                 // DDC path, routed through the coalescing writer so steps that
                 // outpace the I2C bus are dropped instead of queued.
                 anim.animate(from: fromBrightness, to: clamped, steps: smoothSteps, duration: duration) { [weak self, weak display] value, _ in
-                    guard let self else { return }
-                    display?.brightness = value
-                    self.writeDDCBrightnessCoalesced(percent: value, for: displayID)
+                    guard let self, let display else { return }
+                    display.brightness = value
+                    self.writeDDCBrightnessCoalesced(percent: min(value, 100.0), for: displayID)
+                    BrightnessBoostService.shared.syncOverlay(for: display)
                 }
             }
         }
