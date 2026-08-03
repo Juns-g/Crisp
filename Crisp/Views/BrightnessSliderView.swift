@@ -105,7 +105,7 @@ struct BrightnessSliderView: View {
                 BrightnessStepButton(systemName: "sun.min.fill") { step(-brightnessStep) }
 
                 // Native macOS slider, exactly as in the system Display panel.
-                Slider(value: $localBrightness, in: 0...100) { editing in
+                Slider(value: $localBrightness, in: 0...max(100.0, display.maxBrightness)) { editing in
                     if editing {
                         isDragging = true
                         dragConfirmed = false
@@ -197,7 +197,7 @@ struct BrightnessSliderView: View {
     private var brightnessStep: Double { 10.0 }
 
     private func step(_ delta: Double) {
-        let target = max(0, min(100, display.brightness + delta))
+        let target = max(0, min(display.maxBrightness, display.brightness + delta))
         // The smooth fade updates display.brightness per frame; localBrightness
         // follows through the existing onChange sync.
         BrightnessService.shared.setBrightnessSmooth(target, for: display)
@@ -214,7 +214,10 @@ struct CombinedBrightnessView: View {
 
     private var averageBrightness: Double {
         guard !displays.isEmpty else { return 50 }
-        return displays.map(\.brightness).reduce(0, +) / Double(displays.count)
+        // Proportional: each display contributes its position within its own
+        // range, so a boosted display at 160/160 and a plain one at 100/100
+        // both read as 100%.
+        return displays.map { $0.brightness / $0.maxBrightness * 100.0 }.reduce(0, +) / Double(displays.count)
     }
 
     var body: some View {
@@ -245,7 +248,7 @@ struct CombinedBrightnessView: View {
                             // probe sync would snap it back down through the fade.
                             clickGliding = true
                             for display in displays {
-                                BrightnessService.shared.setBrightnessSmooth(combinedBrightness, for: display)
+                                BrightnessService.shared.setBrightnessSmooth(combinedBrightness / 100.0 * display.maxBrightness, for: display)
                             }
                             Task { @MainActor in
                                 try? await Task.sleep(nanoseconds: 600_000_000)  // fallback release
@@ -255,7 +258,7 @@ struct CombinedBrightnessView: View {
                             // Drag ended, flush final value to all displays.
                             Task { @MainActor in
                                 for display in displays {
-                                    await BrightnessService.shared.setBrightness(combinedBrightness, for: display)
+                                    await BrightnessService.shared.setBrightness(combinedBrightness / 100.0 * display.maxBrightness, for: display)
                                 }
                             }
                         }
@@ -276,8 +279,9 @@ struct CombinedBrightnessView: View {
                     }
                     Task { @MainActor in
                         for display in displays {
-                            display.brightness = newValue
-                            await BrightnessService.shared.setBrightness(newValue, for: display)
+                            let target = newValue / 100.0 * display.maxBrightness
+                            display.brightness = target
+                            await BrightnessService.shared.setBrightness(target, for: display)
                         }
                     }
                 }
@@ -317,7 +321,7 @@ struct CombinedBrightnessView: View {
         // the displays' real brightness via BrightnessProbe, so it glides in exact
         // sync with the per-display handles instead of lagging a separate ramp.
         for display in displays {
-            BrightnessService.shared.setBrightnessSmooth(target, for: display)
+            BrightnessService.shared.setBrightnessSmooth(target / 100.0 * display.maxBrightness, for: display)
         }
     }
 }

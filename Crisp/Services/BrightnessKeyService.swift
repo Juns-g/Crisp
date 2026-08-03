@@ -363,7 +363,7 @@ final class BrightnessKeyService: @unchecked Sendable {
         Task { @MainActor in
             let displays = DisplayManagerAccessor.shared.displays
             guard let display = displays.first(where: { $0.displayID == displayID }) else { return }
-            let newBrightness = max(0.0, min(100.0, display.brightness + step))
+            let newBrightness = max(0.0, min(display.maxBrightness, display.brightness + step))
             // Use smooth animation, cancels any in-progress animation automatically.
             BrightnessService.shared.setBrightnessSmooth(newBrightness, for: display)
 
@@ -371,7 +371,7 @@ final class BrightnessKeyService: @unchecked Sendable {
             if let screen = NSScreen.screens.first(where: {
                 ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == displayID
             }) {
-                BrightnessHUDService.shared.show(brightness: newBrightness, on: screen)
+                BrightnessHUDService.shared.show(brightness: newBrightness / display.maxBrightness * 100.0, on: screen)
             }
         }
 
@@ -387,12 +387,12 @@ final class BrightnessKeyService: @unchecked Sendable {
     private func adjustDisplays(_ displays: [DisplayInfo], step: Double) {
         let screens = NSScreen.screens
         for display in displays {
-            let newBrightness = max(0.0, min(100.0, display.brightness + step))
+            let newBrightness = max(0.0, min(display.maxBrightness, display.brightness + step))
             BrightnessService.shared.setBrightnessSmooth(newBrightness, for: display)
             if let screen = screens.first(where: {
                 ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == display.displayID
             }) {
-                BrightnessHUDService.shared.show(brightness: newBrightness, on: screen)
+                BrightnessHUDService.shared.show(brightness: newBrightness / display.maxBrightness * 100.0, on: screen)
             }
         }
     }
