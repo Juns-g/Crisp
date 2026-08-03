@@ -131,6 +131,17 @@
         }
       }
     },
+    "Extra Brightness" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "额外亮度"
+          }
+        }
+      }
+    },
     "Keep display offsets" : {
       "localizations" : {
         "zh-Hans" : {
