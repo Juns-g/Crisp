@@ -243,3 +243,14 @@ footer a:hover { color: var(--text); }
 @media (prefers-reduced-motion: reduce) {
   .prose summary, .prose summary::after { transition: none; }
 }
+
+/* ===== Split FAQ (landing pages) ===== */
+.faq-split { display: grid; grid-template-columns: 1fr 1.8fr; gap: 24px 72px; align-items: start; }
+.faq-split h2 { text-align: left; }
+.faq-split .faq-intro { color: var(--muted); font-size: 17px; line-height: 1.5; margin-top: 14px; }
+.faq-split .prose { padding-bottom: 0; }
+@media (max-width: 800px) {
+  .faq-split { grid-template-columns: 1fr; gap: 0; }
+  .faq-split h2 { text-align: center; }
+  .faq-split .faq-intro { text-align: center; margin: 12px 0 28px; }
+}

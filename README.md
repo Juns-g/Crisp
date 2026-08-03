@@ -41,6 +41,12 @@ Crisp is and will stay completely free. Its main running cost is the $99/year Ap
 
 Completely optional, but you'll have my heartfelt thanks.
 
+### Sponsors
+
+Thank you to the people chipping in toward keeping Crisp signed and notarized:
+
+- **Barry** ([@BarryBarrywu](https://github.com/BarryBarrywu))
+
 ## Requirements
 
 - macOS 15 (Sequoia) or later; on macOS 26 the panel uses the native Liquid Glass backdrop

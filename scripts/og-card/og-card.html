@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    width: 1200px; height: 630px; overflow: hidden;
+    background: #0a0a0b; color: #f5f5f7;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+    display: flex; align-items: center; position: relative;
+  }
+  .glow {
+    position: absolute; right: -180px; top: -220px; width: 720px; height: 720px;
+    background: radial-gradient(circle, rgba(78,161,255,.14) 0%, rgba(78,161,255,0) 65%);
+  }
+  .left { padding: 0 0 0 84px; width: 660px; position: relative; }
+  .brand { display: flex; align-items: center; gap: 20px; margin-bottom: 40px; }
+  .brand img { width: 76px; height: 76px; border-radius: 18px; }
+  .brand span { font-size: 56px; font-weight: 700; letter-spacing: -.02em; }
+  h1 {
+    font-size: 52px; font-weight: 640; letter-spacing: -.025em; line-height: 1.1;
+    margin-bottom: 28px;
+  }
+  .sub { font-size: 25px; color: #9c9ca3; line-height: 1.45; }
+  .sub strong { color: #f5f5f7; font-weight: 600; }
+  .shot {
+    position: absolute; right: -10px; top: 64px; width: 470px;
+    border-radius: 20px; border: 1px solid rgba(255,255,255,.14);
+    box-shadow: 0 30px 70px rgba(0,0,0,.55);
+  }
+</style>
+</head>
+<body>
+  <div class="glow"></div>
+  <div class="left">
+    <div class="brand"><img src="../../docs/icon.png" alt=""><span>Crisp</span></div>
+    <h1>Every display control macOS hides, in one menu bar panel.</h1>
+    <p class="sub"><strong>A free, open-source BetterDisplay &amp; Lunar alternative.</strong> HiDPI scaling, DDC brightness, presets and arrangement.</p>
+  </div>
+  <img class="shot" src="../../docs/screenshot.png" alt="">
+</body>
+</html>

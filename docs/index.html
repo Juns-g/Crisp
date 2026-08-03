@@ -8,11 +8,14 @@
 <meta name="description" content="Crisp is a free, open-source, lightweight alternative to BetterDisplay and Lunar for macOS: DDC brightness, HiDPI scaling, presets, virtual displays, and arrangement, all in the menu bar.">
 <meta property="og:title" content="Crisp: Free BetterDisplay &amp; Lunar alternative for macOS">
 <meta property="og:description" content="A free, open-source alternative to BetterDisplay and Lunar: DDC brightness, HiDPI scaling, presets, virtual displays, and arrangement, all in the menu bar.">
-<meta property="og:image" content="https://didriksg.github.io/Crisp/screenshot.png">
+<meta property="og:image" content="https://didriksg.github.io/Crisp/og-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:url" content="https://didriksg.github.io/Crisp/">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Crisp: Free BetterDisplay &amp; Lunar alternative for macOS">
 <meta name="twitter:description" content="A free, open-source alternative to BetterDisplay and Lunar: DDC brightness, HiDPI scaling, presets, virtual displays, and arrangement, all in the menu bar.">
-<meta name="twitter:image" content="https://didriksg.github.io/Crisp/screenshot.png">
+<meta name="twitter:image" content="https://didriksg.github.io/Crisp/og-card.png">
 <link rel="canonical" href="https://didriksg.github.io/Crisp/">
 <link rel="alternate" hreflang="en" href="https://didriksg.github.io/Crisp/">
 <link rel="alternate" hreflang="zh-Hans" href="https://didriksg.github.io/Crisp/zh.html">
@@ -25,7 +28,7 @@
 {"@context":"https://schema.org","@type":"VideoObject","name":"Crisp menu bar demo","description":"A tour of Crisp, a free macOS menu bar app for HiDPI scaling, DDC brightness, presets and display arrangement.","thumbnailUrl":"https://didriksg.github.io/Crisp/screenshot.png","uploadDate":"2026-07-31","contentUrl":"https://didriksg.github.io/Crisp/demo.mp4","width":1920,"height":1080}
 </script>
 <script>document.documentElement.classList.add('js')</script>
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
 <header class="nav">
@@ -44,7 +47,7 @@
   <section class="hero">
     <img class="icon" src="icon.png" alt="Crisp icon">
     <h1>Every display control macOS hides, in one menu bar panel.</h1>
-    <p class="sub">Crisp is a free, open-source alternative to BetterDisplay and Lunar, including their Pro features.</p>
+    <p class="sub">Crisp is a free, open-source alternative to BetterDisplay and Lunar, including some of their paid features.</p>
     <div class="actions">
       <a class="btn primary" href="https://github.com/didriksg/Crisp/releases/latest/download/Crisp.dmg">Download for macOS</a>
       <a class="btn secondary" href="https://github.com/didriksg/Crisp">View on GitHub</a>
@@ -91,6 +94,35 @@
     </div>
   </section>
 
+  <section class="block tint">
+    <div class="wrap">
+      <div class="faq-split">
+      <div>
+        <h2>FAQ</h2>
+        <p class="faq-intro">Something else? <a href="https://github.com/didriksg/Crisp/issues">Ask on GitHub</a>.</p>
+      </div>
+      <div class="prose">
+        <details>
+          <summary>Is Crisp really free?</summary>
+          <p>Yes. Every feature is free: no Pro tier, no license key, no trial, and no daily limits. The whole app is open source under the MIT license.</p>
+        </details>
+        <details>
+          <summary>Is Crisp safe to install?</summary>
+          <p>Yes. Every release is signed and notarized by Apple, the full source code is public on <a href="https://github.com/didriksg/Crisp">GitHub</a>, and a Microsoft Defender review confirmed it contains no malware and no telemetry.</p>
+        </details>
+        <details>
+          <summary>What does Crisp require?</summary>
+          <p>macOS 15 (Sequoia) or later, on both Apple Silicon and Intel Macs. A few extras, like disconnecting a display from the menu, are Apple Silicon only.</p>
+        </details>
+        <details>
+          <summary>How is Crisp different from BetterDisplay and Lunar?</summary>
+          <p>The features people usually pay for elsewhere, flexible HiDPI scaling, DDC brightness, presets, and arrangement, are all free in Crisp. See the full side-by-side: <a href="crisp-vs-betterdisplay.html">Crisp vs BetterDisplay, Lunar &amp; MonitorControl</a>.</p>
+        </details>
+      </div>
+      </div>
+    </div>
+  </section>
+
   <footer>
     <div class="wrap">
       <p>Free and open source, MIT licensed. Requires macOS 15 or later.</p>
@@ -112,6 +144,27 @@
   } else {
     els.forEach(function (el) { el.classList.add('in'); });
   }
+  (function () {
+    var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    document.querySelectorAll('.prose details').forEach(function (d) {
+      var s = d.querySelector('summary'), a = null;
+      s.addEventListener('click', function (e) {
+        e.preventDefault();
+        if (a) a.cancel();
+        var opening = !d.open;
+        d.classList.toggle('faq-open', opening);
+        if (reduce) { d.open = opening; return; }
+        if (opening) {
+          d.open = true;
+          a = d.animate([{ height: s.offsetHeight + 'px' }, { height: d.scrollHeight + 'px' }], { duration: 260, easing: 'ease' });
+          a.onfinish = function () { a = null; };
+        } else {
+          a = d.animate([{ height: d.offsetHeight + 'px' }, { height: s.offsetHeight + 'px' }], { duration: 240, easing: 'ease', fill: 'forwards' });
+          a.onfinish = function () { d.open = false; a.cancel(); a = null; };
+        }
+      });
+    });
+  })();
 </script>
 </body>
 </html>
