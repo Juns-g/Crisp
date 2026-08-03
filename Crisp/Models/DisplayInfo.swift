@@ -16,6 +16,10 @@ class DisplayInfo: ObservableObject, Identifiable {
     @Published var pixelWidth: Int
     @Published var pixelHeight: Int
     @Published var brightness: Double
+    /// UI brightness ceiling. 100 normally; above 100 while Extra Brightness
+    /// (EDR upscaling) is enabled, where the range 100...maxBrightness maps to
+    /// the EDR overlay boost instead of hardware.
+    @Published var maxBrightness: Double = 100.0
     @Published var availableModes: [DisplayMode]
     @Published var currentDisplayMode: DisplayMode?
     @Published var ddcValues: [UInt8: UInt16?] = [:]
