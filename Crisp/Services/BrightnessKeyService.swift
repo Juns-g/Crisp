@@ -34,6 +34,11 @@ final class BrightnessKeyService: @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     /// Retained Unmanaged reference passed into the C callback. Released in stop().
     private var selfRetained: Unmanaged<BrightnessKeyService>?
+    /// Monotonic time (systemUptime) of the last tap disable. retryUntilArmed waits a short
+    /// settle delay past this before re-arming, so a revoke (whose trust state briefly lags)
+    /// resolves before we put an active session tap back in the pipeline. Avoids the kome
+    /// input-freeze churn.
+    private var disabledAt: TimeInterval = 0
 
     // MARK: - NX Media Key Constants
     // Marked nonisolated(unsafe) so they can be read from the nonisolated callback method.
@@ -88,10 +93,12 @@ final class BrightnessKeyService: @unchecked Sendable {
         self.eventTap = tap
         self.runLoopSource = source
         stopRetrying()
+        startTrustWatchdog()
     }
 
     /// Removes the event tap and releases the retained self reference.
     func stop() {
+        stopTrustWatchdog()
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
             if let source = runLoopSource {
@@ -121,16 +128,30 @@ final class BrightnessKeyService: @unchecked Sendable {
         if pollTimer == nil {
             pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
                 guard let self else { timer.invalidate(); return }
-                self.start()
+                self.armIfSettled()
             }
         }
         if activationObserver == nil {
             activationObserver = NotificationCenter.default.addObserver(
                 forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.start() }
+                MainActor.assumeIsolated { self?.armIfSettled() }
             }
         }
+    }
+
+    /// How long to wait after a tap disable before trying to re-arm, so an Accessibility revoke
+    /// has fully resolved before we put an active session tap back in the pipeline. Long enough
+    /// to outlast the AXIsProcessTrusted()/TCC lag that follows a revoke. (kome)
+    private static let rearmSettleDelay: TimeInterval = 3.0
+
+    /// Re-arm the tap, but not until any recent disable has had time to settle. Re-creating an
+    /// active session tap while a revoke is still propagating is exactly what churns and freezes
+    /// input; once settled, tapCreate cleanly succeeds (still granted) or fails (revoked). On the
+    /// initial grant flow disabledAt is 0, so this arms immediately with no delay.
+    private func armIfSettled() {
+        guard ProcessInfo.processInfo.systemUptime - disabledAt >= Self.rearmSettleDelay else { return }
+        start()
     }
 
     private func stopRetrying() {
@@ -140,6 +161,33 @@ final class BrightnessKeyService: @unchecked Sendable {
             NotificationCenter.default.removeObserver(obs)
             activationObserver = nil
         }
+    }
+
+    // MARK: - Trust watchdog
+    // The freeze on an Accessibility revoke is the WindowServer holding the event stream for
+    // ~1s while it force-times-out our now-untrusted active session tap. Our own teardown is
+    // instant, but it only runs after that timeout event reaches us, i.e. after the freeze. So
+    // while armed we poll trust faster than that ~1s timeout and, the instant it drops, tear our
+    // tap out ourselves so the WindowServer has nothing doomed to wait on. (kome)
+
+    private var trustWatchdog: Timer?
+
+    private func startTrustWatchdog() {
+        guard trustWatchdog == nil else { return }
+        // ponytail: 0.5s poll, well inside the ~1s WindowServer tap-timeout; AXIsProcessTrusted()
+        // is a cheap TCC lookup so 2x/sec while armed is negligible.
+        trustWatchdog = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            guard self.eventTap != nil, !AXIsProcessTrusted() else { return }
+            self.disabledAt = ProcessInfo.processInfo.systemUptime
+            self.stop()
+            self.retryUntilArmed()
+        }
+    }
+
+    private func stopTrustWatchdog() {
+        trustWatchdog?.invalidate()
+        trustWatchdog = nil
     }
 
     // MARK: - Event Handling
@@ -153,22 +201,24 @@ final class BrightnessKeyService: @unchecked Sendable {
         type: CGEventType,
         event: CGEvent
     ) -> Unmanaged<CGEvent>? {
-        // The system disabled the tap. If we still hold Accessibility this is a normal
-        // timeout, so re-enable it. If trust was revoked (the user unchecked Crisp under
-        // Privacy > Accessibility), re-enabling churns: the system disables it again at once,
-        // and an active .cgSessionEventTap stuck in that disable/re-enable loop stalls the
-        // window-server input pipeline and freezes clicks system-wide. So tear the tap down
-        // instead and let retryUntilArmed re-install it cleanly once trust returns. (kome)
+        // The system disabled the tap. Never re-enable it here. When the user revokes
+        // Accessibility (unchecks Crisp under Privacy > Accessibility) the system force-disables
+        // the tap, but AXIsProcessTrusted() keeps returning a cached `true` for a second or two.
+        // So any "re-enable while still trusted" (or eager re-create) churns against that
+        // force-disable for the whole lag window, and an active .cgSessionEventTap stuck in that
+        // loop stalls the window-server input pipeline and freezes clicks system-wide. Instead
+        // tear the tap fully out of the run loop at once, which frees input immediately, and let
+        // retryUntilArmed re-install it after a short settle delay, once trust has actually
+        // resolved (tapCreate then cleanly succeeds if still granted, or fails if revoked). A
+        // genuine timeout (rare, only if the main thread stalled past ~1s) recovers the same way,
+        // just a few seconds later, without ever risking the freeze. (kome)
         if type.rawValue == CGEventType.tapDisabledByTimeout.rawValue ||
            type.rawValue == CGEventType.tapDisabledByUserInput.rawValue {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    if AXIsProcessTrusted(), let tap = self.eventTap {
-                        CGEvent.tapEnable(tap: tap, enable: true)
-                    } else {
-                        self.stop()
-                        self.retryUntilArmed()
-                    }
+                    self.disabledAt = ProcessInfo.processInfo.systemUptime
+                    self.stop()
+                    self.retryUntilArmed()
                 }
             }
             return Unmanaged.passRetained(event)
