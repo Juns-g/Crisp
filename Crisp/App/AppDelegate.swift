@@ -190,6 +190,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // it only starts the first time the menu panel is opened (its only other ref).
         _ = AutoBrightnessService.shared
 
+        // Re-establish Extra Brightness (EDR upscaling) for displays whose
+        // toggle is persisted on. Deferred a beat so DisplayManager's initial
+        // display list is populated.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            BrightnessBoostService.shared.reapplyAll()
+        }
+
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
@@ -271,6 +278,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
         }
         BrightnessKeyService.shared.stop()
+        // Drop EDR overlays and restore SDR on externals Crisp switched to HDR,
+        // so no monitor is left bright with no boost and no DDC control.
+        BrightnessBoostService.shared.prepareForTermination()
         // GammaService already handles CGDisplayRestoreColorSyncSettings via willTerminateNotification observer.
         VirtualDisplayService.shared.destroyAll()
     }
@@ -299,6 +309,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     // Re-apply any custom resolution that macOS may have reset on wake
                     ResolutionService.shared.reapplySavedModeIfNeeded(for: display.displayID)
                 }
+                // Re-establish EDR boost overlays (Metal drawables and HDR
+                // mode may not survive sleep).
+                BrightnessBoostService.shared.reapplyAll()
             }
         }
     }
