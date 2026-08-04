@@ -33,22 +33,25 @@ final class EDROverlayManager {
         )
     }
 
-    /// Apply a multiplier to a display. factor <= 1.0 removes the overlay.
-    /// Returns false when an overlay was needed but could not be created
-    /// (no Metal device, no screen), so callers can revert the toggle.
+    /// Apply a multiplier to a display. Once a window exists it stays alive
+    /// even at factor 1.0 (identity): closing and reopening the EDR surface
+    /// exits and re-enters EDR mode, which can visibly flash the display, so
+    /// crossing the 100% boundary must not churn windows. Explicit teardown
+    /// goes through removeOverlay. Returns false when an overlay was needed
+    /// but could not be created (no Metal device, no screen), so callers can
+    /// revert the toggle.
     @discardableResult
     func setFactor(_ factor: Double, for displayID: CGDirectDisplayID) -> Bool {
-        guard factor > 1.001 else {
-            removeOverlay(for: displayID)
-            return true
-        }
+        let clamped = max(1.0, factor)
         if overlays[displayID] == nil {
+            // Nothing to show and nothing to keep alive.
+            guard clamped > 1.001 else { return true }
             guard makeOverlay(for: displayID) else { return false }
         }
         guard var overlay = overlays[displayID] else { return false }
         // Skip sub-0.5% changes to avoid pointless re-renders during fades.
-        guard abs(overlay.factor - factor) > 0.005 else { return true }
-        overlay.factor = factor
+        guard abs(overlay.factor - clamped) > 0.005 else { return true }
+        overlay.factor = clamped
         overlays[displayID] = overlay
         render(overlay)
         return true

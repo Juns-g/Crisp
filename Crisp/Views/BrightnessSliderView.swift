@@ -135,7 +135,27 @@ struct BrightnessSliderView: View {
                         }
                     }
                 }
-                .tint(Color.accentColor)
+                .tint(localBrightness > 100.5 ? Color.yellow : Color.accentColor)
+                .overlay {
+                    if display.maxBrightness > 100 {
+                        GeometryReader { geo in
+                            // Notch at the 100% mark: the track to its right is
+                            // the Extra Brightness region. The slider's track is
+                            // inset by roughly the knob radius on each side;
+                            // ponytail: 10pt eyeballed for .small controls, tune
+                            // here if the notch sits visibly off the thumb
+                            // center when parked at exactly 100.
+                            let inset: CGFloat = 10
+                            let usable = geo.size.width - inset * 2
+                            let x = inset + usable * 100.0 / display.maxBrightness
+                            RoundedRectangle(cornerRadius: 0.75)
+                                .fill(Color.secondary.opacity(0.55))
+                                .frame(width: 1.5, height: 8)
+                                .position(x: x, y: geo.size.height / 2)
+                        }
+                        .allowsHitTesting(false)
+                    }
+                }
                 .controlSize(.small)
                 .accessibilityLabel("Display brightness")
                 .accessibilityValue("\(Int(localBrightness))%")

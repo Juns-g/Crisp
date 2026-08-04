@@ -18,6 +18,48 @@ final class BrightnessBoostService {
         return cls.init()
     }()
 
+    /// Animates DisplayInfo.maxBrightness so the slider range grows and
+    /// shrinks with the same 60Hz ease-out glide brightness itself uses,
+    /// instead of snapping the thumb to a new position.
+    private var maxAnimators: [CGDirectDisplayID: BrightnessAnimator] = [:]
+
+    private func animateMaxBrightness(to target: Double, for display: DisplayInfo) {
+        let animator = maxAnimators[display.displayID] ?? BrightnessAnimator()
+        maxAnimators[display.displayID] = animator
+        animator.animate(
+            from: display.maxBrightness, to: target,
+            steps: max(8, Int(0.2 / 0.016)), duration: 0.2
+        ) { [weak display] value, _ in
+            display?.maxBrightness = value
+        }
+    }
+
+    /// While any boost is engaged, the display's deliverable headroom moves
+    /// with panel brightness and thermals, and macOS does not reliably post a
+    /// notification when it drops. A factor above the deliverable range clips
+    /// bright content to white, so poll and re-clamp; the loop ends itself
+    /// once nothing is boosted.
+    private var headroomPollTask: Task<Void, Never>?
+
+    private func startHeadroomPollIfNeeded() {
+        guard headroomPollTask == nil else { return }
+        headroomPollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self else { return }
+                var anyBoosted = false
+                for display in DisplayManagerAccessor.shared.displays where display.maxBrightness > 100 {
+                    anyBoosted = true
+                    self.syncOverlay(for: display)
+                }
+                if !anyBoosted {
+                    self.headroomPollTask = nil
+                    return
+                }
+            }
+        }
+    }
+
     private init() {
         NotificationCenter.default.addObserver(
             self,
@@ -96,7 +138,7 @@ final class BrightnessBoostService {
                 return false
             }
             UserDefaults.standard.set(true, forKey: enabledKey(uuid))
-            display.maxBrightness = newMax
+            animateMaxBrightness(to: newMax, for: display)
             syncOverlay(for: display)
             return true
         } else {
@@ -104,17 +146,23 @@ final class BrightnessBoostService {
             if display.brightness > 100 {
                 // Glide down through the boost region first: maxBrightness is
                 // still raised, so each fade step's syncOverlay walks the
-                // overlay factor down and removes the overlay when it reaches
-                // 1.0. Teardown happens after the fade lands.
+                // overlay factor down with it.
                 BrightnessService.shared.setBrightnessSmooth(100, for: display)
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 // The user may have re-enabled during the glide; leave the
                 // re-enabled state alone.
                 guard !isEnabled(for: display) else { return true }
             }
-            display.maxBrightness = 100
-            EDROverlayManager.shared.removeOverlay(for: display.displayID)
+            animateMaxBrightness(to: 100, for: display)
             undoHDRSwitchIfNeeded(for: display)
+            // Close the EDR surface only after everything is static: closing
+            // exits EDR mode, and doing that mid-motion is what flashed.
+            let displayID = display.displayID
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !self.isEnabled(for: display) else { return }
+                EDROverlayManager.shared.removeOverlay(for: displayID)
+            }
             return true
         }
     }
@@ -146,6 +194,7 @@ final class BrightnessBoostService {
         let current = currentHeadroom(for: display.displayID)
         if current > 1.0 { factor = min(factor, current) }
         EDROverlayManager.shared.setFactor(factor, for: display.displayID)
+        if factor > 1.001 { startHeadroomPollIfNeeded() }
     }
 
     // MARK: - Lifecycle
