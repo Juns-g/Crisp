@@ -185,7 +185,15 @@ final class BrightnessBoostService {
             from: 1.0, to: 0.0,
             steps: max(8, Int(0.35 / 0.008)), duration: 0.35
         ) { [weak self, weak display] p, isLast in
-            guard let self, let display else { return }
+            guard let self else { return }
+            guard let display else {
+                // The display deallocated mid-collapse (disconnect). Drop the
+                // collapse marker so a reconnect reusing this CGDirectDisplayID
+                // is not stuck with syncOverlay muted forever.
+                self.collapsingDisplays.remove(displayID)
+                self.maxAnimators[displayID]?.cancel()
+                return
+            }
             // A brightness already at or below 100 is in the native range and
             // must stay put; only the boosted excess collapses toward 100.
             let vEnd = min(v0, 100)
