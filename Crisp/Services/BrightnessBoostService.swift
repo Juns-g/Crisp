@@ -97,11 +97,18 @@ final class BrightnessBoostService {
             return true
         } else {
             UserDefaults.standard.set(false, forKey: enabledKey(uuid))
-            display.maxBrightness = 100
             if display.brightness > 100 {
-                // Settle back to hardware max; the fade also walks the overlay down.
+                // Glide down through the boost region first: maxBrightness is
+                // still raised, so each fade step's syncOverlay walks the
+                // overlay factor down and removes the overlay when it reaches
+                // 1.0. Teardown happens after the fade lands.
                 BrightnessService.shared.setBrightnessSmooth(100, for: display)
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                // The user may have re-enabled during the glide; leave the
+                // re-enabled state alone.
+                guard !isEnabled(for: display) else { return true }
             }
+            display.maxBrightness = 100
             EDROverlayManager.shared.removeOverlay(for: display.displayID)
             undoHDRSwitchIfNeeded(for: display)
             return true
