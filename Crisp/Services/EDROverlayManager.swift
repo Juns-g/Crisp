@@ -1,5 +1,6 @@
 // Crisp/Services/EDROverlayManager.swift
 import AppKit
+import CoreGraphics
 import Metal
 import QuartzCore
 
@@ -8,8 +9,12 @@ import QuartzCore
 /// SDR maximum. Lifecycle mirrors NotchOverlayManager: one borderless
 /// click-through window per CGDirectDisplayID, torn down when the screen goes
 /// away. Content is a uniform EDR color (value > 1.0) in a CAMetalLayer with a
-/// multiply compositing filter; it re-renders only when the factor changes, so
-/// idle GPU cost is zero.
+/// multiply compositing filter. WindowServer only honors that filter while the
+/// window keeps presenting: about a second after the last present it promotes
+/// the window to direct scanout and drops the filter, so the raw near-white
+/// EDR layer would cover the screen. Each overlay therefore renders
+/// continuously at 5fps (a periodic Timer per window) for as long as it
+/// exists, not just when the factor changes.
 @MainActor
 final class EDROverlayManager {
     static let shared = EDROverlayManager()
@@ -18,6 +23,8 @@ final class EDROverlayManager {
         let window: NSWindow
         let layer: CAMetalLayer
         var factor: Double
+        var timer: Timer?
+        var revealed: Bool = false
     }
 
     private var overlays: [CGDirectDisplayID: Overlay] = [:]
@@ -53,11 +60,12 @@ final class EDROverlayManager {
         guard abs(overlay.factor - clamped) > 0.005 else { return true }
         overlay.factor = clamped
         overlays[displayID] = overlay
-        render(overlay)
+        render(for: displayID)
         return true
     }
 
     func removeOverlay(for displayID: CGDirectDisplayID) {
+        overlays[displayID]?.timer?.invalidate()
         overlays[displayID]?.window.close()
         overlays.removeValue(forKey: displayID)
     }
@@ -68,7 +76,7 @@ final class EDROverlayManager {
 
     /// Re-render every overlay (Metal drawables can be lost across sleep).
     func rerenderAll() {
-        for overlay in overlays.values { render(overlay) }
+        for displayID in Array(overlays.keys) { render(for: displayID) }
     }
 
     private func makeOverlay(for displayID: CGDirectDisplayID) -> Bool {
@@ -85,13 +93,22 @@ final class EDROverlayManager {
         window.isReleasedWhenClosed = false
         window.backgroundColor = .clear
         window.isOpaque = false
-        // One notch above the notch cover so multiply applies to everything;
-        // multiplying the notch cover's black stays black, so order is safe
-        // either way, but a deterministic z-order beats an ambient one.
-        window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
+        // Shielding level: WindowServer only promotes an idle window to direct
+        // scanout (dropping the compositingFilter) once nothing above it needs
+        // the window to keep compositing; sitting at the shielding level, same
+        // as BrightIntosh (the shipping open-source app this technique is
+        // adapted from), keeps that promotion from ever mattering.
+        window.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
         window.ignoresMouseEvents = true
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        window.collectionBehavior = [
+            .stationary, .canJoinAllSpaces, .ignoresCycle,
+            .canJoinAllApplications, .fullScreenAuxiliary
+        ]
         window.hasShadow = false
+        // Hidden until the first frame actually lands (see render/revealWindow
+        // below), so the raw near-white EDR clear color never flashes before
+        // the multiply filter is actually compositing over the desktop.
+        window.alphaValue = 0
 
         let metalLayer = CAMetalLayer()
         metalLayer.device = device
@@ -100,9 +117,9 @@ final class EDROverlayManager {
         metalLayer.wantsExtendedDynamicRangeContent = true
         metalLayer.isOpaque = false
         metalLayer.frame = CGRect(origin: .zero, size: screen.frame.size)
-        // Uniform color: an 8x8 drawable scaled to fullscreen costs nothing.
-        metalLayer.drawableSize = CGSize(width: 8, height: 8)
-        metalLayer.compositingFilter = "multiplyBlendMode"
+        // Uniform color: a 1x1 drawable scaled to fullscreen costs nothing.
+        metalLayer.drawableSize = CGSize(width: 1, height: 1)
+        metalLayer.compositingFilter = "multiply"
 
         let host = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
         host.wantsLayer = true
@@ -110,12 +127,29 @@ final class EDROverlayManager {
         window.contentView = host
         window.orderFrontRegardless()
 
-        overlays[displayID] = Overlay(window: window, layer: metalLayer, factor: 1.0)
+        overlays[displayID] = Overlay(window: window, layer: metalLayer, factor: 1.0, timer: nil, revealed: false)
+
+        // Continuous low-rate rendering keeps WindowServer from ever promoting
+        // this window to direct scanout: re-present forever, at 5fps, for as
+        // long as the overlay exists (matches BrightIntosh's MTKView-driven
+        // approach; ours stays a CAMetalLayer + Timer to keep the diff small).
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            self?.render(for: displayID)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        overlays[displayID]?.timer = timer
+
+        // Anti-flash fallback: reveal after a beat regardless, in case the
+        // first frame's completion handler is slow to fire.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.revealWindow(for: displayID)
+        }
         return true
     }
 
-    private func render(_ overlay: Overlay) {
-        guard let commandQueue,
+    private func render(for displayID: CGDirectDisplayID) {
+        guard let overlay = overlays[displayID],
+              let commandQueue,
               let drawable = overlay.layer.nextDrawable() else { return }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
@@ -127,13 +161,31 @@ final class EDROverlayManager {
               let encoder = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         encoder.endEncoding()
         cmd.present(drawable)
+        if !overlay.revealed {
+            cmd.addCompletedHandler { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.revealWindow(for: displayID)
+                }
+            }
+        }
         cmd.commit()
+    }
+
+    /// Makes the overlay window visible once its first frame has actually
+    /// landed (or the anti-flash fallback fires), so the raw EDR clear color
+    /// never shows before the multiply filter is compositing. Idempotent.
+    private func revealWindow(for displayID: CGDirectDisplayID) {
+        guard var overlay = overlays[displayID], !overlay.revealed else { return }
+        overlay.revealed = true
+        overlays[displayID] = overlay
+        overlay.window.alphaValue = 1
     }
 
     @objc private func screenParametersChanged() {
         var toRemove: [CGDirectDisplayID] = []
         for (displayID, overlay) in overlays {
             guard let screen = NSScreen.screen(for: displayID) else {
+                overlay.timer?.invalidate()
                 overlay.window.close()
                 toRemove.append(displayID)
                 continue

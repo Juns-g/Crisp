@@ -131,7 +131,10 @@ final class BrightnessBoostService {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
             let potential = potentialHeadroom(for: display.displayID)
-            let newMax = BrightnessBoostMath.sliderMax(potentialHeadroom: potential)
+            let newMax = BrightnessBoostMath.sliderMax(
+                isBuiltin: display.isBuiltin, model: BrightnessBoostMath.currentModelIdentifier,
+                potentialHeadroom: potential
+            )
             guard newMax > 100 else {
                 // HDR came up without usable headroom: undo and fail quietly.
                 undoHDRSwitchIfNeeded(for: display)
@@ -177,22 +180,22 @@ final class BrightnessBoostService {
     // MARK: - Overlay sync (called on every brightness change)
 
     /// Recompute and apply the overlay factor for the display's current
-    /// brightness. Spike finding: current headroom reads 1.0 until EDR content
-    /// is on screen, so gating on it would deadlock the overlay off. Instead
-    /// map onto the capped potential, and clamp by current headroom only once
-    /// macOS has ramped it above 1. Headroom changes post
-    /// didChangeScreenParameters (observed above), so the factor converges to
-    /// what the panel can actually deliver within a beat of engaging.
+    /// brightness. Live currentEDR gates the target: below
+    /// BrightnessBoostMath.hdrReadyThreshold the panel has not ramped EDR yet,
+    /// so a small pending factor is applied instead of the full target (see
+    /// BrightnessBoostMath.overlayFactor). Headroom changes post
+    /// didChangeScreenParameters (observed above) and are also polled (see
+    /// startHeadroomPollIfNeeded), so the factor converges to what the panel
+    /// can actually deliver within a beat of engaging.
     func syncOverlay(for display: DisplayInfo) {
         guard display.maxBrightness > 100 else { return }
-        let ceiling = min(potentialHeadroom(for: display.displayID), 2.0)
-        var factor = BrightnessBoostMath.overlayFactor(
+        let factor = BrightnessBoostMath.overlayFactor(
             brightness: display.brightness,
             sliderMax: display.maxBrightness,
-            currentHeadroom: ceiling
+            isBuiltin: display.isBuiltin,
+            model: BrightnessBoostMath.currentModelIdentifier,
+            currentEDR: currentHeadroom(for: display.displayID)
         )
-        let current = currentHeadroom(for: display.displayID)
-        if current > 1.0 { factor = min(factor, current) }
         EDROverlayManager.shared.setFactor(factor, for: display.displayID)
         if factor > 1.001 { startHeadroomPollIfNeeded() }
     }
@@ -205,7 +208,10 @@ final class BrightnessBoostService {
         for display in DisplayManagerAccessor.shared.displays where isEnabled(for: display) {
             guard isEligible(display) else { continue }
             let potential = potentialHeadroom(for: display.displayID)
-            let newMax = BrightnessBoostMath.sliderMax(potentialHeadroom: potential)
+            let newMax = BrightnessBoostMath.sliderMax(
+                isBuiltin: display.isBuiltin, model: BrightnessBoostMath.currentModelIdentifier,
+                potentialHeadroom: potential
+            )
             guard newMax > 100 else { continue }
             display.maxBrightness = newMax
             syncOverlay(for: display)
