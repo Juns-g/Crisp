@@ -19,8 +19,10 @@ final class BrightnessBoostService {
     }()
 
     /// Animates DisplayInfo.maxBrightness so the slider range grows and
-    /// shrinks with the same 60Hz ease-out glide brightness itself uses,
-    /// instead of snapping the thumb to a new position.
+    /// shrinks with the same ~125Hz ease-out glide brightness itself uses,
+    /// instead of snapping the thumb to a new position. Also holds the
+    /// disable-collapse animator (see collapseAndDisable), keyed the same way
+    /// so a rapid re-enable cancels whichever of the two is running.
     private var maxAnimators: [CGDirectDisplayID: BrightnessAnimator] = [:]
 
     private func animateMaxBrightness(to target: Double, for display: DisplayInfo) {
@@ -33,6 +35,11 @@ final class BrightnessBoostService {
             display?.maxBrightness = value
         }
     }
+
+    /// Displays currently running the disable-collapse animation (see
+    /// collapseAndDisable below). syncOverlay returns early for these so the
+    /// headroom poll and other callers cannot fight the collapse mid-flight.
+    private var collapsingDisplays: Set<CGDirectDisplayID> = []
 
     /// While any boost is engaged, the display's deliverable headroom moves
     /// with panel brightness and thermals, and macOS does not reliably post a
@@ -119,10 +126,14 @@ final class BrightnessBoostService {
     func setEnabled(_ enabled: Bool, for display: DisplayInfo) async -> Bool {
         let uuid = display.displayUUID
         if enabled {
-            // A disable-glide may still be running from a rapid off/on flip;
-            // stop it where it is so it cannot keep walking brightness down
-            // (and drop the overlay) after we re-enable.
+            // A disable-collapse may still be running from a rapid off/on
+            // flip; cancel it where it is (through the same maxAnimators slot
+            // the collapse itself uses) so it cannot keep walking brightness
+            // down after we re-enable, and clear isCollapsing so syncOverlay
+            // stops skipping this display.
             BrightnessService.shared.cancelAnimation(for: display.displayID)
+            maxAnimators[display.displayID]?.cancel()
+            collapsingDisplays.remove(display.displayID)
             // Externals in SDR mode: switch to HDR first, remember that we did.
             if !display.isBuiltin, potentialHeadroom(for: display.displayID) <= 1.05 {
                 guard supportsHDRMode(display.displayID), setHDRMode(true, for: display.displayID) else { return false }
@@ -146,27 +157,59 @@ final class BrightnessBoostService {
             return true
         } else {
             UserDefaults.standard.set(false, forKey: enabledKey(uuid))
-            if display.brightness > 100 {
-                // Glide down through the boost region first: maxBrightness is
-                // still raised, so each fade step's syncOverlay walks the
-                // overlay factor down with it.
-                BrightnessService.shared.setBrightnessSmooth(100, for: display)
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                // The user may have re-enabled during the glide; leave the
-                // re-enabled state alone.
-                guard !isEnabled(for: display) else { return true }
-            }
-            animateMaxBrightness(to: 100, for: display)
-            undoHDRSwitchIfNeeded(for: display)
-            // Close the EDR surface only after everything is static: closing
-            // exits EDR mode, and doing that mid-motion is what flashed.
-            let displayID = display.displayID
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                guard !self.isEnabled(for: display) else { return }
-                EDROverlayManager.shared.removeOverlay(for: displayID)
-            }
+            collapseAndDisable(for: display)
             return true
+        }
+    }
+
+    /// Single combined collapse: brightness and maxBrightness glide back to
+    /// 100 together, driven by one progress animator, instead of fading
+    /// brightness to 100 first and only then collapsing maxBrightness. That
+    /// two-phase sequence made the slider thumb (value/max) visibly drop
+    /// then rise; driving both from the same progress keeps it monotonic.
+    /// sliderMax for the overlay factor is the frozen starting maxBrightness
+    /// (max0), not the live (shrinking) one, so the multiplier tracks the
+    /// thumb instead of jumping.
+    private func collapseAndDisable(for display: DisplayInfo) {
+        let displayID = display.displayID
+        let v0 = display.brightness
+        let max0 = display.maxBrightness
+        guard abs(v0 - 100) > 0.001 || abs(max0 - 100) > 0.001 else {
+            finishDisable(for: display)
+            return
+        }
+        collapsingDisplays.insert(displayID)
+        let animator = maxAnimators[displayID] ?? BrightnessAnimator()
+        maxAnimators[displayID] = animator
+        animator.animate(
+            from: 1.0, to: 0.0,
+            steps: max(8, Int(0.35 / 0.008)), duration: 0.35
+        ) { [weak self, weak display] p, isLast in
+            guard let self, let display else { return }
+            display.brightness = 100 + p * (v0 - 100)
+            display.maxBrightness = 100 + p * (max0 - 100)
+            let factor = BrightnessBoostMath.overlayFactor(
+                brightness: display.brightness, sliderMax: max0,
+                isBuiltin: display.isBuiltin, model: BrightnessBoostMath.currentModelIdentifier,
+                currentEDR: self.currentHeadroom(for: displayID)
+            )
+            EDROverlayManager.shared.setFactor(factor, for: displayID)
+            if isLast {
+                self.collapsingDisplays.remove(displayID)
+                self.finishDisable(for: display)
+            }
+        }
+    }
+
+    private func finishDisable(for display: DisplayInfo) {
+        undoHDRSwitchIfNeeded(for: display)
+        // Close the EDR surface only after everything is static: closing
+        // exits EDR mode, and doing that mid-motion is what flashed.
+        let displayID = display.displayID
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !self.isEnabled(for: display) else { return }
+            EDROverlayManager.shared.removeOverlay(for: displayID)
         }
     }
 
@@ -189,6 +232,10 @@ final class BrightnessBoostService {
     /// can actually deliver within a beat of engaging.
     func syncOverlay(for display: DisplayInfo) {
         guard display.maxBrightness > 100 else { return }
+        // The disable-collapse animation drives the overlay factor itself;
+        // letting this run concurrently (e.g. from the headroom poll) would
+        // fight it.
+        guard !collapsingDisplays.contains(display.displayID) else { return }
         let factor = BrightnessBoostMath.overlayFactor(
             brightness: display.brightness,
             sliderMax: display.maxBrightness,
