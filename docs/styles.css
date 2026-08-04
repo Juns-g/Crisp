@@ -121,10 +121,6 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   box-shadow: var(--shadow-lg); background: var(--card);
 }
 .hero .frame { margin: 56px auto 0; max-width: 900px; }
-@media (prefers-color-scheme: dark) {
-  /* Soft screen-glow behind the demo, motivated by the display itself */
-  .hero .frame { box-shadow: var(--shadow-lg), 0 0 110px rgba(255,255,255,.07); }
-}
 .demo { display: block; width: 100%; height: auto; }
 
 /* ===== Landing sections ===== */

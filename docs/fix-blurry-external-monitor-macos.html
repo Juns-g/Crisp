@@ -69,7 +69,10 @@
 
     <h2>How to enable HiDPI on an external monitor</h2>
     <p><strong>1. Install it.</strong> Homebrew is the cleanest path:</p>
-    <pre><span class="prompt">$</span> brew install --cask didriksg/tap/crisp</pre>
+    <div class="brew" onclick="navigator.clipboard.writeText('brew install --cask didriksg/tap/crisp');this.querySelector('.hint').textContent='copied'">
+      <span class="prompt">$</span> brew install --cask didriksg/tap/crisp
+      <span class="hint">click to copy</span>
+    </div>
     <p class="note">Prefer a direct download? Grab the DMG from GitHub Releases and drag Crisp to Applications.</p>
     <p><strong>2. Turn on HiDPI.</strong> Click the menu bar icon, expand the external display, and enable HiDPI. Displays at 2K and above get their scaled resolutions configured automatically, with no admin password and no screen flash. (A password is only needed for the optional smooth-scaling mode below, or for the rare panel that ships no HiDPI modes at all.)</p>
     <p><strong>3. Pick a scaled resolution.</strong> For example, on a 27" 1440p monitor the "looks like 1920×1080" option (rendered at 2x) is usually the sweet spot between sharpness and screen real estate; on a 4K panel, "looks like 2560×1440" is a common pick. Want finer control? Turn on <strong>smooth scaling</strong> (opt-in, per display) for a dense ladder of in-between sizes, the flexible scaling people install BetterDisplay for. It installs with one admin prompt and stays off by default, since the in-between steps look slightly soft.</p>
