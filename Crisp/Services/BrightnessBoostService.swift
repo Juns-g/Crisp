@@ -28,7 +28,7 @@ final class BrightnessBoostService {
         maxAnimators[display.displayID] = animator
         animator.animate(
             from: display.maxBrightness, to: target,
-            steps: max(8, Int(0.2 / 0.016)), duration: 0.2
+            steps: max(8, Int(0.2 / 0.008)), duration: 0.2
         ) { [weak display] value, _ in
             display?.maxBrightness = value
         }

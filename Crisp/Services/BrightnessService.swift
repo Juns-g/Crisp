@@ -530,12 +530,13 @@ final class BrightnessService: @unchecked Sendable {
 
         let anim = animator(for: displayID)
 
-        // Step at ~60Hz on every path: display.brightness drives the UI slider,
-        // and NSSlider renders value changes discretely (no interpolation), so
-        // the step rate IS the knob's frame rate. Hardware paces itself: gamma
-        // and IOKit writes are cheap; DDC goes through the coalescing writer,
-        // which drops steps the ~45ms-per-write I2C bus can't take.
-        let smoothSteps = max(8, Int(duration / 0.016))
+        // Step at ~125Hz (matches the 120Hz built-in panel) on every path:
+        // display.brightness drives the UI slider, and NSSlider renders value
+        // changes discretely (no interpolation), so the step rate IS the
+        // knob's frame rate. Hardware paces itself: gamma and IOKit writes are
+        // cheap; DDC goes through the coalescing writer, which drops steps the
+        // ~45ms-per-write I2C bus can't take.
+        let smoothSteps = max(8, Int(duration / 0.008))
 
         if display.isBuiltin {
             anim.animate(from: fromBrightness, to: clamped, steps: smoothSteps, duration: duration) { [weak self, weak display] value, _ in
