@@ -77,6 +77,10 @@ final class BrightnessBoostService {
     func setEnabled(_ enabled: Bool, for display: DisplayInfo) async -> Bool {
         let uuid = display.displayUUID
         if enabled {
+            // A disable-glide may still be running from a rapid off/on flip;
+            // stop it where it is so it cannot keep walking brightness down
+            // (and drop the overlay) after we re-enable.
+            BrightnessService.shared.cancelAnimation(for: display.displayID)
             // Externals in SDR mode: switch to HDR first, remember that we did.
             if !display.isBuiltin, potentialHeadroom(for: display.displayID) <= 1.05 {
                 guard supportsHDRMode(display.displayID), setHDRMode(true, for: display.displayID) else { return false }
