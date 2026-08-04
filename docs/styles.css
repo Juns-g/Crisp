@@ -121,10 +121,16 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   box-shadow: var(--shadow-lg); background: var(--card);
 }
 .hero .frame { margin: 56px auto 0; max-width: 900px; }
+@media (prefers-color-scheme: dark) {
+  /* Soft screen-glow behind the demo, motivated by the display itself */
+  .hero .frame { box-shadow: var(--shadow-lg), 0 0 110px rgba(255,255,255,.07); }
+}
 .demo { display: block; width: 100%; height: auto; }
 
 /* ===== Landing sections ===== */
 section.block { padding: 104px 0; }
+.story { max-width: 720px; margin: 0 auto; text-align: center; }
+.story p { font-size: clamp(19px, 2.5vw, 24px); line-height: 1.5; font-weight: 500; letter-spacing: -.015em; }
 section.tint { background: var(--bg-2); }
 h2 {
   text-align: center; font-size: clamp(30px, 4vw, 46px); font-weight: 640;
