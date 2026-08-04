@@ -245,12 +245,12 @@ final class BrightnessService: @unchecked Sendable {
             if let b = brightness {
                 // macOS already moved the backlight; only the displayed value needs
                 // to catch up. Glide it (no hardware write) so the knob doesn't jump
-                // between polls. Deadband avoids a perpetual 60Hz timer on sensor
+                // between polls. Deadband avoids a perpetual timer on sensor
                 // jitter; sub-0.5% moves are imperceptible, so just set them.
                 if animated, abs(b - display.brightness) >= 0.5 {
                     animator(for: displayID).animate(
                         from: display.brightness, to: b,
-                        steps: max(8, Int(1.0 / 0.016)), duration: 1.0
+                        steps: max(8, Int(1.0 / 0.008)), duration: 1.0
                     ) { [weak display] value, _ in
                         display?.brightness = value
                     }

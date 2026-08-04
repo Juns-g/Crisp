@@ -186,7 +186,10 @@ final class BrightnessBoostService {
             steps: max(8, Int(0.35 / 0.008)), duration: 0.35
         ) { [weak self, weak display] p, isLast in
             guard let self, let display else { return }
-            display.brightness = 100 + p * (v0 - 100)
+            // A brightness already at or below 100 is in the native range and
+            // must stay put; only the boosted excess collapses toward 100.
+            let vEnd = min(v0, 100)
+            display.brightness = vEnd + p * (v0 - vEnd)
             display.maxBrightness = 100 + p * (max0 - 100)
             let factor = BrightnessBoostMath.overlayFactor(
                 brightness: display.brightness, sliderMax: max0,
