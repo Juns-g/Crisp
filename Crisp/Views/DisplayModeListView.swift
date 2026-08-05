@@ -387,6 +387,13 @@ struct DisplayModeSection: View {
                 guard DisplayModeGeometry.hasSameOrientation(
                     width: $0.width, height: $0.height, as: nativeW, nativeH
                 ) else { return false }
+                // Native aspect only (same 2% tolerance as builtinLooksLikeModes):
+                // macOS also enumerates accessibility sizes off the panel's aspect
+                // (800×600; 600×800 when rotated), and on a 1200-wide portrait
+                // native the rotated one clears the 50% width floor exactly.
+                let nativeAR = Double(nativeW) / Double(nativeH)
+                guard abs(Double($0.width) / Double($0.height) - nativeAR) / nativeAR < 0.02
+                else { return false }
                 if hasNativeDefault, $0.isHiDPI, $0.width == nativeW, $0.height == nativeH { return false }
                 return ($0.isHiDPI && $0.width >= minWidth) || ($0.width == nativeW && $0.height == nativeH)
             }
