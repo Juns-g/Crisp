@@ -28,7 +28,7 @@ Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/
 - **Display arrangement**: drag-to-arrange canvas, main display switching
 - **Disconnect displays**: turn physical displays off and back on from the menu, remembered across sleep/wake (Apple Silicon)
 - **System toggles**: Dark Mode, Night Shift, and True Tone, one click from the menu bar
-- **Color**: ICC profile switching, XDR reference presets, and image adjustment (gamma, contrast, gain, invert colors)
+- **Color**: ICC profile switching, XDR reference presets, HDR on/off per display, and image adjustment (gamma, contrast, gain, invert colors)
 - **Virtual displays**: create HiDPI virtual screens
 - **Extras**: combined brightness slider, auto brightness following the built-in display, a toggle for macOS's own ambient auto-brightness, keep awake, notch hiding, launch at login
 

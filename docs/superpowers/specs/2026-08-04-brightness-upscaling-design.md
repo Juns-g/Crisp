@@ -151,3 +151,12 @@ existing two-party single-writer contract stays two-party.
   reconnect, quit restores SDR and identity, HDR video caveat, combined slider
   with mixed boosted/non-boosted displays, brightness keys past 100%.
 - scripts/check-translations.py gates the new strings (zh-Hans coverage).
+
+## Revision 2026-08-05
+
+HDR is now its own explicit, visible per-display toggle row (HDRToggleView),
+placed above Extra Brightness in the detail view. Extra Brightness still
+auto-enables HDR on an SDR external when it needs the headroom, but no longer
+reverts it, neither on boost disable nor on app quit. Rationale: a user who
+had HDR on independently of boost, or who turned it on and wants it to stay
+on, must not have it silently switched off out from under them.
