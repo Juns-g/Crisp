@@ -331,6 +331,13 @@ final class BrightnessService: @unchecked Sendable {
         let isBuiltin = display.isBuiltin
         let displayID = display.displayID
 
+        // A direct manual write wins over any in-flight glide (click fade,
+        // step-button glide, refresh catch-up); without this the animator
+        // keeps writing stale interpolated values against the drag.
+        if !isAutoAdjust {
+            cancelAnimation(for: displayID)
+        }
+
         // Record manual adjust time so auto-brightness can honour the cooldown period.
         if !isAutoAdjust {
             manualAdjustLock.withLock {

@@ -49,19 +49,30 @@ final class BrightnessBoostService {
     /// once nothing is boosted.
     private var headroomPollTask: Task<Void, Never>?
 
-    /// Consecutive poll ticks (500ms apart) an enabled external has reported
-    /// potentialHeadroom at or below hdrReadyThreshold: HDR capability
-    /// disappeared out from under it (user turned HDR off, or a HiDPI mode
-    /// switch dropped HDR advertisement). Debounced to 3 ticks (~1.5s) so a
-    /// transient dip during a mode-change storm does not auto-disable; once
-    /// it does, the entry is removed.
-    private var headroomLossPolls: [CGDirectDisplayID: Int] = [:]
+    /// When an enabled external first reported potentialHeadroom at or below
+    /// hdrReadyThreshold: HDR capability disappeared out from under it (user
+    /// turned HDR off, or a HiDPI mode switch dropped HDR advertisement).
+    /// Auto-disable fires only after the loss has persisted 1.5s (wall clock,
+    /// so the fast-poll window cannot rush it) to ride out transient dips
+    /// during mode-change storms.
+    private var headroomLossSince: [CGDirectDisplayID: Date] = [:]
+
+    /// While set and in the future, the poll runs at 16ms instead of 500ms.
+    /// Armed when a display first enters the boost region: macOS ramps EDR
+    /// headroom over the next second or two, and catching that ramp in 500ms
+    /// chunks reads as laggy, steppy brightness right when the user starts
+    /// pushing the slider past 100.
+    private var fastPollUntil: Date?
+    /// Displays whose overlay factor is currently above identity; used to
+    /// detect the first entry into the boost region (arms fastPollUntil).
+    private var activeBoostDisplays: Set<CGDirectDisplayID> = []
 
     private func startHeadroomPollIfNeeded() {
         guard headroomPollTask == nil else { return }
         headroomPollTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                let fast = self.flatMap { s in s.fastPollUntil.map { Date() < $0 } } ?? false
+                try? await Task.sleep(nanoseconds: fast ? 16_000_000 : 500_000_000)
                 guard let self else { return }
                 var anyBoosted = false
                 // Visit inert-but-enabled displays too (flag set, capability
@@ -74,15 +85,14 @@ final class BrightnessBoostService {
                     self.syncOverlay(for: display)
                     guard !display.isBuiltin else { continue }
                     guard self.isEnabled(for: display), self.potentialHeadroom(for: display.displayID) <= 1.05 else {
-                        self.headroomLossPolls[display.displayID] = 0
+                        self.headroomLossSince.removeValue(forKey: display.displayID)
                         continue
                     }
-                    let losses = (self.headroomLossPolls[display.displayID] ?? 0) + 1
-                    if losses >= 3 {
-                        self.headroomLossPolls.removeValue(forKey: display.displayID)
+                    let since = self.headroomLossSince[display.displayID] ?? Date()
+                    self.headroomLossSince[display.displayID] = since
+                    if Date().timeIntervalSince(since) >= 1.5 {
+                        self.headroomLossSince.removeValue(forKey: display.displayID)
                         await self.setEnabled(false, for: display)
-                    } else {
-                        self.headroomLossPolls[display.displayID] = losses
                     }
                 }
                 if !anyBoosted {
@@ -278,6 +288,15 @@ final class BrightnessBoostService {
             potentialHeadroom: potentialHeadroom(for: display.displayID)
         )
         EDROverlayManager.shared.setFactor(factor, for: display.displayID)
+        // First entry into the boost region arms the fast-poll window: the
+        // EDR ramp that follows is what the poll needs to track closely.
+        if factor > 1.001 {
+            if activeBoostDisplays.insert(display.displayID).inserted {
+                fastPollUntil = Date().addingTimeInterval(3.0)
+            }
+        } else {
+            activeBoostDisplays.remove(display.displayID)
+        }
         if display.maxBrightness > 100 { startHeadroomPollIfNeeded() }
     }
 
