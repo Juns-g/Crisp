@@ -118,6 +118,19 @@ struct DisplayDetailView: View {
                     .first(where: { $0.index == idx })?.name ?? ""
             }
         }
+        // The active profile changes outside this view: System Settings, and
+        // HDR mode switches (macOS swaps the display's profile with the mode).
+        // Re-read on panel open and on screen reconfiguration, debounced
+        // because mode switches emit bursts.
+        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidOpen)) { _ in
+            activeProfileName = ColorProfileService.shared.currentColorSpaceName(for: display.displayID)
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+                .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+        ) { _ in
+            activeProfileName = ColorProfileService.shared.currentColorSpaceName(for: display.displayID)
+        }
     }
 }
 
