@@ -422,7 +422,15 @@ final class BrightnessService: @unchecked Sendable {
             if percent < self.gammaBlendThreshold {
                 self.setSoftwareBrightness(percent / self.gammaBlendThreshold * 100.0, for: displayID)
             } else if let f = self.currentSoftwareBrightness(for: displayID), f < 1.0 {
-                self.setSoftwareBrightness(100.0, for: displayID)
+                // Only clear a software dim once DDC has actually succeeded on
+                // this display. While it is still unproven (nil), a display
+                // whose writes all fail (Dell without a DDC channel) would
+                // otherwise flash to full on every attempt, fighting the gamma
+                // fallback that is actually doing the dimming.
+                let proven = self.ddcAvailableLock.withLock { self.ddcAvailable[displayID] == true }
+                if proven {
+                    self.setSoftwareBrightness(100.0, for: displayID)
+                }
             }
         }
     }

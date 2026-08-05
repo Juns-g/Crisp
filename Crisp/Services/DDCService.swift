@@ -329,6 +329,17 @@ final class DDCService: ObservableObject, @unchecked Sendable {
             return nil
         }
 
+        // Header bytes alone are only 4 bytes of protection: a wedged DDC
+        // controller (seen on the AOC Q27G3XMN) streams noise that acks reads,
+        // and a lucky frame can pass the signature with garbage value bytes,
+        // poisoning the stored max. The DDC/CI checksum (0x50 seed XORed over
+        // bytes 0-9) must match byte 10 before the payload is trusted.
+        var expectedChecksum = UInt8(0x50)
+        for i in 0...9 { expectedChecksum ^= replyBuf[i] }
+        guard expectedChecksum == replyBuf[10] else {
+            return nil
+        }
+
         let maxVal = (UInt16(replyBuf[6]) << 8) | UInt16(replyBuf[7])
         let curVal = (UInt16(replyBuf[8]) << 8) | UInt16(replyBuf[9])
         // A zero max is also invalid (would make every write 0); reject it.
@@ -543,6 +554,9 @@ final class DDCService: ObservableObject, @unchecked Sendable {
                     // a monitor can ack the transaction yet return stale/null bytes, whose
                     // bogus "max" would compress the usable brightness range.
                     guard rb[0] == 0x6E, rb[2] == 0x02, rb[3] == 0x00, rb[4] == command else { return }
+                    // Header bytes are weak protection against a noise stream;
+                    // require the DDC/CI checksum too (see arm64Read).
+                    guard self.ddcChecksum(destAddress: 0x50, bytes: Array(rb[0...9])) == rb[10] else { return }
                     let maxVal = (UInt16(rb[6]) << 8) | UInt16(rb[7])
                     let curVal = (UInt16(rb[8]) << 8) | UInt16(rb[9])
                     guard maxVal > 0 else { return }
