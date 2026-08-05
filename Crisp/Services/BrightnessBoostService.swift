@@ -160,17 +160,24 @@ final class BrightnessBoostService {
             maxAnimators[display.displayID]?.cancel()
             collapsingDisplays.remove(display.displayID)
             // Externals in SDR mode: switch to HDR first.
+            var switchedHDRForThisAttempt = false
             if !display.isBuiltin, potentialHeadroom(for: display.displayID) <= 1.05 {
                 guard supportsHDRMode(display.displayID), setHDRMode(true, for: display.displayID) else { return false }
+                switchedHDRForThisAttempt = true
                 // Give WindowServer a moment to re-sync the display in HDR mode.
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
             let potential = potentialHeadroom(for: display.displayID)
             let newMax = BrightnessBoostMath.sliderMax(potentialHeadroom: potential)
             guard newMax > 100 else {
-                // HDR came up without usable headroom: fail quietly. HDR mode
-                // itself is left on; it is now an explicit toggle independent
-                // of boost, not something boost reverts.
+                // No usable headroom: fail quietly. A user-set HDR mode is
+                // left alone (explicit toggle), but an HDR switch made by
+                // THIS failed attempt is rolled back: a half-engaged switch
+                // (preference recorded, mode never applied) leaves the OS
+                // rendering HDR into an SDR link, washing the screen out.
+                if switchedHDRForThisAttempt {
+                    _ = setHDRMode(false, for: display.displayID)
+                }
                 return false
             }
             UserDefaults.standard.set(true, forKey: enabledKey(uuid))
