@@ -39,11 +39,27 @@ class DisplayInfo: ObservableObject, Identifiable {
     }
 
     /// The native (highest non-HiDPI) resolution, used for HiDPI enablement and presets.
+    /// Reported in CG's rotated space: on a 90/270-rotated display this is portrait,
+    /// matching availableModes.
     var nativeResolution: (width: Int, height: Int) {
         let nativeMode = availableModes
             .filter { !$0.isHiDPI }
             .max(by: { ($0.width * $0.height) < ($1.width * $1.height) })
         return (nativeMode?.width ?? pixelWidth, nativeMode?.height ?? pixelHeight)
+    }
+
+    /// Whether macOS renders this display rotated 90/270 (portrait on a landscape panel).
+    var isRotated: Bool {
+        Int(CGDisplayRotation(displayID).rounded()) % 180 != 0
+    }
+
+    /// nativeResolution in the panel's unrotated scanout space. The scale-resolutions
+    /// override plist describes the panel hardware, which knows nothing about rotation,
+    /// so plist writes and checks must use these dims; mode-list comparisons stay in
+    /// the rotated space of nativeResolution/availableModes.
+    var panelNativeResolution: (width: Int, height: Int) {
+        let (w, h) = nativeResolution
+        return isRotated ? (h, w) : (w, h)
     }
 
     init(displayID: CGDirectDisplayID) {

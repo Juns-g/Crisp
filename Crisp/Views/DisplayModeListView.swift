@@ -459,12 +459,16 @@ struct DisplayModeSection: View {
     /// of any stored flag; it is exactly what the slider's density reflects. When true the
     /// enable row is hidden, there is nothing left to do.
     private var smoothModesPresent: Bool {
-        let (w, h) = display.nativeResolution
+        let (w, h) = display.panelNativeResolution
         let injected = HiDPIService.shared.smoothScaledLogicalSizes(nativeWidth: w, nativeHeight: h)
             .filter { $0.width < w }  // native is a real mode, always present; ignore it
         guard !injected.isEmpty else { return false }
         let present = Set(display.availableModes.lazy.filter { $0.isHiDPI }.map { "\($0.width)x\($0.height)" })
-        let hits = injected.filter { present.contains("\($0.width)x\($0.height)") }.count
+        // Injected sizes are panel-space; a rotated display enumerates them swapped.
+        let rotated = display.isRotated
+        let hits = injected.filter {
+            present.contains(rotated ? "\($0.height)x\($0.width)" : "\($0.width)x\($0.height)")
+        }.count
         return Double(hits) / Double(injected.count) >= 0.5
     }
 
@@ -472,7 +476,7 @@ struct DisplayModeSection: View {
     /// dense). Computed off the render path (on appear + after enable) to avoid a disk
     /// read on every redraw.
     private func refreshSmoothWouldPrompt() {
-        let (w, h) = display.nativeResolution
+        let (w, h) = display.panelNativeResolution
         smoothWouldPrompt = HiDPIService.shared.smoothScalingWouldPrompt(
             vendor: display.vendorNumber, product: display.modelNumber, nativeWidth: w, nativeHeight: h)
     }
@@ -615,7 +619,8 @@ struct DisplayModeSection: View {
         guard !smoothBusy, PanelOpenGuard.allowsActivation else { return }
         smoothOn = on   // optimistic; the re-enumeration below confirms it
         smoothBusy = true
-        let (nativeW, nativeH) = display.nativeResolution
+        // Panel-space dims: the override plist is rotation-blind (see panelNativeResolution).
+        let (nativeW, nativeH) = display.panelNativeResolution
         // Capture now, while the display is still connected and its UUID resolves; the
         // soft-reconnect below destroys this view, but the Task keeps running and uses
         // this to ask the rebuilt menu to re-expand the same display afterward.

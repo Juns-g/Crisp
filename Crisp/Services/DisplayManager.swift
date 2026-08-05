@@ -205,8 +205,10 @@ class DisplayManager: ObservableObject {
         // Install the dense smooth-scaling ladder directly, not just the coarse HiDPI set: this
         // admin prompt is the one interruption, so make it deliver the full scaled slider in one
         // shot. Anyone enabling HiDPI on a 2K+ external wants that range anyway.
+        // Panel-space dims: the override plist is rotation-blind (see panelNativeResolution).
+        let (panelW, panelH) = display.panelNativeResolution
         let err = HiDPIService.shared.enableSmoothScaling(
-            vendor: vendor, product: product, nativeWidth: nativeW, nativeHeight: nativeH)
+            vendor: vendor, product: product, nativeWidth: panelW, nativeHeight: panelH)
 
         // On success, soft-reconnect so the freshly written override enumerates now (screen
         // blanks ~1s), instead of the weak probe that left the modes dormant until a physical
