@@ -142,10 +142,7 @@ final class BrightnessBoostService {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
             let potential = potentialHeadroom(for: display.displayID)
-            let newMax = BrightnessBoostMath.sliderMax(
-                isBuiltin: display.isBuiltin, model: BrightnessBoostMath.currentModelIdentifier,
-                potentialHeadroom: potential
-            )
+            let newMax = BrightnessBoostMath.sliderMax(potentialHeadroom: potential)
             guard newMax > 100 else {
                 // HDR came up without usable headroom: undo and fail quietly.
                 undoHDRSwitchIfNeeded(for: display)
@@ -201,7 +198,6 @@ final class BrightnessBoostService {
             display.maxBrightness = 100 + p * (max0 - 100)
             let factor = BrightnessBoostMath.overlayFactor(
                 brightness: display.brightness, sliderMax: max0,
-                isBuiltin: display.isBuiltin, model: BrightnessBoostMath.currentModelIdentifier,
                 currentEDR: self.currentHeadroom(for: displayID)
             )
             EDROverlayManager.shared.setFactor(factor, for: displayID)
@@ -250,8 +246,6 @@ final class BrightnessBoostService {
         let factor = BrightnessBoostMath.overlayFactor(
             brightness: display.brightness,
             sliderMax: display.maxBrightness,
-            isBuiltin: display.isBuiltin,
-            model: BrightnessBoostMath.currentModelIdentifier,
             currentEDR: currentHeadroom(for: display.displayID)
         )
         EDROverlayManager.shared.setFactor(factor, for: display.displayID)
@@ -266,10 +260,7 @@ final class BrightnessBoostService {
         for display in DisplayManagerAccessor.shared.displays where isEnabled(for: display) {
             guard isEligible(display) else { continue }
             let potential = potentialHeadroom(for: display.displayID)
-            let newMax = BrightnessBoostMath.sliderMax(
-                isBuiltin: display.isBuiltin, model: BrightnessBoostMath.currentModelIdentifier,
-                potentialHeadroom: potential
-            )
+            let newMax = BrightnessBoostMath.sliderMax(potentialHeadroom: potential)
             guard newMax > 100 else { continue }
             display.maxBrightness = newMax
             syncOverlay(for: display)
