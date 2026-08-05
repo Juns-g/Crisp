@@ -292,6 +292,13 @@ final class BrightnessBoostService {
         return (d.value(forKey: "preferHDRModes") as? Bool) == true
     }
 
+    /// Newest HDR-preference request per display. An off request waits out
+    /// the boost collapse before switching modes; if a newer request lands
+    /// during that wait, the older one must not fire its stale mode switch
+    /// afterward (a fast off-then-on flip would otherwise end on SDR half a
+    /// second after the user chose HDR).
+    private var hdrRequestGeneration: [CGDirectDisplayID: Int] = [:]
+
     /// Explicit HDR on/off for a display. Turning off while boost is enabled
     /// for it first runs boost's own disable-collapse to completion (waiting
     /// out collapsingDisplays, then a short settle) so brightness is back at
@@ -299,19 +306,26 @@ final class BrightnessBoostService {
     /// an SDR display underneath it.
     @discardableResult
     func setHDRPreference(_ on: Bool, for display: DisplayInfo) async -> Bool {
+        let displayID = display.displayID
+        let generation = (hdrRequestGeneration[displayID] ?? 0) + 1
+        hdrRequestGeneration[displayID] = generation
         if on {
-            return setHDRMode(true, for: display.displayID)
+            return setHDRMode(true, for: displayID)
         }
         if isEnabled(for: display) {
             _ = await setEnabled(false, for: display)
-            while collapsingDisplays.contains(display.displayID) {
-                try? await Task.sleep(nanoseconds: 50_000_000)
-            }
-            // Brief settle so the collapse's last brightness write lands
-            // before the mode switch.
-            try? await Task.sleep(nanoseconds: 200_000_000)
         }
-        return setHDRMode(false, for: display.displayID)
+        // Wait on the live collapse set, not the isEnabled flag: a collapse
+        // started moments earlier from the Extra Brightness row has already
+        // cleared the flag but is still animating this display.
+        while collapsingDisplays.contains(displayID) {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        // Brief settle so the collapse's last brightness write lands
+        // before the mode switch.
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        guard hdrRequestGeneration[displayID] == generation else { return false }
+        return setHDRMode(false, for: displayID)
     }
 
     // MARK: - MonitorPanel HDR mode (private API; selectors verified by the Task 1 spike)
