@@ -25,6 +25,8 @@ final class EDROverlayManager {
         var factor: Double
         var timer: Timer?
         var revealed: Bool = false
+        var renderInFlightSince: Date?
+        var renderPending: Bool = false
     }
 
     private var overlays: [CGDirectDisplayID: Overlay] = [:]
@@ -148,9 +150,24 @@ final class EDROverlayManager {
     }
 
     private func render(for displayID: CGDirectDisplayID) {
-        guard let overlay = overlays[displayID],
-              let commandQueue,
+        guard var overlay = overlays[displayID] else { return }
+        // Coalesce: at most one present in flight per overlay. Drag events and
+        // the fast headroom poll call this at up to 120Hz; once the 3-drawable
+        // pool is exhausted nextDrawable() blocks the main thread, which shows
+        // up as the slider knob trailing the cursor above 100%. The presented
+        // handler re-renders once with the latest factor, so nothing is lost.
+        // The 1s staleness escape keeps a present dropped mid-flight (display
+        // sleep) from silencing the keep-alive renders forever.
+        if let since = overlay.renderInFlightSince, Date().timeIntervalSince(since) < 1.0 {
+            overlay.renderPending = true
+            overlays[displayID] = overlay
+            return
+        }
+        guard let commandQueue,
               let drawable = overlay.layer.nextDrawable() else { return }
+        overlay.renderInFlightSince = Date()
+        overlay.renderPending = false
+        overlays[displayID] = overlay
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
         pass.colorAttachments[0].loadAction = .clear
@@ -160,6 +177,14 @@ final class EDROverlayManager {
         guard let cmd = commandQueue.makeCommandBuffer(),
               let encoder = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         encoder.endEncoding()
+        drawable.addPresentedHandler { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, var done = self.overlays[displayID] else { return }
+                done.renderInFlightSince = nil
+                self.overlays[displayID] = done
+                if done.renderPending { self.render(for: displayID) }
+            }
+        }
         cmd.present(drawable)
         if !overlay.revealed {
             cmd.addCompletedHandler { [weak self] _ in
