@@ -4,9 +4,10 @@ import CoreGraphics
 
 /// Policy brain for the Extra Brightness (EDR upscaling) feature. Decides which
 /// displays can boost, maps brightness above 100% to an overlay factor (via
-/// BrightnessBoostMath + EDROverlayManager), switches external monitors in and
-/// out of HDR mode (private MonitorPanel.framework, same dlopen + KVC pattern
-/// as DisplayPresetService), and persists the per-display toggle by displayUUID.
+/// BrightnessBoostMath + EDROverlayManager), switches external monitors into
+/// HDR mode when boost needs it, and persists the per-display toggle by
+/// displayUUID. Also exposes the explicit per-display HDR toggle (private
+/// MonitorPanel.framework, same dlopen + KVC pattern as DisplayPresetService).
 @MainActor
 final class BrightnessBoostService {
     static let shared = BrightnessBoostService()
@@ -79,7 +80,6 @@ final class BrightnessBoostService {
     // MARK: - Persistence (displayUUID keyed, survives displayID reassignment)
 
     private func enabledKey(_ uuid: String) -> String { "crisp.BoostEnabled.\(uuid)" }
-    private func switchedHDRKey(_ uuid: String) -> String { "crisp.BoostSwitchedHDR.\(uuid)" }
 
     func isEnabled(for display: DisplayInfo) -> Bool {
         UserDefaults.standard.bool(forKey: enabledKey(display.displayUUID))
@@ -134,18 +134,18 @@ final class BrightnessBoostService {
             BrightnessService.shared.cancelAnimation(for: display.displayID)
             maxAnimators[display.displayID]?.cancel()
             collapsingDisplays.remove(display.displayID)
-            // Externals in SDR mode: switch to HDR first, remember that we did.
+            // Externals in SDR mode: switch to HDR first.
             if !display.isBuiltin, potentialHeadroom(for: display.displayID) <= 1.05 {
                 guard supportsHDRMode(display.displayID), setHDRMode(true, for: display.displayID) else { return false }
-                UserDefaults.standard.set(true, forKey: switchedHDRKey(uuid))
                 // Give WindowServer a moment to re-sync the display in HDR mode.
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
             let potential = potentialHeadroom(for: display.displayID)
             let newMax = BrightnessBoostMath.sliderMax(potentialHeadroom: potential)
             guard newMax > 100 else {
-                // HDR came up without usable headroom: undo and fail quietly.
-                undoHDRSwitchIfNeeded(for: display)
+                // HDR came up without usable headroom: fail quietly. HDR mode
+                // itself is left on; it is now an explicit toggle independent
+                // of boost, not something boost reverts.
                 return false
             }
             UserDefaults.standard.set(true, forKey: enabledKey(uuid))
@@ -209,7 +209,6 @@ final class BrightnessBoostService {
     }
 
     private func finishDisable(for display: DisplayInfo) {
-        undoHDRSwitchIfNeeded(for: display)
         // Close the EDR surface only after everything is static: closing
         // exits EDR mode, and doing that mid-motion is what flashed.
         let displayID = display.displayID
@@ -218,13 +217,6 @@ final class BrightnessBoostService {
             guard !self.isEnabled(for: display) else { return }
             EDROverlayManager.shared.removeOverlay(for: displayID)
         }
-    }
-
-    private func undoHDRSwitchIfNeeded(for display: DisplayInfo) {
-        let key = switchedHDRKey(display.displayUUID)
-        guard UserDefaults.standard.bool(forKey: key) else { return }
-        _ = setHDRMode(false, for: display.displayID)
-        UserDefaults.standard.set(false, forKey: key)
     }
 
     // MARK: - Overlay sync (called on every brightness change)
@@ -268,14 +260,11 @@ final class BrightnessBoostService {
         EDROverlayManager.shared.rerenderAll()
     }
 
-    /// Quit: drop overlays (they die with the process anyway) and restore SDR
-    /// on externals we switched, so a monitor is never left in HDR mode with
-    /// no boost and no DDC control.
+    /// Quit: drop overlays (they die with the process anyway). HDR mode is
+    /// left as the user set it: it is now an explicit per-display toggle (see
+    /// HDRToggleView), and boost no longer silently reverts it on exit.
     func prepareForTermination() {
         EDROverlayManager.shared.removeAll()
-        for display in DisplayManagerAccessor.shared.displays {
-            undoHDRSwitchIfNeeded(for: display)
-        }
     }
 
     @objc private func screenParametersChanged() {
@@ -285,6 +274,44 @@ final class BrightnessBoostService {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             self.reapplyAll()
         }
+    }
+
+    // MARK: - HDR toggle (explicit, per-display)
+
+    /// Whether this display is offered the explicit HDR row at all: externals
+    /// only (the built-in panel never shows it, matching System Settings)
+    /// that MonitorPanel reports as HDR-capable.
+    func isEligibleForHDRToggle(_ display: DisplayInfo) -> Bool {
+        !display.isBuiltin && supportsHDRMode(display.displayID)
+    }
+
+    /// Live HDR mode state, read straight from MPDisplay (not persisted: the
+    /// OS already remembers HDR preference itself).
+    func isHDREnabled(for display: DisplayInfo) -> Bool {
+        guard let d = mpDisplay(for: display.displayID) else { return false }
+        return (d.value(forKey: "preferHDRModes") as? Bool) == true
+    }
+
+    /// Explicit HDR on/off for a display. Turning off while boost is enabled
+    /// for it first runs boost's own disable-collapse to completion (waiting
+    /// out collapsingDisplays, then a short settle) so brightness is back at
+    /// 100 before the mode switch, instead of the collapse animation fighting
+    /// an SDR display underneath it.
+    @discardableResult
+    func setHDRPreference(_ on: Bool, for display: DisplayInfo) async -> Bool {
+        if on {
+            return setHDRMode(true, for: display.displayID)
+        }
+        if isEnabled(for: display) {
+            _ = await setEnabled(false, for: display)
+            while collapsingDisplays.contains(display.displayID) {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            // Brief settle so the collapse's last brightness write lands
+            // before the mode switch.
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return setHDRMode(false, for: display.displayID)
     }
 
     // MARK: - MonitorPanel HDR mode (private API; selectors verified by the Task 1 spike)

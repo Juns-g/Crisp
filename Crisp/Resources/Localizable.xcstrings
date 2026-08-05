@@ -142,6 +142,16 @@
         }
       }
     },
+    "HDR" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HDR"
+          }
+        }
+      }
+    },
     "Keep display offsets" : {
       "localizations" : {
         "zh-Hans" : {

@@ -76,6 +76,12 @@ struct DisplayDetailView: View {
             // Disconnect this physical display (Apple Silicon only; hidden for the last screen)
             DisconnectDisplayRow(display: display)
 
+            // HDR: explicit per-display HDR mode toggle, shown only for
+            // HDR-capable externals (built-in never offers this, matching
+            // System Settings). Placed above Extra Brightness: cause before
+            // effect, since enabling boost on an SDR external switches this on.
+            HDRToggleView(display: display)
+
             // Extra Brightness (EDR upscaling), shown only for displays with
             // usable HDR headroom (built-in XDR, HDR-capable externals)
             ExtraBrightnessView(display: display)
