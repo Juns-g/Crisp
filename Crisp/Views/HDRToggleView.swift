@@ -42,11 +42,23 @@ struct HDRToggleView: View {
             .padding(.vertical, 7)
             .menuRowHover(isHovered)
             .onHover { isHovered = $0 }
-            .onAppear {
-                isProgrammaticChange = true
-                isOn = BrightnessBoostService.shared.isHDREnabled(for: display)
-                isProgrammaticChange = false
+            .onAppear { resyncFromLiveState() }
+            // HDR can change outside Crisp (System Settings, or the auto
+            // boost teardown) while the panel sits open, and every HDR flip
+            // fires a screen reconfiguration; re-read the live state then so
+            // the toggle never shows stale HDR-on.
+            .onReceive(
+                NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+                    .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            ) { _ in
+                resyncFromLiveState()
             }
         }
+    }
+
+    private func resyncFromLiveState() {
+        isProgrammaticChange = true
+        isOn = BrightnessBoostService.shared.isHDREnabled(for: display)
+        isProgrammaticChange = false
     }
 }
