@@ -64,7 +64,12 @@ final class BrightnessBoostService {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 guard let self else { return }
                 var anyBoosted = false
-                for display in DisplayManagerAccessor.shared.displays where display.maxBrightness > 100 {
+                // Visit inert-but-enabled displays too (flag set, capability
+                // currently missing, maxBrightness back at 100): the debounced
+                // auto-disable below is what resolves them; syncOverlay
+                // no-ops for them.
+                for display in DisplayManagerAccessor.shared.displays
+                where display.maxBrightness > 100 || self.isEnabled(for: display) {
                     anyBoosted = true
                     self.syncOverlay(for: display)
                     guard !display.isBuiltin else { continue }
@@ -274,26 +279,24 @@ final class BrightnessBoostService {
     /// Re-establish boost state for every connected display. Called at launch,
     /// after wake, and on display reconfiguration.
     func reapplyAll() {
+        var anyEnabled = false
         for display in DisplayManagerAccessor.shared.displays where isEnabled(for: display) {
+            anyEnabled = true
             guard isEligible(display) else { continue }
             let potential = potentialHeadroom(for: display.displayID)
             let newMax = BrightnessBoostMath.sliderMax(potentialHeadroom: potential)
-            guard newMax > 100 else {
-                // No usable headroom to reapply into (same failure setEnabled(true,
-                // ...) would hit): clear the persisted flag so the toggle does not
-                // stay on with nothing actually engaged, and collapse any live
-                // boost left over from before the capability vanished (a HiDPI
-                // mode switch drops HDR advertisement mid-boost; without this
-                // the slider stays extended with a stranded overlay).
-                UserDefaults.standard.set(false, forKey: enabledKey(display.displayUUID))
-                if display.maxBrightness > 100, !collapsingDisplays.contains(display.displayID) {
-                    collapseAndDisable(for: display)
-                }
-                continue
-            }
+            // No usable headroom right now: do NOT decide anything here. Wake
+            // and reconfig headroom reads are unreliable single samples; the
+            // headroom poll below owns auto-disable with a debounce, and
+            // re-engagement happens on the next reapply once reads are sane.
+            guard newMax > 100 else { continue }
             display.maxBrightness = newMax
             syncOverlay(for: display)
         }
+        // Ensure the poll is watching every enabled display, including inert
+        // ones (flag set but capability currently missing), so the debounced
+        // auto-disable can resolve them into a coherent off state.
+        if anyEnabled { startHeadroomPollIfNeeded() }
         EDROverlayManager.shared.rerenderAll()
     }
 
