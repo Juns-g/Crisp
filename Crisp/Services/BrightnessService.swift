@@ -409,7 +409,33 @@ final class BrightnessService: @unchecked Sendable {
     /// bottom of the slider actually reaches dark (gamma keeps its own 5% floor).
     private let gammaBlendThreshold = 15.0
 
+    /// Externals currently in HDR mode. A DisplayHDR monitor manages its own
+    /// luminance and silently discards DDC brightness writes (they still ack,
+    /// so failure detection never fires), leaving 15-100% of the slider dead.
+    /// While a display is in this set its whole 0-100 range dims in software
+    /// instead. Maintained by BrightnessBoostService (HDR toggle, boost's
+    /// auto-switch, and reconfiguration sync). Guarded by ddcAvailableLock.
+    private var hdrDimmedDisplays: Set<CGDirectDisplayID> = []
+
+    func setHDRSoftwareDimming(_ on: Bool, for displayID: CGDirectDisplayID) {
+        ddcAvailableLock.withLock {
+            if on { hdrDimmedDisplays.insert(displayID) } else { hdrDimmedDisplays.remove(displayID) }
+        }
+    }
+
     private func writeDDCBrightnessCoalesced(percent: Double, for displayID: CGDirectDisplayID) {
+        // Single choke point for every DDC brightness write (direct sets and
+        // glide ticks both land here), so this one check routes the full
+        // range to gamma while the monitor is in HDR mode. DDC control
+        // resumes automatically when HDR goes off: the first hardware write's
+        // gamma reset below clears the leftover software dim.
+        let hdrDimmed = ddcAvailableLock.withLock { hdrDimmedDisplays.contains(displayID) }
+        if hdrDimmed {
+            queue.async { [weak self] in
+                self?.setSoftwareBrightness(percent, for: displayID)
+            }
+            return
+        }
         ddcPumpLock.lock()
         pendingDDCPercent[displayID] = percent
         let alreadyPumping = ddcPumpActive.contains(displayID)

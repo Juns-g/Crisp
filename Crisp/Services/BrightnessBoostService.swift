@@ -305,6 +305,7 @@ final class BrightnessBoostService {
     /// Re-establish boost state for every connected display. Called at launch,
     /// after wake, and on display reconfiguration.
     func reapplyAll() {
+        syncHDRRouting()
         var anyEnabled = false
         for display in DisplayManagerAccessor.shared.displays where isEnabled(for: display) {
             anyEnabled = true
@@ -413,6 +414,20 @@ final class BrightnessBoostService {
         guard d.responds(to: sel) else { return false }
         typealias Fn = @convention(c) (NSObject, Selector, Bool) -> Void
         unsafeBitCast(d.method(for: sel), to: Fn.self)(d, sel, on)
+        BrightnessService.shared.setHDRSoftwareDimming(on, for: displayID)
         return true
+    }
+
+    /// Keeps BrightnessService's DDC-vs-software routing in step with each
+    /// external's live HDR mode. A DisplayHDR monitor owns its luminance and
+    /// silently discards DDC brightness writes (they still ack), so the whole
+    /// 0-100 range must dim in software while HDR is on. Covers HDR changes
+    /// made outside Crisp (System Settings): every HDR flip fires a screen
+    /// reconfiguration, which lands here via reapplyAll.
+    private func syncHDRRouting() {
+        for display in DisplayManagerAccessor.shared.displays where isEligibleForHDRToggle(display) {
+            BrightnessService.shared.setHDRSoftwareDimming(
+                isHDREnabled(for: display), for: display.displayID)
+        }
     }
 }

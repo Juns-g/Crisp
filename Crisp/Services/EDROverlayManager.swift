@@ -151,6 +151,16 @@ final class EDROverlayManager {
 
     private func render(for displayID: CGDirectDisplayID) {
         guard var overlay = overlays[displayID] else { return }
+        // Frame self-heal: an HDR flip's reconfiguration can move this screen
+        // while the one didChangeScreenParameters notification fires mid-
+        // transition, leaving the overlay parked over a NEIGHBORING display
+        // (observed as a multiplied strip on the Dell while boosting the AOC).
+        // The keep-alive already runs at 5Hz; re-align whenever geometry
+        // drifts instead of trusting a single notification.
+        if let screen = NSScreen.screen(for: displayID), overlay.window.frame != screen.frame {
+            overlay.window.setFrame(screen.frame, display: true)
+            overlay.layer.frame = CGRect(origin: .zero, size: screen.frame.size)
+        }
         // Coalesce: at most one present in flight per overlay. Drag events and
         // the fast headroom poll call this at up to 120Hz; once the 3-drawable
         // pool is exhausted nextDrawable() blocks the main thread, which shows
