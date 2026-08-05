@@ -3,6 +3,7 @@ import SwiftUI
 import CoreGraphics
 import ApplicationServices
 import Combine
+import os.log
 
 /// Borderless key-capable panel for the menu bar UI.
 /// Owning the panel (instead of MenuBarExtra's window) removes the WindowServer
@@ -24,6 +25,14 @@ final class MenuPanel: NSPanel {
     private var resizeFrom: NSSize = .zero
     private var resizeStart: CFTimeInterval = 0
     private var resizeOmega: Double = 0
+    /// Spring-start velocity (pt/s), carried over from the running spring on a
+    /// retarget so an interrupted resize keeps its momentum instead of popping
+    /// to a fresh zero-velocity curve (SwiftUI's springs preserve velocity on
+    /// retarget; the window must match or the edges visibly disagree).
+    private var resizeV0 = CGSize.zero
+    /// Live velocity of the running spring, updated per tick. Zero when idle,
+    /// so a spring started from rest still starts from rest.
+    private var resizeVelocity = CGSize.zero
 
     override var canBecomeKey: Bool { true }
     override func cancelOperation(_ sender: Any?) { onCancel?() }
@@ -47,6 +56,7 @@ final class MenuPanel: NSPanel {
         // Hidden (alpha 0) means warm-up layout: snap so the panel opens at
         // full size instantly.
         if alphaValue == 0 {
+            resizeVelocity = .zero
             var f = frame
             f.size = size
             setFrame(f, display: false)
@@ -67,6 +77,7 @@ final class MenuPanel: NSPanel {
         // Not animator(): NSWindow's frame animator runs on a background
         // thread and tears reads of pinnedTopY.
         guard let view = contentView ?? hostingView else {
+            resizeVelocity = .zero
             var f = frame
             f.size = size
             setFrame(f, display: false)
@@ -74,6 +85,11 @@ final class MenuPanel: NSPanel {
         }
         resizeOmega = 2 * Double.pi / Animation.panelResizeDuration
         resizeFrom = frame.size
+        // Carry the on-screen momentum into the new spring. resizeVelocity is
+        // zero when no spring ran (start from rest) and the last tick's true
+        // velocity when one did, so bunched retargets (panel-open cascades, a
+        // toggle interrupted mid-flight) stay continuous instead of popping.
+        resizeV0 = resizeVelocity
         resizeStart = CACurrentMediaTime()
         resizeTarget = size
         let link = view.displayLink(target: self, selector: #selector(resizeTick(_:)))
@@ -88,16 +104,27 @@ final class MenuPanel: NSPanel {
             return
         }
         let dt = CACurrentMediaTime() - resizeStart
-        let decay = (1 + resizeOmega * dt) * exp(-resizeOmega * dt)
+        let e = exp(-resizeOmega * dt)
+        // Critically damped spring with initial velocity v0:
+        // x(t) = T + (d0 + (v0 + w*d0) t) e^(-wt), d0 = x0 - T.
+        func axis(_ from: Double, _ to: Double, _ v0: Double) -> (x: Double, v: Double) {
+            let d0 = from - to
+            let a = v0 + resizeOmega * d0
+            return (x: to + (d0 + a * dt) * e,
+                    v: (a - resizeOmega * (d0 + a * dt)) * e)
+        }
+        let h = axis(resizeFrom.height, target.height, resizeV0.height)
+        let w = axis(resizeFrom.width, target.width, resizeV0.width)
         var f = frame
-        if decay < 0.005 {
+        if abs(h.x - target.height) < 0.25, abs(w.x - target.width) < 0.25 {
             link.invalidate()
             resizeLink = nil
             resizeTarget = nil
+            resizeVelocity = .zero
             f.size = target
         } else {
-            f.size = NSSize(width: target.width + (resizeFrom.width - target.width) * decay,
-                            height: target.height + (resizeFrom.height - target.height) * decay)
+            f.size = NSSize(width: w.x, height: h.x)
+            resizeVelocity = CGSize(width: w.v, height: h.v)
         }
         setFrame(f, display: false)
     }
@@ -682,6 +709,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct PanelRootView: View {
     let displayManager: DisplayManager
 
+    // Temporary probe: cadence of the root geometry callback vs the window's
+    // actual height, to settle whether onGeometryChange delivers per-frame
+    // eased values or one final value per change. Read with:
+    //   log show --last 5m --predicate 'subsystem == "com.crisp.app" && category == "panelresize"'
+    static let resizeLogger = Logger(subsystem: "com.crisp.app", category: "panelresize")
+
     var body: some View {
         // Top-aligned inside the window: if window and content ever disagree,
         // the excess window area is transparent below the glass instead of an
@@ -698,6 +731,7 @@ struct PanelRootView: View {
                     // change to its pinned top, so growth goes downward.
                     guard size.width > 0, size.height > 0,
                           let w = NSApp.windows.first(where: { $0 is MenuPanel }) as? MenuPanel else { return }
+                    PanelRootView.resizeLogger.log("geo h=\(size.height, format: .fixed(precision: 1)) win=\(w.frame.height, format: .fixed(precision: 1))")
                     w.applyContentSize(size)
                 }
         }
