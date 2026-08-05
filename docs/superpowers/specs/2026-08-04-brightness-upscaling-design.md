@@ -176,12 +176,27 @@ but force a re-sync flash from HiDPI ones.
 A failed boost enable rolls back the HDR switch it made itself (a
 half-engaged switch, preference recorded but the mode never applied, leaves
 macOS rendering HDR intent into an SDR link, washing the screen out); a
-user-set HDR mode is still never touched. Verification status: the built-in
-XDR path is fully hardware-verified (boost, headroom ceiling, collapse,
-white-out). The external path is coded, reviewed, and defensively hardened,
-but end-to-end verification is paused: the test monitor's HDMI link could not
-hold an HDR handshake (reproduced with Crisp quit, System Settings alone),
-possibly a bandwidth ceiling at 1440p 144Hz. Retest over DisplayPort/USB-C
-when the cable is available: Crisp HDR on, boost on and up, boost off leaves
-HDR on, HDR off collapses boost first, and the auto-disable when HDR is cut
-externally mid-boost.
+user-set HDR mode is still never touched.
+
+Verification status: fully hardware-verified on both display classes. The
+built-in XDR path passed first (boost, headroom ceiling, collapse,
+white-out). The external path passed the full protocol on the AOC Q27G3XMN
+over DisplayPort/USB-C (the earlier HDMI link could not hold an HDR
+handshake at 1440p 144Hz; over DP the panel runs 165Hz with HDR advertised
+and ~11.5x potential EDR headroom): HDR on holds with no torn washout,
+boost visibly exceeds SDR max with no white-out, boost off leaves HDR on,
+HDR off collapses boost first, and cutting HDR from System Settings
+mid-boost auto-disables boost and resyncs the HDR toggle row.
+
+Three external-path behaviors were added during that verification pass:
+(1) While a display is in HDR mode it owns its luminance and silently
+discards DDC brightness writes (they still ack), so BrightnessService
+routes the whole 0-100 range through software gamma dimming for the
+duration; hardware DDC control resumes automatically when HDR goes off.
+(2) EDR overlay windows re-align their frame on every keep-alive render:
+an HDR flip's reconfiguration can move screens while the lone
+didChangeScreenParameters notification fires mid-transition, which
+briefly left the overlay multiplying a strip of the neighboring display.
+(3) The HDR toggle row re-reads live state on debounced screen
+reconfigurations, so HDR changes made in System Settings while the panel
+is open are reflected within a second.
