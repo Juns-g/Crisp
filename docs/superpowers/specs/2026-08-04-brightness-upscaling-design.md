@@ -172,3 +172,16 @@ modes do not advertise HDR on at least some external monitors (observed on
 the AOC Q27G3XMN), so entering one while HDR is active drops HDR capability
 until a native mode is restored; HDR flips are flash-free from native modes,
 but force a re-sync flash from HiDPI ones.
+
+A failed boost enable rolls back the HDR switch it made itself (a
+half-engaged switch, preference recorded but the mode never applied, leaves
+macOS rendering HDR intent into an SDR link, washing the screen out); a
+user-set HDR mode is still never touched. Verification status: the built-in
+XDR path is fully hardware-verified (boost, headroom ceiling, collapse,
+white-out). The external path is coded, reviewed, and defensively hardened,
+but end-to-end verification is paused: the test monitor's HDMI link could not
+hold an HDR handshake (reproduced with Crisp quit, System Settings alone),
+possibly a bandwidth ceiling at 1440p 144Hz. Retest over DisplayPort/USB-C
+when the cable is available: Crisp HDR on, boost on and up, boost off leaves
+HDR on, HDR off collapses boost first, and the auto-disable when HDR is cut
+externally mid-boost.
