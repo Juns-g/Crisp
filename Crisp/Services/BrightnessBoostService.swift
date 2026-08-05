@@ -281,8 +281,14 @@ final class BrightnessBoostService {
             guard newMax > 100 else {
                 // No usable headroom to reapply into (same failure setEnabled(true,
                 // ...) would hit): clear the persisted flag so the toggle does not
-                // stay on with nothing actually engaged.
+                // stay on with nothing actually engaged, and collapse any live
+                // boost left over from before the capability vanished (a HiDPI
+                // mode switch drops HDR advertisement mid-boost; without this
+                // the slider stays extended with a stranded overlay).
                 UserDefaults.standard.set(false, forKey: enabledKey(display.displayUUID))
+                if display.maxBrightness > 100, !collapsingDisplays.contains(display.displayID) {
+                    collapseAndDisable(for: display)
+                }
                 continue
             }
             display.maxBrightness = newMax
