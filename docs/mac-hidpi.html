@@ -66,7 +66,10 @@
 
     <h2>上手：开启 HiDPI</h2>
     <p><strong>1. 安装。</strong>推荐用 Homebrew：</p>
-    <pre><span class="prompt">$</span> brew install --cask didriksg/tap/crisp</pre>
+    <div class="brew" onclick="navigator.clipboard.writeText('brew install --cask didriksg/tap/crisp');this.querySelector('.hint').textContent='已复制'">
+      <span class="prompt">$</span> brew install --cask didriksg/tap/crisp
+      <span class="hint">点击复制</span>
+    </div>
     <p class="note">也可以到 GitHub Releases 下载 DMG，拖进「应用程序」即可。</p>
     <p><strong>2. 开启 HiDPI。</strong>点菜单栏图标，展开对应的外接显示器，打开 HiDPI。2K 及以上的显示器会自动配好可用的缩放分辨率，全程不弹密码、不黑屏。（只有开启下面可选的「平滑缩放」，或极少数完全不带 HiDPI 的面板，才需要输一次管理员密码。）</p>
     <p><strong>3. 选一档缩放分辨率。</strong>以 27 寸 1440p 为例，「看起来像 1920×1080」（按 2 倍渲染）通常是清晰度和空间的最佳平衡点；4K 屏则常选「看起来像 2560×1440」。想要更细的调节？打开<strong>平滑缩放</strong>（可选，可按显示器单独开）：它会装上一套更密的 HiDPI 档位，让你像用 BetterDisplay 那样细调界面大小。安装时输一次管理员密码，默认关闭，因为中间那些档位是分数缩放，会略微发虚。</p>
