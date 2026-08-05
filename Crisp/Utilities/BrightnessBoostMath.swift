@@ -31,9 +31,13 @@ enum BrightnessBoostMath {
     /// factor down with it.
     /// Below hdrReadyThreshold the panel has not ramped EDR yet, so the full
     /// target would clip; apply a small pending nudge instead, which is
-    /// itself what prompts macOS to ramp EDR.
-    static func overlayFactor(brightness: Double, sliderMax: Double, currentEDR: Double) -> Double {
+    /// itself what prompts macOS to ramp EDR. That nudge only makes sense
+    /// while the display still advertises EDR potential: a display genuinely
+    /// back in SDR (potentialHeadroom at or below hdrReadyThreshold) can
+    /// never ramp, so the nudge would sit forever and wash the screen out.
+    static func overlayFactor(brightness: Double, sliderMax: Double, currentEDR: Double, potentialHeadroom: Double) -> Double {
         guard brightness > 100, sliderMax > 100 else { return 1.0 }
+        guard potentialHeadroom > hdrReadyThreshold else { return 1.0 }
         guard currentEDR > hdrReadyThreshold else { return pendingHDRBrightnessFactor }
         let t = min(1.0, (brightness - 100) / (sliderMax - 100))
         return pow(currentEDR, t)

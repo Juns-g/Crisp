@@ -47,6 +47,25 @@ struct ExtraBrightnessView: View {
                 isOn = BrightnessBoostService.shared.isEnabled(for: display)
                 isProgrammaticChange = false
             }
+            // The service can auto-disable boost behind our back (see
+            // BrightnessBoostService.headroomLossPolls: HDR capability lost
+            // externally). Re-read on every panel open so a zombie toggle
+            // (on here, off in the service) does not linger.
+            .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidOpen)) { _ in
+                isProgrammaticChange = true
+                isOn = BrightnessBoostService.shared.isEnabled(for: display)
+                isProgrammaticChange = false
+            }
+            // Catches the same auto-disable live, while the panel is already
+            // open: once the collapse it drives lands maxBrightness back at
+            // 100, flip the switch off with it instead of leaving it zombied
+            // until the next panel open.
+            .onChange(of: display.maxBrightness) { _, newValue in
+                guard isOn, newValue <= 100.5, !BrightnessBoostService.shared.isEnabled(for: display) else { return }
+                isProgrammaticChange = true
+                isOn = false
+                isProgrammaticChange = false
+            }
         }
     }
 }

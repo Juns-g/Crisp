@@ -49,6 +49,14 @@ final class BrightnessBoostService {
     /// once nothing is boosted.
     private var headroomPollTask: Task<Void, Never>?
 
+    /// Consecutive poll ticks (500ms apart) an enabled external has reported
+    /// potentialHeadroom at or below hdrReadyThreshold: HDR capability
+    /// disappeared out from under it (user turned HDR off, or a HiDPI mode
+    /// switch dropped HDR advertisement). Debounced to 3 ticks (~1.5s) so a
+    /// transient dip during a mode-change storm does not auto-disable; once
+    /// it does, the entry is removed.
+    private var headroomLossPolls: [CGDirectDisplayID: Int] = [:]
+
     private func startHeadroomPollIfNeeded() {
         guard headroomPollTask == nil else { return }
         headroomPollTask = Task { @MainActor [weak self] in
@@ -59,6 +67,18 @@ final class BrightnessBoostService {
                 for display in DisplayManagerAccessor.shared.displays where display.maxBrightness > 100 {
                     anyBoosted = true
                     self.syncOverlay(for: display)
+                    guard !display.isBuiltin else { continue }
+                    guard self.isEnabled(for: display), self.potentialHeadroom(for: display.displayID) <= 1.05 else {
+                        self.headroomLossPolls[display.displayID] = 0
+                        continue
+                    }
+                    let losses = (self.headroomLossPolls[display.displayID] ?? 0) + 1
+                    if losses >= 3 {
+                        self.headroomLossPolls.removeValue(forKey: display.displayID)
+                        await self.setEnabled(false, for: display)
+                    } else {
+                        self.headroomLossPolls[display.displayID] = losses
+                    }
                 }
                 if !anyBoosted {
                     self.headroomPollTask = nil
@@ -198,7 +218,8 @@ final class BrightnessBoostService {
             display.maxBrightness = 100 + p * (max0 - 100)
             let factor = BrightnessBoostMath.overlayFactor(
                 brightness: display.brightness, sliderMax: max0,
-                currentEDR: self.currentHeadroom(for: displayID)
+                currentEDR: self.currentHeadroom(for: displayID),
+                potentialHeadroom: self.potentialHeadroom(for: displayID)
             )
             EDROverlayManager.shared.setFactor(factor, for: displayID)
             if isLast {
@@ -225,10 +246,13 @@ final class BrightnessBoostService {
     /// brightness. Live currentEDR gates the target: below
     /// BrightnessBoostMath.hdrReadyThreshold the panel has not ramped EDR yet,
     /// so a small pending factor is applied instead of the full target (see
-    /// BrightnessBoostMath.overlayFactor). Headroom changes post
-    /// didChangeScreenParameters (observed above) and are also polled (see
-    /// startHeadroomPollIfNeeded), so the factor converges to what the panel
-    /// can actually deliver within a beat of engaging.
+    /// BrightnessBoostMath.overlayFactor); potentialHeadroom gates that pending
+    /// factor itself, so a display genuinely back in SDR gets 1.0 instead of a
+    /// nudge that can never ramp. Headroom changes post didChangeScreenParameters
+    /// (observed above) and are also polled (see startHeadroomPollIfNeeded), so
+    /// the factor converges to what the panel can actually deliver within a
+    /// beat of engaging, and the poll auto-disables boost once potentialHeadroom
+    /// stays lost for a display that needs it (see headroomLossPolls).
     func syncOverlay(for display: DisplayInfo) {
         guard display.maxBrightness > 100 else { return }
         // The disable-collapse animation drives the overlay factor itself;
@@ -238,10 +262,11 @@ final class BrightnessBoostService {
         let factor = BrightnessBoostMath.overlayFactor(
             brightness: display.brightness,
             sliderMax: display.maxBrightness,
-            currentEDR: currentHeadroom(for: display.displayID)
+            currentEDR: currentHeadroom(for: display.displayID),
+            potentialHeadroom: potentialHeadroom(for: display.displayID)
         )
         EDROverlayManager.shared.setFactor(factor, for: display.displayID)
-        if factor > 1.001 { startHeadroomPollIfNeeded() }
+        if display.maxBrightness > 100 { startHeadroomPollIfNeeded() }
     }
 
     // MARK: - Lifecycle
@@ -253,7 +278,13 @@ final class BrightnessBoostService {
             guard isEligible(display) else { continue }
             let potential = potentialHeadroom(for: display.displayID)
             let newMax = BrightnessBoostMath.sliderMax(potentialHeadroom: potential)
-            guard newMax > 100 else { continue }
+            guard newMax > 100 else {
+                // No usable headroom to reapply into (same failure setEnabled(true,
+                // ...) would hit): clear the persisted flag so the toggle does not
+                // stay on with nothing actually engaged.
+                UserDefaults.standard.set(false, forKey: enabledKey(display.displayUUID))
+                continue
+            }
             display.maxBrightness = newMax
             syncOverlay(for: display)
         }
