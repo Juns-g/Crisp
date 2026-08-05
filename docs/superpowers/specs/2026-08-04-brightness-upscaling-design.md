@@ -160,3 +160,15 @@ auto-enables HDR on an SDR external when it needs the headroom, but no longer
 reverts it, neither on boost disable nor on app quit. Rationale: a user who
 had HDR on independently of boost, or who turned it on and wants it to stay
 on, must not have it silently switched off out from under them.
+
+Boost now auto-disables itself, with the same collapse a manual toggle-off
+drives, when an external display's HDR capability disappears out from under
+it (HDR turned off in System Settings, or a mode switch dropping HDR
+advertisement); the persisted enable flag clears with it, so the toggle never
+lingers on with boost inert underneath. The pending EDR-ramp trigger factor
+(1.12) now applies only while the display still advertises EDR potential, not
+to a display genuinely back in SDR. Known interaction: injected HiDPI scaled
+modes do not advertise HDR on at least some external monitors (observed on
+the AOC Q27G3XMN), so entering one while HDR is active drops HDR capability
+until a native mode is restored; HDR flips are flash-free from native modes,
+but force a re-sync flash from HiDPI ones.
