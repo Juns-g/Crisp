@@ -1,10 +1,27 @@
+<div align="center">
+
+<img src="docs/icon.png" width="128" alt="Crisp icon">
+
 # Crisp
 
-Crisp is an open-source, lightweight, native macOS menu bar app for managing your displays, and a free alternative to BetterDisplay and Lunar. Scaling, brightness, color, arrangement, and presets, without leaving the menu bar; built to feel like an expanded version of the Mac's built-in display menu: the controls you already use, plus the ones it's missing.
+**Every display control macOS hides, in one menu bar panel.**
 
-The headline feature is proper display scaling for external monitors. macOS only offers sharp, scaled resolutions on its own Retina displays, so most monitors below 4K (like 1080p and 1440p) look either blurry when you scale them up or too small at native resolution. Crisp adds the HiDPI (Retina-style) scaled resolutions macOS leaves out, so everything looks sharp and scaled right.
+Free, open-source external monitor control for macOS.<br>
+Sharp HiDPI scaling, DDC brightness, presets and virtual displays.
 
-No Pro tier, no license key. Crisp keeps every feature free, including a few that BetterDisplay and Lunar charge for: flexible HiDPI scaling, disconnecting displays, color adjustments, and auto-brightness that follows your built-in screen.
+[<img src="docs/download-macos.png" alt="Download Crisp for macOS" width="180">](https://github.com/didriksg/Crisp/releases/latest/download/Crisp.dmg)
+
+[![Downloads](https://img.shields.io/github/downloads/didriksg/Crisp/total?label=downloads&color=2f81f7)](https://github.com/didriksg/Crisp/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%2015%2B-blue)](#requirements)
+[![License](https://img.shields.io/github/license/didriksg/Crisp?color=3fb950)](LICENSE)
+
+[Website](https://didriksg.github.io/Crisp/) · [Crisp vs BetterDisplay & Lunar](https://didriksg.github.io/Crisp/crisp-vs-betterdisplay.html) · [Fix a blurry external monitor](https://didriksg.github.io/Crisp/fix-blurry-external-monitor-macos.html) · [中文](https://didriksg.github.io/Crisp/zh.html)
+
+</div>
+
+---
+
+Crisp is a lightweight, native menu bar app for controlling external monitors on macOS, and a free, open-source alternative to BetterDisplay and Lunar. It adds what macOS leaves out: sharp HiDPI scaling on any monitor (no more blurry or tiny text), real brightness control over DDC, presets, display arrangement, and virtual displays. Every feature is free, with no Pro tier and no license key.
 
 Fully localized in English and Simplified Chinese (简体中文).
 
@@ -16,7 +33,7 @@ https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 brew install --cask didriksg/tap/crisp
 ```
 
-Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/releases) and drag Crisp to Applications.
+Or download [`Crisp.dmg`](https://github.com/didriksg/Crisp/releases/latest/download/Crisp.dmg) and drag Crisp to Applications. Every release is signed and notarized by Apple, so it opens with a normal double-click.
 
 ## Features
 
@@ -31,6 +48,10 @@ Or grab `Crisp.dmg` from the [latest release](https://github.com/didriksg/Crisp/
 - **Color**: ICC profile switching, XDR reference presets, HDR on/off per display, and image adjustment (gamma, contrast, gain, invert colors)
 - **Virtual displays**: create HiDPI virtual screens
 - **Extras**: combined brightness slider, auto brightness following the built-in display, a toggle for macOS's own ambient auto-brightness, keep awake, notch hiding, launch at login
+
+## How does it compare?
+
+BetterDisplay and Lunar are excellent, deeper tools. Crisp keeps the everyday essentials free: flexible HiDPI scaling, hardware brightness, presets, disconnecting displays, color adjustments, and auto-brightness sync. See the full side-by-side: [Crisp vs BetterDisplay, Lunar & MonitorControl](https://didriksg.github.io/Crisp/crisp-vs-betterdisplay.html).
 
 ## Support
 
@@ -69,7 +90,7 @@ For a distributable DMG (Command Line Tools only, no full Xcode) and the fast ed
 
 ## Contributing
 
-Issues and pull requests are welcome. Found a bug, want a feature, or have a display Crisp doesn't handle well? [Open an issue](https://github.com/didriksg/Crisp/issues). PRs are just as welcome, whether it's a fix, a feature, or a new translation.
+Issues and pull requests are welcome. Found a bug, want a feature, or have a display Crisp doesn't handle well? [Open an issue](https://github.com/didriksg/Crisp/issues) or start a [discussion](https://github.com/didriksg/Crisp/discussions). PRs are just as welcome, whether it's a fix, a feature, or a new translation.
 
 ## Origin
 
