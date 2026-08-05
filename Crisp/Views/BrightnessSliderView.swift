@@ -135,7 +135,8 @@ struct BrightnessSliderView: View {
                         }
                     }
                 }
-                .tint(boostTint)
+                .modifier(BoostTintModifier(progress: localBrightness > 100.5 ? 1 : 0))
+                .animation(.easeInOut(duration: 0.3), value: localBrightness > 100.5)
                 .overlay {
                     if display.maxBrightness > 100 {
                         GeometryReader { geo in
@@ -209,13 +210,21 @@ struct BrightnessSliderView: View {
         }
     }
 
-    /// Accent below 100, blending into yellow across the first stretch of the
-    /// boost region. Tying the blend to the value (not a timed animation)
-    /// means it moves with the thumb: drags, glides, and the disable collapse
-    /// all transition smoothly for free.
-    private var boostTint: Color {
-        let t = min(1.0, max(0.0, (localBrightness - 100.0) / 10.0))
-        return t <= 0 ? Color.accentColor : Color.accentColor.mix(with: .yellow, by: t)
+    /// Animates the slider tint between accent and boost yellow when the
+    /// value crosses 100. Tint on a control does not interpolate on its own,
+    /// so the blend progress is the animatable data and the mixed color is
+    /// recomputed every frame of the transition.
+    private struct BoostTintModifier: ViewModifier, Animatable {
+        var progress: Double
+        var animatableData: Double {
+            get { progress }
+            set { progress = newValue }
+        }
+        func body(content: Content) -> some View {
+            content.tint(progress <= 0
+                ? Color.accentColor
+                : Color.accentColor.mix(with: .yellow, by: min(1.0, progress)))
+        }
     }
 
     private func updateDDCStatus() {
