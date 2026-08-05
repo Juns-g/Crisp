@@ -669,6 +669,10 @@ final class BrightnessService: @unchecked Sendable {
         ddcAvailableLock.withLock {
             ddcAvailable.removeValue(forKey: displayID)
             ddcMaxBrightness.removeValue(forKey: displayID)
+            // Display IDs are reused: without this, a disconnected HDR
+            // display's software-dimming routing would stick to whatever
+            // display inherits its ID next.
+            hdrDimmedDisplays.remove(displayID)
         }
     }
 

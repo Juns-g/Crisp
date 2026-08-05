@@ -13,6 +13,12 @@ struct HDRToggleView: View {
     /// (initial sync, revert on failure), so those writes do not re-trigger
     /// the service.
     @State private var isProgrammaticChange = false
+    /// A user-initiated HDR request that has not settled yet. setHDRPreference
+    /// waits out a boost collapse plus a settle before switching modes, and an
+    /// unrelated screen reconfiguration in that window would make the live
+    /// resync read the OLD state and fight the pending request. Resyncs are
+    /// skipped until the request's own read-back lands.
+    @State private var requestInFlight = false
 
     var body: some View {
         if BrightnessBoostService.shared.isEligibleForHDRToggle(display) {
@@ -27,6 +33,7 @@ struct HDRToggleView: View {
                     .controlSize(.small)
                     .onChange(of: isOn) { _, newValue in
                         guard !isProgrammaticChange else { return }
+                        requestInFlight = true
                         Task { @MainActor in
                             _ = await BrightnessBoostService.shared.setHDRPreference(newValue, for: display)
                             // Read back the live state rather than trust newValue:
@@ -35,6 +42,7 @@ struct HDRToggleView: View {
                             isProgrammaticChange = true
                             isOn = BrightnessBoostService.shared.isHDREnabled(for: display)
                             isProgrammaticChange = false
+                            requestInFlight = false
                         }
                     }
             }
@@ -57,6 +65,7 @@ struct HDRToggleView: View {
     }
 
     private func resyncFromLiveState() {
+        guard !requestInFlight else { return }
         isProgrammaticChange = true
         isOn = BrightnessBoostService.shared.isHDREnabled(for: display)
         isProgrammaticChange = false

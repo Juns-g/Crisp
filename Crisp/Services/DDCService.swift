@@ -445,16 +445,34 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     /// on ddcQueue.
     private var readFailStreak: [CGDirectDisplayID: Int] = [:]
     private let readQuarantineThreshold = 6
+    /// Quarantine expiry per display: after it passes, one fresh probe window
+    /// opens (streak resets); persistent failure re-quarantines. Without an
+    /// expiry, a transient failure burst on a static setup (no reconnects to
+    /// clear the cache) would kill reads for the rest of the session.
+    private var readQuarantineUntil: [CGDirectDisplayID: Date] = [:]
+    private let readQuarantineInterval: TimeInterval = 600
 
     /// Synchronous DDC read (VCP Get). Returns (current, max) or nil on failure.
     private func readSynchronous(displayID: CGDirectDisplayID, command: UInt8) -> (current: UInt16, max: UInt16)? {
-        guard readFailStreak[displayID, default: 0] < readQuarantineThreshold else { return nil }
+        if let until = readQuarantineUntil[displayID] {
+            guard Date() >= until else { return nil }
+            readQuarantineUntil.removeValue(forKey: displayID)
+            readFailStreak[displayID] = 0
+        }
 #if arch(arm64)
         let result = arm64Read(displayID: displayID, command: command)
 #else
         let result = intelReadSynchronous(displayID: displayID, command: command)
 #endif
-        readFailStreak[displayID] = result == nil ? readFailStreak[displayID, default: 0] + 1 : 0
+        if result == nil {
+            let streak = readFailStreak[displayID, default: 0] + 1
+            readFailStreak[displayID] = streak
+            if streak >= readQuarantineThreshold {
+                readQuarantineUntil[displayID] = Date().addingTimeInterval(readQuarantineInterval)
+            }
+        } else {
+            readFailStreak[displayID] = 0
+        }
         return result
     }
 
@@ -588,7 +606,10 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         cacheLock.lock()
         vcpCache.removeValue(forKey: displayID)
         cacheLock.unlock()
-        ddcQueue.async { self.readFailStreak.removeValue(forKey: displayID) }
+        ddcQueue.async {
+            self.readFailStreak.removeValue(forKey: displayID)
+            self.readQuarantineUntil.removeValue(forKey: displayID)
+        }
 #if arch(arm64)
         invalidateAVServiceCache(for: displayID)
 #endif
@@ -602,7 +623,10 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     /// per-removed-ID cleanup never sees that, and the stale map then writes
     /// one monitor's brightness into the other's channel.
     func invalidateAllChannelMappings() {
-        ddcQueue.async { self.readFailStreak.removeAll() }
+        ddcQueue.async {
+            self.readFailStreak.removeAll()
+            self.readQuarantineUntil.removeAll()
+        }
 #if arch(arm64)
         avServiceLock.lock()
         avServiceCache.removeAll()

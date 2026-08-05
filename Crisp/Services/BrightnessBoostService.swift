@@ -425,9 +425,13 @@ final class BrightnessBoostService {
     /// made outside Crisp (System Settings): every HDR flip fires a screen
     /// reconfiguration, which lands here via reapplyAll.
     private func syncHDRRouting() {
-        for display in DisplayManagerAccessor.shared.displays where isEligibleForHDRToggle(display) {
-            BrightnessService.shared.setHDRSoftwareDimming(
-                isHDREnabled(for: display), for: display.displayID)
+        // Every external gets an explicit answer, not just HDR-eligible ones:
+        // a display inheriting a reused ID from a disconnected HDR display
+        // must be actively cleared out of the software-dimming set, or its
+        // DDC control stays silently routed to gamma.
+        for display in DisplayManagerAccessor.shared.displays where !display.isBuiltin {
+            let dimmed = isEligibleForHDRToggle(display) && isHDREnabled(for: display)
+            BrightnessService.shared.setHDRSoftwareDimming(dimmed, for: display.displayID)
         }
     }
 }
