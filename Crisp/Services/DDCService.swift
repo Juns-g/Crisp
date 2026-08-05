@@ -436,13 +436,26 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 #endif
     }
 
+    /// Consecutive raw read failures per display. Past the threshold the
+    /// display's reads are quarantined (fail fast, no I2C traffic) until its
+    /// cache is cleared on reconnect. A wedged DDC controller (AOC Q27G3XMN)
+    /// streams garbage and degrades further under retry hammering, so backing
+    /// off protects both the monitor and the shared DCP I2C engine. Writes
+    /// are unaffected; they keep working on wedged controllers. Accessed only
+    /// on ddcQueue.
+    private var readFailStreak: [CGDirectDisplayID: Int] = [:]
+    private let readQuarantineThreshold = 6
+
     /// Synchronous DDC read (VCP Get). Returns (current, max) or nil on failure.
     private func readSynchronous(displayID: CGDirectDisplayID, command: UInt8) -> (current: UInt16, max: UInt16)? {
+        guard readFailStreak[displayID, default: 0] < readQuarantineThreshold else { return nil }
 #if arch(arm64)
-        return arm64Read(displayID: displayID, command: command)
+        let result = arm64Read(displayID: displayID, command: command)
 #else
-        return intelReadSynchronous(displayID: displayID, command: command)
+        let result = intelReadSynchronous(displayID: displayID, command: command)
 #endif
+        readFailStreak[displayID] = result == nil ? readFailStreak[displayID, default: 0] + 1 : 0
+        return result
     }
 
     // MARK: - Intel Write/Read (renamed from original writeSynchronous/readSynchronous)
@@ -575,8 +588,26 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         cacheLock.lock()
         vcpCache.removeValue(forKey: displayID)
         cacheLock.unlock()
+        ddcQueue.async { self.readFailStreak.removeValue(forKey: displayID) }
 #if arch(arm64)
         invalidateAVServiceCache(for: displayID)
+#endif
+    }
+
+    /// Drops every cached display-to-AVService pairing (and read quarantines)
+    /// so the next DDC operation re-walks the registry and re-matches by
+    /// identity. Called on any display reconfiguration: CGDisplay IDs get
+    /// reshuffled across reconnect storms on Apple Silicon, and two IDs that
+    /// both survive a storm can end up naming swapped physical panels. A
+    /// per-removed-ID cleanup never sees that, and the stale map then writes
+    /// one monitor's brightness into the other's channel.
+    func invalidateAllChannelMappings() {
+        ddcQueue.async { self.readFailStreak.removeAll() }
+#if arch(arm64)
+        avServiceLock.lock()
+        avServiceCache.removeAll()
+        allExternalAVServices.removeAll()
+        avServiceLock.unlock()
 #endif
     }
 

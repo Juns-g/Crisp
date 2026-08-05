@@ -89,6 +89,13 @@ class DisplayManager: ObservableObject {
     }
 
     func refreshDisplays() {
+        // Display IDs can be reshuffled across a reconnect storm with no ID
+        // ever leaving the online list (two panels swapping IDs), so the
+        // per-removed-ID cleanup below can miss a now-crossed channel map.
+        // Always drop the whole map; it lazily rebuilds with identity
+        // matching on the next DDC operation.
+        DDCService.shared.invalidateAllChannelMappings()
+
         var displayCount: UInt32 = 0
         CGGetOnlineDisplayList(0, nil, &displayCount)
         var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
