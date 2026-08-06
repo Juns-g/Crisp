@@ -328,13 +328,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 await PhysicalDisplayToggleService.shared.reapplyOnWake()
                 dm.refreshDisplays()
                 try? await Task.sleep(nanoseconds: 500_000_000)
-                for display in dm.displays {
-                    // Apply software brightness factor first so GammaService
-                    // can read the up-to-date factor when it re-applies its formula.
-                    BrightnessService.shared.reapplySoftwareBrightnessIfNeeded(for: display)
-                    GammaService.shared.reapplyIfNeeded(for: display.displayID)
-                    // Re-apply any custom resolution that macOS may have reset on wake
-                    ResolutionService.shared.reapplySavedModeIfNeeded(for: display.displayID)
+                // WindowServer keeps settling for several seconds after wake: ICC
+                // restore and link retraining can clobber a freshly applied transfer
+                // table, which lost gamma adjustments until relaunch (issue #25).
+                // Three passes with increasing delays so the last lands after the
+                // churn; each is an idempotent no-op when state is already right.
+                for delay: UInt64 in [0, 4_000_000_000, 8_000_000_000] {
+                    try? await Task.sleep(nanoseconds: delay)
+                    for display in dm.displays {
+                        // Apply software brightness factor first so GammaService
+                        // can read the up-to-date factor when it re-applies its formula.
+                        BrightnessService.shared.reapplySoftwareBrightnessIfNeeded(for: display)
+                        GammaService.shared.reapplyIfNeeded(for: display.displayID)
+                        // Re-apply any custom resolution that macOS may have reset on wake
+                        ResolutionService.shared.reapplySavedModeIfNeeded(for: display.displayID)
+                    }
                 }
                 // Re-establish EDR boost overlays (Metal drawables and HDR
                 // mode may not survive sleep).

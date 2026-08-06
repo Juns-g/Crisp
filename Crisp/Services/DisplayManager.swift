@@ -170,6 +170,11 @@ class DisplayManager: ObservableObject {
         for display in updatedDisplays where keptIDs.contains(display.displayID) {
             display.bounds = CGDisplayBounds(display.displayID)
             display.isMain = CGDisplayIsMain(display.displayID) != 0
+            // Reconfigurations (mode switches, post-wake link retraining) can reset
+            // the transfer table macOS-side, losing gamma adjustments (issue #25).
+            // Restore any active adjustment, same as added displays already get;
+            // the in-memory reapply is a no-op when there is none.
+            GammaService.shared.reapply(for: display.displayID)
         }
 
         // Keep the physical-disconnect list honest: drop any record whose display came back
