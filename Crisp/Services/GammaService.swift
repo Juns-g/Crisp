@@ -26,6 +26,7 @@ struct GammaAdjustment {
 final class GammaService: @unchecked Sendable {
     static let shared = GammaService()
     private var terminateObserver: NSObjectProtocol?
+    private var profileObservers: [NSObjectProtocol] = []
     private let adjustmentsLock = NSLock()
 
     private init() {
@@ -45,12 +46,44 @@ final class GammaService: @unchecked Sendable {
                 CGSetDisplayTransferByTable(displayID, UInt32(size), &r, &g, &b)
             }
         }
+        observeProfileChanges()
     }
 
     deinit {
         if let obs = terminateObserver {
             NotificationCenter.default.removeObserver(obs)
         }
+        for obs in profileObservers {
+            DistributedNotificationCenter.default().removeObserver(obs)
+        }
+    }
+
+    /// Display profile changes (including the post-wake ICC restore, the prime
+    /// suspect for the table clobber in issue #25) announce themselves through
+    /// ColorSync's distributed notifications. Reapplying in direct response is
+    /// the event-driven complement to the timed wake passes; if sleep-testing
+    /// shows this catches every clobber, the timed passes can be deleted.
+    /// No feedback loop: reapply only writes transfer tables, never profiles,
+    /// and resetSingleDisplay drops its display from activeAdjustments before
+    /// its ColorSync write, so the resulting notification no-ops for it.
+    private func observeProfileChanges() {
+        let names = [
+            kColorSyncDeviceProfilesNotification,
+            kColorSyncDisplayDeviceProfilesNotification
+        ].compactMap { $0?.takeUnretainedValue() as String? }
+        for name in names {
+            profileObservers.append(DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name(name), object: nil, queue: .main
+            ) { [weak self] _ in
+                self?.reapplyAllActive()
+            })
+        }
+    }
+
+    /// Re-applies every active (non-paused) adjustment. Idempotent.
+    private func reapplyAllActive() {
+        let ids = adjustmentsLock.withLock { Array(activeAdjustments.keys) }
+        for id in ids { reapply(for: id) }
     }
 
     // MARK: - Active Adjustment Tracking
