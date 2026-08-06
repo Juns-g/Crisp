@@ -233,6 +233,34 @@ final class PhysicalDisplayToggleService: ObservableObject {
         if disconnected.count != before { saveDesired() }
     }
 
+    /// Guards against overlapping restore attempts from reconfiguration-callback bursts.
+    private var restoreInFlight = false
+
+    /// Called on every display-list refresh. The guard in disconnect() can't stop a physical
+    /// unplug: with the internal disabled via Crisp and the external cable pulled, zero active
+    /// displays remain and macOS does NOT re-enable the disabled one, every screen stays black.
+    /// Re-enable a still-attached disconnected display (built-in first) so the machine always
+    /// has a live screen. The settle delay rides out transient empty display lists during
+    /// wake/replug storms, so a monitor that comes right back keeps the disconnect intact.
+    func restoreIfNoActiveDisplay() {
+        guard isSupported, !disconnected.isEmpty, !restoreInFlight else { return }
+        guard physicalActiveDisplayCount() == 0 else { return }
+        restoreInFlight = true
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self else { return }
+            defer { self.restoreInFlight = false }
+            guard self.physicalActiveDisplayCount() == 0 else { return }
+            // Only records whose hardware is still attached; prefer the built-in panel.
+            let candidates = self.disconnected
+                .compactMap { record in self.resolveCurrentID(for: record).map { (record, $0) } }
+                .sorted { CGDisplayIsBuiltin($0.1) != 0 && CGDisplayIsBuiltin($1.1) == 0 }
+            for (record, _) in candidates {
+                if case .success = await self.reconnect(uuid: record.uuid) { return }
+            }
+        }
+    }
+
     /// Re-applies disconnect for displays macOS re-enabled after wake-from-sleep. Called from
     /// AppDelegate.onWake after WindowServer settles.
     func reapplyOnWake() async {

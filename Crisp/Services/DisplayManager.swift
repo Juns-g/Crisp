@@ -172,6 +172,9 @@ class DisplayManager: ObservableObject {
         // Keep the physical-disconnect list honest: drop any record whose display came back
         // online (re-plugged, or macOS re-enabled it).
         PhysicalDisplayToggleService.shared.reconcile()
+        // A physical unplug bypasses disconnect()'s last-screen guard: internal disabled via
+        // Crisp + external cable pulled = zero active displays, all black. Bring one back.
+        PhysicalDisplayToggleService.shared.restoreIfNoActiveDisplay()
 
         // Keep the built-in brightness observer pointed at the current built-in so the
         // slider tracks system brightness changes (keys, auto-brightness) live.
