@@ -444,8 +444,9 @@ struct MenuBarView: View {
                             .padding(.bottom, 4)
 
                         // Speaker volume, only for monitors that answered the
-                        // DDC volume probe (issue #23).
-                        if display.volumeSupported {
+                        // DDC volume probe (issue #23), and only while the
+                        // setting is on (keys keep working either way).
+                        if settings.showVolumeSliders && display.volumeSupported {
                             VolumeSliderView(display: display)
                                 .padding(.bottom, 4)
                         }
@@ -796,6 +797,28 @@ struct SettingsView: View {
                         MenuItemIcon(systemName: "sun.min.fill", color: .yellow, active: settings.showCombinedBrightness)
                             .accessibilityHidden(true)
                         Text("Show Combined Brightness")
+                            .font(.body)
+                        Spacer()
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+            }
+
+            // Show volume sliders (issue #23). Hidden while no connected monitor
+            // exposes DDC volume: the toggle would control nothing. Hiding the
+            // sliders does not disable the volume keys.
+            if displayManager.displays.contains(where: { $0.volumeSupported }) {
+                Toggle(isOn: Binding(
+                    get: { settings.showVolumeSliders },
+                    set: { newValue in withAnimation(.panelResize) { settings.showVolumeSliders = newValue } }
+                )) {
+                    HStack(spacing: 8) {
+                        MenuItemIcon(systemName: "speaker.wave.2.fill", color: .blue, active: settings.showVolumeSliders)
+                            .accessibilityHidden(true)
+                        Text("Show Volume Sliders")
                             .font(.body)
                         Spacer()
                     }
