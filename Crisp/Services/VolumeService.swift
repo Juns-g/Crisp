@@ -18,6 +18,19 @@ final class VolumeService: ObservableObject {
     /// Volume to restore on unmute, captured when toggleMute drops to zero.
     private var preMuteVolume: [CGDirectDisplayID: Double] = [:]
 
+    /// UUIDs of displays that have EVER answered a 0x62 read. VCP support is a
+    /// hardware fact, so remember it: on flaky DDC (the wedged-read AOC) a
+    /// launch-time probe can miss, and without the memory the slider, the
+    /// settings toggle, and the key routing would all vanish for the session.
+    private let capableKey = "crisp.volumeCapableDisplays"
+    private lazy var rememberedCapable: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: capableKey) ?? [])
+
+    private func rememberCapable(_ uuid: String) {
+        guard rememberedCapable.insert(uuid).inserted else { return }
+        UserDefaults.standard.set(Array(rememberedCapable), forKey: capableKey)
+    }
+
     // MARK: - Probe
 
     /// Reads VCP 0x62 once. Success marks the display volume-capable (the
@@ -27,12 +40,19 @@ final class VolumeService: ObservableObject {
     /// next pass, and DDCService caches reads for 5s.
     func refreshVolume(for display: DisplayInfo) {
         guard !display.isBuiltin else { return }
+        // Seed from memory so a failed probe can't hide the feature; the read
+        // below still adopts the monitor's current level whenever it works.
+        if rememberedCapable.contains(display.displayUUID) {
+            display.volumeSupported = true
+        }
         let id = display.displayID
+        let uuid = display.displayUUID
         DDCService.shared.readAsync(displayID: id, command: DDCService.volumeVCP) { result in
             Task { @MainActor in
                 guard let result else { return }
                 self.ddcMax[id] = result.max
                 display.volumeSupported = true
+                self.rememberCapable(uuid)
                 // Adopt the hardware level only while our writer is idle, so a
                 // stale cached read never fights an in-flight drag.
                 if self.pending[id] == nil, !self.pumpActive.contains(id) {
