@@ -658,6 +658,16 @@ struct MenuBarView: View {
         .onAppear {
             PanelOpenGuard.openedAt = Date()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidOpen)) { _ in
+            // Re-probe DDC volume for externals that haven't answered yet: the
+            // connect-time probe (+3s retry) can land inside the post-link-training
+            // garbage window (seen on the Q27G3XMN), and nothing else retries.
+            // Once per panel open is bounded I2C traffic, and a success is
+            // remembered so this stops firing for that display.
+            for display in visibleDisplays where !display.isBuiltin && !display.volumeSupported {
+                VolumeService.shared.refreshVolume(for: display)
+            }
+        }
     }
 
     private func pollExternalState() {
