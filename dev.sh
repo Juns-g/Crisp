@@ -26,7 +26,7 @@ BUILD=$(grep -E '^[[:space:]]*CURRENT_PROJECT_VERSION:' project.yml | head -1 | 
 echo "==> Compiling Crisp $VERSION ($BUILD)..."
 swiftc -O -swift-version 5 -strict-concurrency=minimal -parse-as-library \
     -import-objc-header Crisp/Crisp-Bridging-Header.h \
-    -framework AppKit -framework SwiftUI -framework IOKit \
+    -framework AppKit -framework SwiftUI -framework IOKit -framework CoreAudio \
     -Xlinker -undefined -Xlinker dynamic_lookup \
     Crisp/App/*.swift Crisp/Models/*.swift Crisp/Services/*.swift \
     Crisp/Views/*.swift Crisp/Utilities/*.swift \

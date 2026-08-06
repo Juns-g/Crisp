@@ -33,6 +33,8 @@ private func brightnessKeyEventCallback(
 /// When the cursor is on an external display the key event is consumed and the external
 /// display's brightness is adjusted via BrightnessService. When the cursor is on the
 /// built-in display the event is passed through so macOS adjusts it normally.
+/// Also intercepts the volume/mute keys when the default audio output is a monitor with
+/// DDC speaker volume, routing them to VolumeService (see routeVolumePress).
 @MainActor
 final class BrightnessKeyService: @unchecked Sendable {
     static let shared = BrightnessKeyService()
@@ -62,9 +64,15 @@ final class BrightnessKeyService: @unchecked Sendable {
     private nonisolated(unsafe) static let nxKeytypeBrightnessUp: Int = 2
     /// NX_KEYTYPE_BRIGHTNESS_DOWN
     private nonisolated(unsafe) static let nxKeytypeBrightnessDown: Int = 3
+    /// NX_KEYTYPE_SOUND_UP / NX_KEYTYPE_SOUND_DOWN / NX_KEYTYPE_MUTE
+    private nonisolated(unsafe) static let nxKeytypeSoundUp: Int = 0
+    private nonisolated(unsafe) static let nxKeytypeSoundDown: Int = 1
+    private nonisolated(unsafe) static let nxKeytypeMute: Int = 7
 
     /// Each key press moves brightness by 1/16 (≈ 6.25 %), matching macOS native behaviour.
     private nonisolated(unsafe) static let brightnessStep: Double = 100.0 / 16.0
+    /// Volume keys use the same 1/16 step as macOS's own volume control.
+    private nonisolated(unsafe) static let volumeStep: Double = 100.0 / 16.0
 
     // MARK: - Start / Stop
 
@@ -282,16 +290,18 @@ final class BrightnessKeyService: @unchecked Sendable {
         let keyCode = (data1 >> 16) & 0xFF
         let isKeyDown = (data1 & 0x0100) == 0   // bit 8 clear → key down
 
-        // Only intercept brightness keys.
-        guard keyCode == Self.nxKeytypeBrightnessUp || keyCode == Self.nxKeytypeBrightnessDown else {
+        switch keyCode {
+        case Self.nxKeytypeBrightnessUp, Self.nxKeytypeBrightnessDown:
+            // For key-up events always pass through, only consume key-down on external displays.
+            guard isKeyDown else { return Unmanaged.passRetained(event) }
+            clamshellLog.notice("sysdefined brightness kc=\(keyCode, privacy: .public)")  // DIAG: brightness only (privacy-safe)
+            return routeBrightnessPress(up: keyCode == Self.nxKeytypeBrightnessUp, event: event)
+        case Self.nxKeytypeSoundUp, Self.nxKeytypeSoundDown, Self.nxKeytypeMute:
+            guard isKeyDown else { return Unmanaged.passRetained(event) }
+            return routeVolumePress(keyCode: keyCode, event: event)
+        default:
             return Unmanaged.passRetained(event)
         }
-
-        // For key-up events always pass through, only consume key-down on external displays.
-        guard isKeyDown else { return Unmanaged.passRetained(event) }
-
-        clamshellLog.notice("sysdefined brightness kc=\(keyCode, privacy: .public)")  // DIAG: brightness only (privacy-safe)
-        return routeBrightnessPress(up: keyCode == Self.nxKeytypeBrightnessUp, event: event)
     }
 
     /// Shared routing for a brightness key-down, called by both the NX_SYSDEFINED media-key path
@@ -376,6 +386,42 @@ final class BrightnessKeyService: @unchecked Sendable {
         }
 
         // Return nil to consume (suppress) the event so macOS doesn't also adjust built-in brightness.
+        return nil
+    }
+
+    /// Routes a volume/mute key-down to the monitor's DDC speaker volume, but ONLY
+    /// when the default audio output IS that monitor (issue #23). HDMI/DP audio has
+    /// no macOS volume control, so without this the system just shows the crossed-out
+    /// OSD; any other audio route passes through untouched, macOS keeps owning it.
+    nonisolated private func routeVolumePress(keyCode: Int, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // Resolved synchronously on the main thread (this tap runs on the main run
+        // loop): consume only when a live DDC-volume display owns the audio output.
+        let target = MainActor.assumeIsolated {
+            VolumeService.shared.displayForDefaultAudioOutput(in: DisplayManagerAccessor.shared.displays)
+        }
+        guard let target else { return Unmanaged.passRetained(event) }
+
+        Task { @MainActor in
+            let service = VolumeService.shared
+            switch keyCode {
+            case Self.nxKeytypeMute:
+                service.toggleMute(for: target)
+            case Self.nxKeytypeSoundUp:
+                service.setVolume(target.volume + Self.volumeStep, for: target)
+            default:
+                service.setVolume(target.volume - Self.volumeStep, for: target)
+            }
+            if let screen = NSScreen.screens.first(where: {
+                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == target.displayID
+            }) {
+                BrightnessHUDService.shared.show(
+                    level: target.volume,
+                    image: target.volume <= 0 ? .mute : .volume,
+                    on: screen
+                )
+            }
+        }
+        // Consume: macOS must not also show its "no volume control" OSD on top.
         return nil
     }
 

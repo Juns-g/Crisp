@@ -443,6 +443,13 @@ struct MenuBarView: View {
                         BrightnessSliderView(display: display, compact: true)
                             .padding(.bottom, 4)
 
+                        // Speaker volume, only for monitors that answered the
+                        // DDC volume probe (issue #23).
+                        if display.volumeSupported {
+                            VolumeSliderView(display: display)
+                                .padding(.bottom, 4)
+                        }
+
                         DisplayDetailView(display: display)
                             .curtainReveal(expandedDisplayIDs.contains(display.displayID))
                     }

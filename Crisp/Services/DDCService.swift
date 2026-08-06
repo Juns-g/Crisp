@@ -19,6 +19,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     // VCP feature codes (DDC/CI standard)
     static let brightnessVCP: UInt8 = 0x10
     static let contrastVCP: UInt8   = 0x12
+    static let volumeVCP: UInt8     = 0x62
     static let powerVCP: UInt8      = 0xD6
 
     private let ddcQueue = DispatchQueue(label: "com.crisp.ddc", qos: .userInitiated)
