@@ -385,7 +385,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             material.layer?.masksToBounds = true
             backdrop = material
         }
-        backdrop.autoresizingMask = [.width, .height]
+        // Oversized fixed canvas glued to the window top, clipped by the
+        // shell's rounded mask: resizing the window then only MOVES the glass
+        // layer. Autoresizing the glass with the window cost ~3ms per tick in
+        // its internal layout, blowing the 120Hz budget on animated resizes.
+        let backdropHeight: CGFloat = 2200
+        backdrop.frame = NSRect(x: 0, y: shell.bounds.height - backdropHeight,
+                                width: canvas.width, height: backdropHeight)
+        backdrop.autoresizingMask = [.minYMargin]
         shell.addSubview(backdrop)
 
         p.setFrame(NSRect(x: 0, y: -4000, width: canvas.width, height: 400), display: false)

@@ -16,6 +16,11 @@ class FlippedView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         layer?.masksToBounds = true
+        // The canvas sets every frame explicitly; skip AppKit's per-resize
+        // autoresize pass and frame-change notifications (measurable per-tick
+        // cost with a dozen containers resizing at 120Hz).
+        autoresizesSubviews = false
+        postsFrameChangedNotifications = false
     }
     required init?(coder: NSCoder) { fatalError() }
 }
@@ -39,6 +44,7 @@ final class PanelViewport: FlippedView {
 final class FrameSpring: NSObject {
     private var link: CADisplayLink?
     private var active = false
+    private var lastTick: CFTimeInterval = 0
     private var t: Double = 0
     private var from: Double = 0
     private var target: Double = 0
@@ -69,9 +75,17 @@ final class FrameSpring: NSObject {
     }
 
     @objc private func tick(_ l: CADisplayLink) {
+        let now = CACurrentMediaTime()
+        let gap = (now - lastTick) * 1000
+        lastTick = now
         guard active else { return }
-        let period = l.targetTimestamp - l.timestamp
-        t += (period > 0 && period < 0.05) ? period : 1.0 / 120.0
+        // Wall-clock time clamped to a short catch-up window. A single missed
+        // vsync advances full wall time (temporally correct, no speed error);
+        // a genuine stall cannot teleport (clamp). Pure frame-pacing ran at
+        // HALF speed through sustained 60Hz stretches (tall panel, per-tick
+        // cost near the budget) and snapped to full speed when ticks
+        // recovered, which read as a jump.
+        t += min(gap / 1000, 0.021)
         let e = exp(-omega * t)
         let d0 = from - target
         let a = v0 + omega * d0
@@ -80,10 +94,14 @@ final class FrameSpring: NSObject {
             active = false
             velocity = 0
             onTick?(target)
+            PanelCanvas.log.log("settle gap=\(gap, format: .fixed(precision: 1))ms")
             onSettle?()
         } else {
             velocity = (a - omega * (d0 + a * t)) * e
+            let start = CACurrentMediaTime()
             onTick?(x)
+            let cost = (CACurrentMediaTime() - start) * 1000
+            PanelCanvas.log.log("tick gap=\(gap, format: .fixed(precision: 1))ms x=\(x, format: .fixed(precision: 1)) cost=\(cost, format: .fixed(precision: 1))ms")
         }
     }
 }
@@ -118,6 +136,8 @@ final class PanelBlock {
 @MainActor
 final class PanelCanvas {
     static let log = Logger(subsystem: "com.crisp.app", category: "panelcanvas")
+    /// For the spring's tick log sub-timings (single instance in practice).
+    static weak var shared: PanelCanvas?
 
     let width: CGFloat = 308
     private let topInset: CGFloat = 8
@@ -147,12 +167,19 @@ final class PanelCanvas {
     private var animFromSum: CGFloat = 0
     private var scrollOffset: CGFloat = 0
     private var animatePending = false
+    /// Window height last handed to setFrame; a mismatch at the next layout
+    /// means someone else resized the window (EXT in the log).
+    private var lastSetWindowH: CGFloat = -1
+    /// Sub-timings of the last layoutNow, for the tick log.
+    private(set) var lastLoopMs: Double = 0
+    private(set) var lastWinMs: Double = 0
     /// True only during the warm-up pre-paint, so every block lies inside the
     /// viewport and genuinely draws once (a capped viewport would leave the
     /// lower blocks unpainted, defeating the pre-paint).
     private var ignoreCap = false
 
     func install(shell: NSView, panel: NSPanel) {
+        PanelCanvas.shared = self
         self.panel = panel
         viewport.addSubview(doc)
         shell.addSubview(viewport)
@@ -269,14 +296,17 @@ final class PanelCanvas {
     /// window frame. Only integral frames reach AppKit (failure map item 4).
     func layoutNow() {
         guard let panel else { return }
+        let t0 = CACurrentMediaTime()
         var cursor = docTopInset
         var exact = docTopInset
         for b in blocks {
             exact += b.current
             let y = exact.rounded()
             let h = y - cursor
-            b.clip.frame = NSRect(x: 0, y: cursor, width: width, height: h)
-            b.host.frame = NSRect(x: 0, y: 0, width: width, height: b.contentHeight.rounded(.up))
+            let clipR = NSRect(x: 0, y: cursor, width: width, height: h)
+            if b.clip.frame != clipR { b.clip.frame = clipR }
+            let hostR = NSRect(x: 0, y: 0, width: width, height: b.contentHeight.rounded(.up))
+            if b.host.frame != hostR { b.host.frame = hostR }
             cursor = y
         }
         let docH = cursor + docBottomInset
@@ -285,18 +315,41 @@ final class PanelCanvas {
         let viewportH = min(docH, cap)
         let windowH = topInset + viewportH + footerH
 
+        if lastSetWindowH >= 0, abs(panel.frame.height - lastSetWindowH) > 0.01 {
+            PanelCanvas.log.log("EXT frame=\(panel.frame.height, format: .fixed(precision: 1)) expected=\(self.lastSetWindowH, format: .fixed(precision: 1))")
+        }
         scrollOffset = min(max(scrollOffset, 0), max(0, docH - viewportH))
-        doc.frame = NSRect(x: 0, y: -scrollOffset, width: width, height: docH)
+        let docR = NSRect(x: 0, y: -scrollOffset, width: width, height: docH)
+        if doc.frame != docR { doc.frame = docR }
         // Shell is non-flipped: footer hugs the bottom, viewport spans from
         // 8pt below the top edge down to the footer.
-        viewport.frame = NSRect(x: 0, y: footerH, width: width, height: viewportH)
+        let vpR = NSRect(x: 0, y: footerH, width: width, height: viewportH)
+        if viewport.frame != vpR { viewport.frame = vpR }
         if let f = footer {
-            f.clip.frame = NSRect(x: 0, y: 0, width: width, height: footerH)
-            f.host.frame = NSRect(x: 0, y: 0, width: width, height: f.contentHeight.rounded(.up))
+            let fR = NSRect(x: 0, y: 0, width: width, height: footerH)
+            if f.clip.frame != fR { f.clip.frame = fR }
+            let fhR = NSRect(x: 0, y: 0, width: width, height: f.contentHeight.rounded(.up))
+            if f.host.frame != fhR { f.host.frame = fhR }
         }
+        let t1 = CACurrentMediaTime()
+        let prevH = panel.frame.height
+        // display: false. A synchronous redraw per tick (display: true) cost
+        // ~6ms on a tall panel, blowing the 8.3ms budget and dropping the
+        // link to 60Hz (half-speed motion, doubled per-frame steps). Core
+        // Animation commits the window frame and every moved layer in the
+        // same transaction, so the resize stays atomic.
         panel.setFrame(NSRect(x: anchorX, y: anchorTopY - windowH,
                               width: width, height: windowH),
-                       display: true)
+                       display: false)
+        lastSetWindowH = windowH
+        lastLoopMs = (t1 - t0) * 1000
+        lastWinMs = (CACurrentMediaTime() - t1) * 1000
+        if lastLoopMs + lastWinMs > 3 {
+            PanelCanvas.log.log("slowlayout loop=\(self.lastLoopMs, format: .fixed(precision: 1))ms win=\(self.lastWinMs, format: .fixed(precision: 1))ms")
+        }
+        if abs(windowH - prevH) > 0.5 {
+            PanelCanvas.log.log("frame h=\(windowH, format: .fixed(precision: 1)) dh=\(windowH - prevH, format: .fixed(precision: 1))")
+        }
     }
 
     func setAnchor(topY: CGFloat, x: CGFloat) {
