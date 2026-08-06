@@ -137,6 +137,12 @@ final class PanelCanvas {
     private var anchorX: CGFloat = 0
 
     private var animFrom: [CGFloat] = []
+    /// Targets CAPTURED at animate start. Per-tick math must never read the
+    /// live block targets: a mid-flight toggle flips them synchronously, and
+    /// interpolating toward a new target with the old progress teleports the
+    /// block in one frame. Mid-flight changes re-anchor via requestApply
+    /// (velocity carry) instead.
+    private var animTarget: [CGFloat] = []
     private var animTargetSum: CGFloat = 0
     private var animFromSum: CGFloat = 0
     private var scrollOffset: CGFloat = 0
@@ -162,8 +168,8 @@ final class PanelCanvas {
         spring.warm(view: shell)
         spring.onTick = { [weak self] x in self?.applyScalar(CGFloat(x)) }
         spring.onSettle = { [weak self] in
-            guard let self else { return }
-            for b in self.blocks { b.current = b.target }
+            guard let self, self.animTarget.count == self.blocks.count else { return }
+            for (i, b) in self.blocks.enumerated() { b.current = self.animTarget[i] }
             self.layoutNow()
         }
     }
@@ -239,6 +245,7 @@ final class PanelCanvas {
             return
         }
         animFrom = blocks.map { $0.current }
+        animTarget = blocks.map { $0.target }
         animFromSum = fromSum
         animTargetSum = targetSum
         PanelCanvas.log.log("animate from=\(fromSum, format: .fixed(precision: 1)) to=\(targetSum, format: .fixed(precision: 1)) v0=\(self.spring.velocity, format: .fixed(precision: 1))")
@@ -247,10 +254,11 @@ final class PanelCanvas {
 
     private func applyScalar(_ x: CGFloat) {
         let denom = animTargetSum - animFromSum
-        guard abs(denom) > 0.001, animFrom.count == blocks.count else { return }
+        guard abs(denom) > 0.001, animFrom.count == blocks.count,
+              animTarget.count == blocks.count else { return }
         let s = (x - animFromSum) / denom
         for (i, b) in blocks.enumerated() {
-            let exact = animFrom[i] + s * (b.target - animFrom[i])
+            let exact = animFrom[i] + s * (animTarget[i] - animFrom[i])
             b.current = min(max(exact, 0), b.contentHeight)
         }
         layoutNow()
