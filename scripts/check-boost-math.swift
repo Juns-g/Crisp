@@ -34,4 +34,20 @@ assert(abs(BrightnessBoostMath.overlayFactor(brightness: 101, sliderMax: 200, cu
 // slider looks. Real potential headroom (line 29 above) still gets the nudge.
 assert(BrightnessBoostMath.overlayFactor(brightness: 150, sliderMax: 200, currentEDR: 1.0, potentialHeadroom: 1.0) == 1.0)
 
+// externalBoostFactor: gamma-table mapping for externals; fixed luminance
+// ceiling converted to the encoded domain, never the OS-reported live headroom.
+assert(BrightnessBoostMath.externalBoostFactor(brightness: 50, sliderMax: 200) == 1.0)
+assert(BrightnessBoostMath.externalBoostFactor(brightness: 100, sliderMax: 200) == 1.0)
+assert(abs(BrightnessBoostMath.externalBoostFactor(brightness: 100.001, sliderMax: 200) - 1.0) < 0.001)
+// Encoded-domain ceiling: luminance ceiling through 1/gamma (4.0^(1/2.2) ~ 1.88).
+let c = pow(BrightnessBoostMath.externalBoostCeilingLuminance, 1.0 / BrightnessBoostMath.externalDisplayGamma)
+assert(abs(BrightnessBoostMath.externalBoostFactor(brightness: 200, sliderMax: 200) - c) < 0.001)
+// Exponential pacing: t=0.5 -> sqrt of the encoded ceiling.
+assert(abs(BrightnessBoostMath.externalBoostFactor(brightness: 150, sliderMax: 200) - c.squareRoot()) < 0.001)
+// Slider overshoot clamps at the ceiling.
+assert(BrightnessBoostMath.externalBoostFactor(brightness: 250, sliderMax: 200) <= c + 0.001)
+// Sanity: the encoded top stays well under the first attempt's 2.5, which
+// washed out on hardware (7.5x mid-tone luminance).
+assert(c < 2.0)
+
 print("check-boost-math: all assertions passed")

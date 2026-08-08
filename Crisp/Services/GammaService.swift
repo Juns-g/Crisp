@@ -240,6 +240,9 @@ final class GammaService: @unchecked Sendable {
         p.rHi *= brightnessFactor
         p.gHi *= brightnessFactor
         p.bHi *= brightnessFactor
+        // Boost region (factor > 1, external in HDR mode): entries may rise to
+        // the boosted top; in the normal range the 1.0 ceiling is unchanged.
+        let cap = max(1.0, brightnessFactor)
 
         // Build the table by hand instead of CGSetDisplayTransferByFormula: the formula API
         // forces min/max into [0,1] with min<=max, which silently drops inversion (rLo>rHi),
@@ -252,7 +255,7 @@ final class GammaService: @unchecked Sendable {
         for i in 0..<capacity {
             let input = Double(i) / Double(capacity - 1)
             func tableValue(lo: Double, hi: Double, gam: Double) -> CGGammaValue {
-                CGGammaValue(max(0.0, min(1.0, lo + (hi - lo) * pow(input, gam))))
+                CGGammaValue(max(0.0, min(cap, lo + (hi - lo) * pow(input, gam))))
             }
             redTable[i]   = tableValue(lo: p.rLo, hi: p.rHi, gam: p.rGam)
             greenTable[i] = tableValue(lo: p.gLo, hi: p.gHi, gam: p.gGam)
@@ -380,13 +383,15 @@ final class GammaService: @unchecked Sendable {
         p.rHi *= brightnessFactor
         p.gHi *= brightnessFactor
         p.bHi *= brightnessFactor
+        // Matches applyFormula: the boost region may rise above 1.0.
+        let cap = max(1.0, brightnessFactor)
 
         for i in 0..<capacity {
             let input = Double(i) / Double(capacity - 1)
 
             func tableValue(lo: Double, hi: Double, gam: Double) -> CGGammaValue {
                 let raw = lo + (hi - lo) * pow(input, gam)
-                let clamped = max(0.0, min(1.0, raw))
+                let clamped = max(0.0, min(cap, raw))
                 // Quantize to `levels` discrete steps
                 let stepped = floor(clamped * Double(levels)) / Double(levels)
                 return CGGammaValue(stepped)

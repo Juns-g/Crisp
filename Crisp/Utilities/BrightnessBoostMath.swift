@@ -42,4 +42,39 @@ enum BrightnessBoostMath {
         let t = min(1.0, (brightness - 100) / (sliderMax - 100))
         return pow(currentEDR, t)
     }
+
+    /// Gamma-table top for EXTERNAL HDR monitors at slider max. External boost
+    /// does not use the EDR overlay: on third-party displays the OS-reported
+    /// live headroom is not trustworthy (observed pinned at 1.2 on an AOC
+    /// Q27G3XMN while a 2.87x gamma table delivered real brightness), and the
+    /// overlay pipeline hard-clamps at that reported value, crushing near-white
+    /// detail for almost no gain. Instead the boost region scales the display
+    /// transfer table above 1.0 (BetterDisplay's method for these displays;
+    /// tops > 1.0 are honored while the monitor is in HDR mode). The monitor
+    /// tone-maps the result itself, so past its sustainable fullscreen
+    /// luminance, light content flattens: the ceiling trades peak brightness
+    /// against that washout.
+    /// The ceiling is defined in LINEAR luminance (same units as the built-in's
+    /// EDR factor: 4.0 = two exposure stops at slider max) and converted to the
+    /// table's encoded domain below. The table applies BEFORE the panel's
+    /// transfer function, so an encoded scale k multiplies mid-tone luminance
+    /// by roughly k^2.2: a table top chosen directly (first attempt: 2.5,
+    /// ~7.5x luminance; BetterDisplay's observed 2.87, ~10x) blasts mid-tones
+    /// far past what the panel's fullscreen limit lets whites do, which is
+    /// what reads as washed out.
+    // ponytail: one fixed ceiling and gamma for all externals; make them
+    // per-display (EDID maxFALL / measured gamma) if one constant fits some
+    // panel badly.
+    static let externalBoostCeilingLuminance = 4.0
+    static let externalDisplayGamma = 2.2
+
+    /// Overlay-factor analog for the external gamma path: exponential over the
+    /// boost region like overlayFactor, but against the fixed calibrated
+    /// luminance ceiling, never the OS-reported live headroom. Returns the
+    /// encoded-domain table scale.
+    static func externalBoostFactor(brightness: Double, sliderMax: Double) -> Double {
+        guard brightness > 100, sliderMax > 100 else { return 1.0 }
+        let t = min(1.0, (brightness - 100) / (sliderMax - 100))
+        return pow(pow(externalBoostCeilingLuminance, 1.0 / externalDisplayGamma), t)
+    }
 }

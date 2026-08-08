@@ -355,16 +355,23 @@ final class BrightnessService: @unchecked Sendable {
             }
         } else {
             display.brightness = clamped
-            // Check current DDC availability status
-            let currentStatus: Bool? = ddcAvailableLock.withLock { ddcAvailable[displayID] }
+            // In the boost region the external's transfer table belongs to the
+            // boost sync below (factor > 1.0); writing the pinned-at-100 dim
+            // here too would race it with an identity table on every tick. The
+            // monitor is in HDR mode up there anyway, so there is no hardware
+            // write to make.
+            if clamped <= 100 {
+                // Check current DDC availability status
+                let currentStatus: Bool? = ddcAvailableLock.withLock { ddcAvailable[displayID] }
 
-            if currentStatus == false {
-                // DDC known unavailable, go straight to software fallback
-                queue.async { [weak self] in
-                    self?.setSoftwareBrightness(hardware, for: displayID)
+                if currentStatus == false {
+                    // DDC known unavailable, go straight to software fallback
+                    queue.async { [weak self] in
+                        self?.setSoftwareBrightness(hardware, for: displayID)
+                    }
+                } else {
+                    writeDDCBrightnessCoalesced(percent: hardware, for: displayID)
                 }
-            } else {
-                writeDDCBrightnessCoalesced(percent: hardware, for: displayID)
             }
         }
         BrightnessBoostService.shared.syncOverlay(for: display)
@@ -595,7 +602,10 @@ final class BrightnessService: @unchecked Sendable {
                 anim.animate(from: fromBrightness, to: clamped, steps: smoothSteps, duration: duration) { [weak display] value, _ in
                     guard let display else { return }
                     display.brightness = value
-                    BrightnessService.shared.setSoftwareBrightness(min(value, 100.0), for: displayID)
+                    // Above 100 the boost sync owns the transfer table (see setBrightness).
+                    if value <= 100 {
+                        BrightnessService.shared.setSoftwareBrightness(value, for: displayID)
+                    }
                     BrightnessBoostService.shared.syncOverlay(for: display)
                 }
             } else {
@@ -604,7 +614,10 @@ final class BrightnessService: @unchecked Sendable {
                 anim.animate(from: fromBrightness, to: clamped, steps: smoothSteps, duration: duration) { [weak self, weak display] value, _ in
                     guard let self, let display else { return }
                     display.brightness = value
-                    self.writeDDCBrightnessCoalesced(percent: min(value, 100.0), for: displayID)
+                    // Above 100 the boost sync owns the transfer table (see setBrightness).
+                    if value <= 100 {
+                        self.writeDDCBrightnessCoalesced(percent: value, for: displayID)
+                    }
                     BrightnessBoostService.shared.syncOverlay(for: display)
                 }
             }
@@ -616,6 +629,8 @@ final class BrightnessService: @unchecked Sendable {
     /// Applies brightness via gamma table manipulation for displays where DDC is unavailable.
     /// Uses a linear ramp from 0 to `factor` so white level is dimmed while black stays black.
     /// brightness: 0–100 (percentage); never goes fully to 0 to avoid a completely black screen.
+    /// Above 100 (external boost region, monitor in HDR mode) the same ramp scales past 1.0,
+    /// pushing SDR content into the HDR wire range; the monitor tone-maps the result.
     ///
     /// If GammaService has an active adjustment for this display, it delegates to GammaService
     /// so the two do not overwrite each other's CGSetDisplayTransfer* call.
@@ -645,6 +660,15 @@ final class BrightnessService: @unchecked Sendable {
         }
 
         _ = CGSetDisplayTransferByTable(displayID, tableSize, &red, &green, &blue)
+    }
+
+    /// External boost region: BrightnessBoostService drives the transfer table
+    /// above 1.0 through here, on the same serial queue as the dim path, so
+    /// slider motion above and below 100 is always one writer, one table.
+    func setBoostFactor(_ factor: Double, for displayID: CGDirectDisplayID) {
+        queue.async { [weak self] in
+            self?.setSoftwareBrightness(factor * 100.0, for: displayID)
+        }
     }
 
     /// Resets the gamma table for a display back to the identity curve.

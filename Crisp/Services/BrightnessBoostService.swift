@@ -238,12 +238,18 @@ final class BrightnessBoostService {
             let vEnd = min(v0, 100)
             display.brightness = vEnd + p * (v0 - vEnd)
             display.maxBrightness = 100 + p * (max0 - 100)
-            let factor = BrightnessBoostMath.overlayFactor(
-                brightness: display.brightness, sliderMax: max0,
-                currentEDR: self.currentHeadroom(for: displayID),
-                potentialHeadroom: self.potentialHeadroom(for: displayID)
-            )
-            EDROverlayManager.shared.setFactor(factor, for: displayID)
+            if display.isBuiltin {
+                let factor = BrightnessBoostMath.overlayFactor(
+                    brightness: display.brightness, sliderMax: max0,
+                    currentEDR: self.currentHeadroom(for: displayID),
+                    potentialHeadroom: self.potentialHeadroom(for: displayID)
+                )
+                EDROverlayManager.shared.setFactor(factor, for: displayID)
+            } else {
+                let factor = BrightnessBoostMath.externalBoostFactor(
+                    brightness: display.brightness, sliderMax: max0)
+                BrightnessService.shared.setBoostFactor(factor, for: displayID)
+            }
             if isLast {
                 self.collapsingDisplays.remove(displayID)
                 self.finishDisable(for: display)
@@ -281,21 +287,31 @@ final class BrightnessBoostService {
         // letting this run concurrently (e.g. from the headroom poll) would
         // fight it.
         guard !collapsingDisplays.contains(display.displayID) else { return }
-        let factor = BrightnessBoostMath.overlayFactor(
-            brightness: display.brightness,
-            sliderMax: display.maxBrightness,
-            currentEDR: currentHeadroom(for: display.displayID),
-            potentialHeadroom: potentialHeadroom(for: display.displayID)
-        )
-        EDROverlayManager.shared.setFactor(factor, for: display.displayID)
-        // First entry into the boost region arms the fast-poll window: the
-        // EDR ramp that follows is what the poll needs to track closely.
-        if factor > 1.001 {
-            if activeBoostDisplays.insert(display.displayID).inserted {
-                fastPollUntil = Date().addingTimeInterval(3.0)
+        if display.isBuiltin {
+            let factor = BrightnessBoostMath.overlayFactor(
+                brightness: display.brightness,
+                sliderMax: display.maxBrightness,
+                currentEDR: currentHeadroom(for: display.displayID),
+                potentialHeadroom: potentialHeadroom(for: display.displayID)
+            )
+            EDROverlayManager.shared.setFactor(factor, for: display.displayID)
+            // First entry into the boost region arms the fast-poll window: the
+            // EDR ramp that follows is what the poll needs to track closely.
+            if factor > 1.001 {
+                if activeBoostDisplays.insert(display.displayID).inserted {
+                    fastPollUntil = Date().addingTimeInterval(3.0)
+                }
+            } else {
+                activeBoostDisplays.remove(display.displayID)
             }
         } else {
-            activeBoostDisplays.remove(display.displayID)
+            // Externals boost through the display transfer table, not the EDR
+            // overlay (see BrightnessBoostMath.externalBoostCeiling for why).
+            // Written unconditionally: the 500ms poll landing here re-heals
+            // the table after an ICC-restore clobber without extra plumbing.
+            let factor = BrightnessBoostMath.externalBoostFactor(
+                brightness: display.brightness, sliderMax: display.maxBrightness)
+            BrightnessService.shared.setBoostFactor(factor, for: display.displayID)
         }
         if display.maxBrightness > 100 { startHeadroomPollIfNeeded() }
     }
