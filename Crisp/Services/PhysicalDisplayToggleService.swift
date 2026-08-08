@@ -105,7 +105,17 @@ final class PhysicalDisplayToggleService: ObservableObject {
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
         guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return 0 }
         let virtual = VirtualDisplayService.shared
-        return ids.prefix(Int(count)).filter { !virtual.isVirtualDisplay($0) }.count
+        return ids.prefix(Int(count)).filter { id in
+            guard !virtual.isVirtualDisplay(id) else { return false }
+            // Once the last real display is gone macOS spawns a placeholder
+            // display (vendor 'unkn' 0x756E6B6E, model 'virt' 0x76697274,
+            // fingerprinted live on macOS 26). It is not a viewable screen, and
+            // counting it kept restoreIfNoActiveDisplay from ever firing in the
+            // all-screens-black state it exists to fix.
+            let isPlaceholder = CGDisplayVendorNumber(id) == 0x756E6B6E
+                && CGDisplayModelNumber(id) == 0x76697274
+            return !isPlaceholder
+        }.count
     }
 
     private func uuid(for displayID: CGDirectDisplayID) -> String {
@@ -251,10 +261,17 @@ final class PhysicalDisplayToggleService: ObservableObject {
             guard let self else { return }
             defer { self.restoreInFlight = false }
             guard self.physicalActiveDisplayCount() == 0 else { return }
-            // Only records whose hardware is still attached; prefer the built-in panel.
+            // In the placeholder-display state SLSGetDisplayList shrinks to just
+            // the placeholder (verified live), so records that fail to resolve
+            // must fall back to their last-known ID rather than being dropped:
+            // SLSConfigureDisplayEnabled still honors a stale ID for attached
+            // hardware, while detached hardware fails at
+            // CGCompleteDisplayConfiguration (error 1001) and the loop moves on.
+            // Prefer the built-in panel when the ID still classifies; stale IDs
+            // answer CGDisplayIsBuiltin with garbage, which sorts as non-builtin.
             let candidates = self.disconnected
-                .compactMap { record in self.resolveCurrentID(for: record).map { (record, $0) } }
-                .sorted { CGDisplayIsBuiltin($0.1) != 0 && CGDisplayIsBuiltin($1.1) == 0 }
+                .map { record in (record, self.resolveCurrentID(for: record) ?? record.displayID) }
+                .sorted { CGDisplayIsBuiltin($0.1) == 1 && CGDisplayIsBuiltin($1.1) != 1 }
             for (record, _) in candidates {
                 if case .success = await self.reconnect(uuid: record.uuid) { return }
             }
