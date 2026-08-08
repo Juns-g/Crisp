@@ -1,16 +1,6 @@
 import AppKit
 import CoreGraphics
 import ApplicationServices
-import os
-
-// DIAG (upgrade): temporary logging to confirm the post-upgrade tap-arming fix. Filter with:
-//   log show --last 5m --predicate 'subsystem == "com.crisp.app" && category == "upgrade"' --info
-private nonisolated(unsafe) let upgradeLog = Logger(subsystem: "com.crisp.app", category: "upgrade")
-
-// DIAG (clamshell): observe-only logging of every keyDown/media-key the tap sees, to identify
-// exactly what macOS delivers for brightness in clamshell mode (issue #21). Filter with:
-//   log show --last 5m --predicate 'subsystem == "com.crisp.app" && category == "clamshell"' --info
-private nonisolated(unsafe) let clamshellLog = Logger(subsystem: "com.crisp.app", category: "clamshell")
 
 // MARK: - C Event Tap Callback
 
@@ -79,7 +69,6 @@ final class BrightnessKeyService: @unchecked Sendable {
     /// Installs the event tap. Requires Accessibility permissions.
     /// Safe to call multiple times, a running tap will not be re-created.
     func start() {
-        upgradeLog.notice("start(): alreadyArmed=\(self.eventTap != nil, privacy: .public) trusted=\(AXIsProcessTrusted(), privacy: .public)")  // DIAG (upgrade)
         guard eventTap == nil else { return }
 
         // Try creating the tap directly, AXIsProcessTrusted can be unreliable
@@ -102,8 +91,6 @@ final class BrightnessKeyService: @unchecked Sendable {
             callback: brightnessKeyEventCallback,
             userInfo: retained.toOpaque()
         )
-
-        upgradeLog.notice("start(): tapCreate=\(tap != nil ? "OK" : "nil", privacy: .public)")  // DIAG (upgrade)
 
         guard let tap else {
             retained.release()
@@ -260,17 +247,9 @@ final class BrightnessKeyService: @unchecked Sendable {
             let kc = event.getIntegerValueField(.keyboardEventKeycode)
             switch kc {
             case 144:
-                clamshellLog.notice("keyDown brightness kc=144 up")  // DIAG: brightness keycodes only (privacy-safe)
                 return routeBrightnessPress(up: true, event: event)
             case 145:
-                clamshellLog.notice("keyDown brightness kc=145 down")  // DIAG
                 return routeBrightnessPress(up: false, event: event)
-            case 107, 113:
-                // F14/F15: alternate brightness keys on some keyboards. Log only (do not consume),
-                // so a tester whose OS routes brightness here is detected without us hijacking
-                // F14/F15 from users who bind them to something else. (issue #21)
-                clamshellLog.notice("keyDown fkey candidate kc=\(kc, privacy: .public)")  // DIAG
-                return Unmanaged.passRetained(event)
             default:
                 return Unmanaged.passRetained(event)
             }
@@ -294,7 +273,6 @@ final class BrightnessKeyService: @unchecked Sendable {
         case Self.nxKeytypeBrightnessUp, Self.nxKeytypeBrightnessDown:
             // For key-up events always pass through, only consume key-down on external displays.
             guard isKeyDown else { return Unmanaged.passRetained(event) }
-            clamshellLog.notice("sysdefined brightness kc=\(keyCode, privacy: .public)")  // DIAG: brightness only (privacy-safe)
             return routeBrightnessPress(up: keyCode == Self.nxKeytypeBrightnessUp, event: event)
         case Self.nxKeytypeSoundUp, Self.nxKeytypeSoundDown, Self.nxKeytypeMute:
             guard isKeyDown else { return Unmanaged.passRetained(event) }
