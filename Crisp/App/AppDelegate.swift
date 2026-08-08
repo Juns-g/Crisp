@@ -766,6 +766,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // won't re-fire here.
         NotificationCenter.default.post(name: .crispPanelDidOpen, object: nil)
 
+        // Re-probe DDC volume for externals that haven't answered yet: the
+        // connect-time probe (+3s retry) can land inside the post-link-training
+        // garbage window, and nothing else retries. Once per open is bounded
+        // I2C traffic, and a success is remembered so this stops firing for
+        // that display.
+        for display in visibleDisplays() where !display.isBuiltin && !display.volumeSupported {
+            VolumeService.shared.refreshVolume(for: display)
+        }
+
         PanelOpenGuard.openedAt = Date()
         // Re-check for updates on open so a long-running instance surfaces a new
         // release without a restart (the panel view mounts once, so its launch

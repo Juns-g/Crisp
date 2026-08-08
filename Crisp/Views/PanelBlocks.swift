@@ -85,6 +85,7 @@ struct DisplayHeaderBlock: View {
     @ObservedObject var display: DisplayInfo
     let isFirst: Bool
     @ObservedObject var state: PanelSectionState
+    @ObservedObject private var settings = SettingsService.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -103,6 +104,15 @@ struct DisplayHeaderBlock: View {
             )
             BrightnessSliderView(display: display, compact: true)
                 .padding(.bottom, 4)
+
+            // Speaker volume, only for monitors that answered the DDC volume
+            // probe (issue #23), and only while the setting is on (keys keep
+            // working either way). Toggling the setting re-renders this block;
+            // the height change flows through BlockHost to the panel spring.
+            if settings.showVolumeSliders && display.volumeSupported {
+                VolumeSliderView(display: display)
+                    .padding(.bottom, 4)
+            }
         }
         .padding(.top, isFirst ? 0 : 8)
     }
