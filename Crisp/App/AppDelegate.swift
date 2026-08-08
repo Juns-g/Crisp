@@ -604,6 +604,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sectionState.objectWillChange
             .sink { [weak self] _ in self?.canvas.requestApply() }
             .store(in: &canvasCancellables)
+        // Light<->dark switched while the panel is open: re-tint the rim/shadow
+        // live (Control Center / System Settings post this app-wide). The async
+        // hop lets NSApp.effectiveAppearance settle to the new value first.
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.canvas.refreshAppearance() }
+        }
         SettingsService.shared.$showCombinedBrightness
             .dropFirst()
             .sink { [weak self] _ in self?.canvas.requestApply() }
@@ -713,6 +722,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Remember where this open happened (fresh each open; the menu bar the
         // user clicked is the anchor, not wherever a previous open ended up).
         panelOriginDisplayUUID = displayManager.activePanelDisplayID.flatMap { displayUUID(for: $0) }
+
+        // Re-apply the appearance-tied rim/shadow before the panel becomes
+        // visible: the colors are only otherwise refreshed on a flight, so the
+        // first open (launch-time appearance) or an open after a light<->dark
+        // switch would show the other mode's rim until an expansion fixed it.
+        canvas.refreshAppearance()
 
         p.ignoresMouseEvents = false
         // First open only: fade in briefly so the panel's one-time on-screen costs

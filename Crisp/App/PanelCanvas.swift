@@ -557,6 +557,17 @@ final class PanelCanvas {
         useFlightShadow()
     }
 
+    /// Re-apply the appearance-tied rim + clone-shadow tints. useFlightShadow
+    /// picks them from NSApp.effectiveAppearance, but only runs on a flight or
+    /// settle, so a light<->dark switch (or the first on-screen open, before the
+    /// launch-time appearance had resolved) otherwise left the panel wearing the
+    /// other mode's rim until an expansion refreshed it. Called on every open
+    /// and on system theme change.
+    func refreshAppearance() {
+        guard panel != nil else { return }
+        useRestShadow()
+    }
+
     /// Screen rect of the VISIBLE panel. The window frame includes the
     /// transparent shadow margins, so outside-click tests use this.
     func visibleScreenFrame() -> NSRect {
