@@ -507,7 +507,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let state = sectionState
         let settings = SettingsService.shared
         func host<V: View>(_ id: String, @ViewBuilder _ content: () -> V) -> NSView {
-            let h = NSHostingView(rootView: AnyView(
+            let h = CountedHostingView(rootView: AnyView(
                 BlockHost(onHeight: { [weak self] h in self?.canvas.contentChanged(id, height: h) }) {
                     content()
                 }

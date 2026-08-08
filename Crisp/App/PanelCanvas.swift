@@ -153,6 +153,22 @@ final class FrameSpring: NSObject {
     }
 }
 
+/// Hosting view for panel blocks, instrumented: counts layout() passes so a
+/// flight can report how many SwiftUI host re-layouts it triggered (issue #28,
+/// the 60Hz panel stretches). The counter is read/reset on the main thread only.
+final class CountedHostingView: NSHostingView<AnyView> {
+    nonisolated(unsafe) static var layoutCount = 0
+    /// issue #28: while a flight is running, a static block's SwiftUI layout
+    /// pass is pure waste (geometry and content unchanged); the canvas mutes
+    /// it and forces a real pass at settle.
+    var muteLayout = false
+    override func layout() {
+        Self.layoutCount += 1
+        if muteLayout { return }
+        super.layout()
+    }
+}
+
 /// One block of panel content: a SwiftUI hosting view at its natural size
 /// inside a clip whose height animates between 0 and the content height.
 /// Fixed (always visible) blocks are just clips whose isOpen is always true;
@@ -242,6 +258,8 @@ final class PanelCanvas {
     /// on the same frame the curtain does, so the outer edge and inner content
     /// move together (the "inner lags the outer" residual). Reset per flight.
     private var pendingScalar: CGFloat?
+    private var flightTicks = 0
+    private var flightHostLayouts0 = 0
     /// Window height last handed to setFrame; a mismatch at the next layout
     /// means someone else resized the window (EXT in the log).
     private var lastSetWindowH: CGFloat = -1
@@ -272,6 +290,7 @@ final class PanelCanvas {
         spring.warm(view: shell)
         spring.onTick = { [weak self] x in
             guard let self else { return }
+            self.flightTicks += 1
             // One-frame buffer: apply the previous tick, hold this one. See
             // pendingScalar. onSettle sets the exact targets, superseding any
             // held value, so the last frame lands precisely.
@@ -281,7 +300,11 @@ final class PanelCanvas {
         spring.onSettle = { [weak self] in
             guard let self, self.animTarget.count == self.blocks.count else { return }
             for (i, b) in self.blocks.enumerated() { b.current = self.animTarget[i] }
+            PanelCanvas.log.log("flight ticks=\(self.flightTicks) hostLayouts=\(CountedHostingView.layoutCount - self.flightHostLayouts0) blocks=\(self.blocks.count)")
             self.layoutNow()
+            // Unmute and replay frame notifications: one full host resync at
+            // rest, refreshing the hit-zone mappings deferred during the flight.
+            self.endFlightMuting()
             self.windowTight()
             self.useRestShadow()
         }
@@ -327,6 +350,12 @@ final class PanelCanvas {
         guard let b = blocks.first(where: { $0.id == id }),
               abs(b.contentHeight - height) > 0.5 else { return }
         b.contentHeight = height
+        // A height report is a nested curtain animating inside this block:
+        // it needs live SwiftUI layout even mid-flight, so lift its mute.
+        if let host = b.host as? CountedHostingView, host.muteLayout {
+            host.muteLayout = false
+            host.needsLayout = true
+        }
         requestApply()
     }
 
@@ -349,6 +378,7 @@ final class PanelCanvas {
         for b in blocks { b.current = b.target }
         if let f = footer { f.current = f.target }
         layoutNow()
+        endFlightMuting()
         windowTight()
         useRestShadow()
     }
@@ -374,8 +404,38 @@ final class PanelCanvas {
         // is shadowless (no server shadow recompute).
         useFlightShadow()
         windowForFlight()
+        flightTicks = 0
+        flightHostLayouts0 = CountedHostingView.layoutCount
+        // Mute the STATIC blocks' SwiftUI layout for the flight: the window's
+        // constraint engine walks every host on every per-tick clip resize,
+        // and ~10 SwiftUI layout passes per 8.3ms frame were the 60Hz panel
+        // stretches. A static block's geometry and content are unchanged
+        // mid-flight, so its layout() is skipped wholesale. The block whose
+        // height animates stays live: nested curtains (resolution and preset
+        // dropdowns, Image Adjustment) report their final height once and
+        // then animate at the SwiftUI presentation layer, which needs
+        // per-frame layout; muting it froze the inner reveal until settle.
+        // endFlightMuting() at settle/snap runs one real pass at rest.
+        for (i, b) in blocks.enumerated() {
+            (b.host as? CountedHostingView)?.muteLayout = (animFrom[i] == animTarget[i])
+        }
+        (footer?.host as? CountedHostingView)?.muteLayout = true
         PanelCanvas.log.log("animate from=\(fromSum, format: .fixed(precision: 1)) to=\(targetSum, format: .fixed(precision: 1)) v0=\(self.spring.velocity, format: .fixed(precision: 1))")
         spring.animate(from: fromSum, to: targetSum)
+    }
+
+    /// Unmute every host and force a real layout pass, so anything skipped
+    /// mid-flight (hover states, live value changes, hit-zone mappings) lands
+    /// now, at rest.
+    private func endFlightMuting() {
+        for b in blocks {
+            (b.host as? CountedHostingView)?.muteLayout = false
+            b.host.needsLayout = true
+        }
+        if let f = footer {
+            (f.host as? CountedHostingView)?.muteLayout = false
+            f.host.needsLayout = true
+        }
     }
 
     private func applyScalar(_ x: CGFloat) {
