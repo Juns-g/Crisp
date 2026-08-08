@@ -16,13 +16,37 @@ class FlippedView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         layer?.masksToBounds = true
-        // The canvas sets every frame explicitly; skip AppKit's per-resize
-        // autoresize pass and frame-change notifications (measurable per-tick
-        // cost with a dozen containers resizing at 120Hz).
-        autoresizesSubviews = false
-        postsFrameChangedNotifications = false
+        // Do NOT disable postsFrameChangedNotifications here: NSHostingView
+        // listens for ancestor frame changes to keep its window-coordinate
+        // mapping fresh; without them, hit zones go stale after blocks move
+        // (click dead zones near the panel edges).
     }
     required init?(coder: NSCoder) { fatalError() }
+}
+
+/// Window-filling root. The window is LARGER than the visible panel: the
+/// transparent margins host the layer shadow, and the window itself never
+/// resizes while an animation is in flight (the WindowServer prices every
+/// per-frame resize of a shadowed transparent window at 5-9ms, the measured
+/// root cause of every animated-resize cadence failure). Clicks landing in
+/// the margins are outside-clicks: close the panel, like native menus
+/// consuming the dismissing click.
+final class PanelRootView: NSView {
+    weak var shell: NSView?
+    var onOutsideClick: (() -> Void)?
+
+    private func isOutsideShell(_ event: NSEvent) -> Bool {
+        guard let shell else { return false }
+        return !shell.frame.contains(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if isOutsideShell(event) { onOutsideClick?() } else { super.mouseDown(with: event) }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        if isOutsideShell(event) { onOutsideClick?() } else { super.rightMouseDown(with: event) }
+    }
 }
 
 /// The scrollable region (everything above the footer). Manual offset scroll:
@@ -61,6 +85,16 @@ final class FrameSpring: NSObject {
         link = l
     }
 
+    /// The link syncs to whatever display it was created on. Recreate it when
+    /// the panel lands on a different screen, or a 165Hz monitor gets fed
+    /// 120Hz updates (uneven frame doubling, reads as judder). Safe at open
+    /// time: the link is hot again long before the first toggle.
+    func retarget(view: NSView) {
+        link?.invalidate()
+        link = nil
+        warm(view: view)
+    }
+
     func animate(from f: CGFloat, to tg: CGFloat) {
         from = Double(f)
         target = Double(tg)
@@ -85,6 +119,7 @@ final class FrameSpring: NSObject {
         // HALF speed through sustained 60Hz stretches (tall panel, per-tick
         // cost near the budget) and snapped to full speed when ticks
         // recovered, which read as a jump.
+        let period = l.targetTimestamp - l.timestamp
         t += min(gap / 1000, 0.021)
         let e = exp(-omega * t)
         let d0 = from - target
@@ -101,7 +136,11 @@ final class FrameSpring: NSObject {
             let start = CACurrentMediaTime()
             onTick?(x)
             let cost = (CACurrentMediaTime() - start) * 1000
-            PanelCanvas.log.log("tick gap=\(gap, format: .fixed(precision: 1))ms x=\(x, format: .fixed(precision: 1)) cost=\(cost, format: .fixed(precision: 1))ms")
+            // Per-tick logging costs real budget at 165Hz; log misses only.
+            let periodMs = (period > 0 && period < 0.05) ? period * 1000 : 8.3
+            if gap > periodMs * 1.7 {
+                PanelCanvas.log.log("miss gap=\(gap, format: .fixed(precision: 1))ms period=\(periodMs, format: .fixed(precision: 1))ms x=\(x, format: .fixed(precision: 1)) cost=\(cost, format: .fixed(precision: 1))ms")
+            }
         }
     }
 }
@@ -140,6 +179,13 @@ final class PanelCanvas {
     static weak var shared: PanelCanvas?
 
     let width: CGFloat = 308
+    /// Transparent window margins hosting the layer shadow.
+    let sideMargin: CGFloat = 40
+    let bottomMargin: CGFloat = 48
+    /// Room above the shell for the twin's 1pt rim stroke; with the shell
+    /// flush to the window top, the outset twin would be clipped and the
+    /// top rim line vanish in flight.
+    let topMargin: CGFloat = 2
     private let topInset: CGFloat = 8
     private let docTopInset: CGFloat = 4
     private let docBottomInset: CGFloat = 4
@@ -150,6 +196,11 @@ final class PanelCanvas {
     let doc = FlippedView(frame: .zero)
     private let spring = FrameSpring()
     private weak var panel: NSPanel?
+    private weak var shellView: NSView?
+    private weak var shadowView: NSView?
+    weak var shadowMask: CAShapeLayer?
+    /// Settled shell height from the last layout, for windowTight().
+    private var lastShellH: CGFloat = 0
     var isShown: () -> Bool = { false }
 
     /// Screen-space anchor of the pinned top edge, set by positionPanel.
@@ -178,9 +229,11 @@ final class PanelCanvas {
     /// lower blocks unpainted, defeating the pre-paint).
     private var ignoreCap = false
 
-    func install(shell: NSView, panel: NSPanel) {
+    func install(shell: NSView, shadow: NSView, panel: NSPanel) {
         PanelCanvas.shared = self
         self.panel = panel
+        self.shellView = shell
+        self.shadowView = shadow
         viewport.addSubview(doc)
         shell.addSubview(viewport)
         viewport.onScroll = { [weak self] delta in
@@ -198,6 +251,8 @@ final class PanelCanvas {
             guard let self, self.animTarget.count == self.blocks.count else { return }
             for (i, b) in self.blocks.enumerated() { b.current = self.animTarget[i] }
             self.layoutNow()
+            self.windowTight()
+            self.useRestShadow()
         }
     }
 
@@ -223,9 +278,12 @@ final class PanelCanvas {
         }
     }
 
-    /// SwiftUI reported a block's natural height (initial layout, a nested
-    /// reveal mid-animation, presets changing). Fires per frame during nested
-    /// SwiftUI animations; the spring retargets each time with velocity carry.
+    /// SwiftUI reported a block's natural (fully-laid-out) height: initial
+    /// layout, a nested reveal's end state, presets changing. It reports the
+    /// final height in one shot (the curtain animates at the presentation
+    /// layer, invisible to geometry callbacks), so the spring animates the clip
+    /// to it. The host frame tracks the spring (layoutNow), which keeps the
+    /// content top-aligned during the reveal (see layoutNow).
     func contentChanged(_ id: String, height: CGFloat) {
         // height 0 is legitimate (the update row while no update is known).
         if let f = footer, f.id == id {
@@ -259,6 +317,8 @@ final class PanelCanvas {
         for b in blocks { b.current = b.target }
         if let f = footer { f.current = f.target }
         layoutNow()
+        windowTight()
+        useRestShadow()
     }
 
     private func animateToTargets() {
@@ -275,6 +335,12 @@ final class PanelCanvas {
         animTarget = blocks.map { $0.target }
         animFromSum = fromSum
         animTargetSum = targetSum
+        // One window grow per toggle, HERE at rest (nothing moves in this
+        // frame, so its WindowServer cost cannot jump); per-tick work during
+        // the flight is layer-only. Shadow swaps first so the grow's setFrame
+        // is shadowless (no server shadow recompute).
+        useFlightShadow()
+        windowForFlight()
         PanelCanvas.log.log("animate from=\(fromSum, format: .fixed(precision: 1)) to=\(targetSum, format: .fixed(precision: 1)) v0=\(self.spring.velocity, format: .fixed(precision: 1))")
         spring.animate(from: fromSum, to: targetSum)
     }
@@ -313,7 +379,7 @@ final class PanelCanvas {
         let footerH = (footer?.current ?? 0).rounded()
         let cap = ignoreCap ? CGFloat.greatestFiniteMagnitude : PanelMetrics.maxContentHeight.rounded()
         let viewportH = min(docH, cap)
-        let windowH = topInset + viewportH + footerH
+        let shellH = topInset + viewportH + footerH
 
         if lastSetWindowH >= 0, abs(panel.frame.height - lastSetWindowH) > 0.01 {
             PanelCanvas.log.log("EXT frame=\(panel.frame.height, format: .fixed(precision: 1)) expected=\(self.lastSetWindowH, format: .fixed(precision: 1))")
@@ -321,8 +387,8 @@ final class PanelCanvas {
         scrollOffset = min(max(scrollOffset, 0), max(0, docH - viewportH))
         let docR = NSRect(x: 0, y: -scrollOffset, width: width, height: docH)
         if doc.frame != docR { doc.frame = docR }
-        // Shell is non-flipped: footer hugs the bottom, viewport spans from
-        // 8pt below the top edge down to the footer.
+        // Shell is non-flipped: footer hugs the shell bottom, viewport spans
+        // from 8pt below the shell top down to the footer.
         let vpR = NSRect(x: 0, y: footerH, width: width, height: viewportH)
         if viewport.frame != vpR { viewport.frame = vpR }
         if let f = footer {
@@ -332,29 +398,140 @@ final class PanelCanvas {
             if f.host.frame != fhR { f.host.frame = fhR }
         }
         let t1 = CACurrentMediaTime()
-        let prevH = panel.frame.height
-        // display: false. A synchronous redraw per tick (display: true) cost
-        // ~6ms on a tall panel, blowing the 8.3ms budget and dropping the
-        // link to 60Hz (half-speed motion, doubled per-frame steps). Core
-        // Animation commits the window frame and every moved layer in the
-        // same transaction, so the resize stays atomic.
-        panel.setFrame(NSRect(x: anchorX, y: anchorTopY - windowH,
-                              width: width, height: windowH),
-                       display: false)
-        lastSetWindowH = windowH
+        // The WINDOW is static here: only the shell and its shadow twin move,
+        // in one Core Animation transaction (atomic, GPU-composited). Window
+        // frames change only at rest, in setWindowHeight.
+        let rootH = panel.contentView?.bounds.height ?? 0
+        let shellR = NSRect(x: sideMargin, y: (rootH - topMargin - shellH).rounded(),
+                            width: width, height: shellH)
+        if let shell = shellView, shell.frame != shellR { shell.frame = shellR }
+        // The twin is outset ONE DEVICE PIXEL (its border strokes outside
+        // the glass): the native rim is a 1px hairline at any backing scale,
+        // so the outset is 1/scale points, not 1pt. Shadow geometry stays
+        // the true shell rect, and the knockout mask removes the shadow
+        // interior so the glass backdrop never samples it.
+        let px = 1 / max(panel.backingScaleFactor, 1)
+        let svR = shellR.insetBy(dx: -px, dy: -px)
+        if let sv = shadowView, sv.frame != svR {
+            sv.frame = svR
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            let inner = CGRect(x: px, y: px, width: shellR.width, height: shellR.height)
+            let innerPath = CGPath(roundedRect: inner, cornerWidth: 16, cornerHeight: 16, transform: nil)
+            sv.layer?.shadowPath = innerPath
+            sv.layer?.cornerRadius = 16 + px
+            let maskR = CGRect(origin: .zero, size: svR.size)
+            let p = CGMutablePath()
+            p.addRect(CGRect(x: -60, y: -60, width: svR.width + 120, height: svR.height + 120))
+            p.addPath(innerPath)
+            // The native shadow barely wraps above the top edge (a faint
+            // ~6% shade in the menu-bar gap, nothing beyond); cut the
+            // blur 3px above the twin's top border row.
+            p.addRect(CGRect(x: -60, y: svR.height + 3, width: svR.width + 120, height: 57))
+            if let mask = shadowMask { mask.frame = maskR; mask.path = p }
+            CATransaction.commit()
+        }
+        lastShellH = shellH
         lastLoopMs = (t1 - t0) * 1000
         lastWinMs = (CACurrentMediaTime() - t1) * 1000
-        if lastLoopMs + lastWinMs > 3 {
-            PanelCanvas.log.log("slowlayout loop=\(self.lastLoopMs, format: .fixed(precision: 1))ms win=\(self.lastWinMs, format: .fixed(precision: 1))ms")
+    }
+
+    /// Window frames are set ONLY here, and only while the panel is at rest
+    /// (animation boundaries, positioning): even a shadowless transparent
+    /// window resize is a WindowServer transaction we keep out of the
+    /// per-tick path.
+    private func setWindowHeight(_ h: CGFloat) {
+        guard let panel else { return }
+        // h is the VISIBLE height below anchorTopY; the window extends
+        // topMargin above it (rim headroom, covered by the menu bar).
+        let H = h.rounded() + topMargin
+        let f = NSRect(x: anchorX - sideMargin, y: anchorTopY + topMargin - H,
+                       width: width + 2 * sideMargin, height: H)
+        if panel.frame != f {
+            panel.setFrame(f, display: false)
+            lastSetWindowH = H
+            layoutNow()
         }
-        if abs(windowH - prevH) > 0.5 {
-            PanelCanvas.log.log("frame h=\(windowH, format: .fixed(precision: 1)) dh=\(windowH - prevH, format: .fixed(precision: 1))")
-        }
+    }
+
+    /// Room for the whole flight, grown once at animate start (at rest).
+    private func windowForFlight() {
+        let footerH = (footer?.contentHeight ?? 0).rounded()
+        setWindowHeight(topInset + PanelMetrics.maxContentHeight.rounded() + footerH + bottomMargin)
+    }
+
+    /// Hug the settled shell again, so the margin (whose clicks read as
+    /// outside-clicks) covers as little screen as possible at rest.
+    private func windowTight() {
+        setWindowHeight(lastShellH + bottomMargin)
+    }
+
+    /// The panel wears the CA clone shadow at ALL times, in flight and at
+    /// rest. The server shadow cannot follow the shell in flight without
+    /// the measured 5-9ms per-frame recompute, and a hybrid (native at
+    /// rest, clone in flight) flashes at every settle: hasShadow renders on
+    /// the WindowServer's schedule (~200ms after invalidateShadow, video-
+    /// measured), the twin on Core Animation's, so no swap can be atomic.
+    /// The clone is pixel-calibrated against the native shadow instead
+    /// (profiles in AppDelegate).
+    private func useFlightShadow() {
+        // Disabled actions: raw layer property changes implicitly animate
+        // (0.25s fade), but the native shadow they replace vanishes
+        // instantly, so any fade reads as a rim flash at flight start.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shadowView?.isHidden = false
+        // The white inner line only reads in dark mode; in light mode the
+        // glass's own edge bevel already saturates white on the straight
+        // edges, and the extra stroke washes out the corners' cyan
+        // refraction (measured 231,241,244 vs the native 214,244,248).
+        // NSApp, not the panel: the panel is positioned (and its shadow first
+        // applied) while still off screen, where panel.effectiveAppearance
+        // has not resolved to dark yet, so it would paint light-mode values at
+        // spawn and repaint dark on the first interaction (a visible change).
+        // The app appearance is always resolved and matches the system menu
+        // bar, which is what native menus follow.
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        // The white inner line is a full point (2px at 2x, video-measured),
+        // unlike the black rim, which is a 1-device-pixel hairline.
+        shellView?.layer?.borderWidth = dark ? 1 : 0
+        // The native rim and blur are appearance-dependent: rim ~0.29 black
+        // in light mode vs near-black (~0.85) in dark; the blur runs ~0.21
+        // light vs ~0.37 dark (bottom edge 15.7% vs 20% darkening).
+        shadowView?.layer?.borderColor = NSColor.black
+            .withAlphaComponent(dark ? 0.85 : 0.29).cgColor
+        shadowView?.shadow?.shadowColor = NSColor.black
+            .withAlphaComponent(dark ? 0.37 : 0.21)
+        CATransaction.commit()
+        panel?.hasShadow = false
+    }
+
+    /// Settle path: keep the clone, just refresh appearance-tied colors.
+    private func useRestShadow() {
+        useFlightShadow()
+    }
+
+    /// Screen rect of the VISIBLE panel. The window frame includes the
+    /// transparent shadow margins, so outside-click tests use this.
+    func visibleScreenFrame() -> NSRect {
+        guard let panel, let shell = shellView, let root = panel.contentView else { return .zero }
+        return panel.convertToScreen(root.convert(shell.frame, to: nil))
     }
 
     func setAnchor(topY: CGFloat, x: CGFloat) {
         anchorTopY = topY.rounded()
         anchorX = x.rounded()
+    }
+
+    private weak var linkScreen: NSScreen?
+
+    /// Re-sync the spring's display link to the screen the panel is on now.
+    func retargetLinkIfNeeded() {
+        guard let panel, let screen = panel.screen, let v = panel.contentView,
+              screen !== linkScreen else { return }
+        spring.retarget(view: v)
+        linkScreen = screen
+        PanelCanvas.log.log("link fps=\(screen.maximumFramesPerSecond)")
     }
 
     /// Warm-up pre-paint: draw every block once while the panel is invisible
@@ -363,6 +540,10 @@ final class PanelCanvas {
         ignoreCap = true
         for b in blocks { b.current = b.contentHeight }
         footer?.current = footer?.contentHeight ?? 0
+        // The window must hold EVERY block at full height for this one paint.
+        let needed = blocks.reduce(topInset + docTopInset + docBottomInset) { $0 + $1.contentHeight }
+            + (footer?.contentHeight ?? 0) + bottomMargin
+        setWindowHeight(needed.rounded())
         layoutNow()
         panel?.display()
         ignoreCap = false

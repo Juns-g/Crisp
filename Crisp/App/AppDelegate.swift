@@ -25,6 +25,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var repositionWorkItem: DispatchWorkItem?
     private var clickMonitor: Any?
     private var clickInterceptor: Any?
+    /// Temporary probe: logs where every in-panel mouse-down lands in the view
+    /// tree, to corner the dead-click zones. Remove with the other probes.
     // The NSMenu currently tracking (a SwiftUI Menu / context menu), captured so an
     // outside-panel click can cancel it the way native menus dismiss on click-away.
     private var trackingMenu: NSMenu?
@@ -354,21 +356,74 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel = p
         guard !isWarmed else { return }
         isWarmed = true
+        // Static-window architecture: the window never resizes while an
+        // animation is in flight (a per-frame shadowed-window resize costs
+        // 5-9ms in the WindowServer, the measured root cause of every
+        // cadence failure). The visible panel is the `shell` inside a larger
+        // transparent window; the spring animates the shell as pure layer
+        // work, and the shadow is a CALayer twin that resizes in the same
+        // atomic commit.
+        let windowW = canvas.width + canvas.sideMargin * 2
+        let root = PanelRootView(frame: NSRect(x: 0, y: 0, width: windowW, height: 480))
+        let shadow = NSView(frame: .zero)
+        let shadowLayer = CALayer()
+        shadowLayer.masksToBounds = false
+        // The twin sits OUTSET one device pixel from the shell (PanelCanvas
+        // computes it), so this black stroke falls just OUTSIDE the glass,
+        // where the WindowServer rim strokes its 1px hairline.
+        // Width 2, not 1: the knockout mask trims the band back to a 1px
+        // ring on straight edges, but at corners the wider stroke keeps the
+        // arc at full darkness where a 1px border is AA-diluted. Alpha is
+        // appearance-dependent and set per flight in PanelCanvas (measured:
+        // ~0.29 light mode, ~0.85 dark mode).
+        shadowLayer.borderWidth = 2
+        shadowLayer.borderColor = NSColor.black.withAlphaComponent(0.29).cgColor
+        shadowLayer.cornerRadius = 17
+        // Knockout mask: an empty layer does not cover its own shadow, so
+        // the blurred silhouette is visible through the shape interior too,
+        // and the glass backdrop would sample it (the whole panel reads
+        // darker in flight). Even-odd keeps only the ring outside the shell.
+        let knockout = CAShapeLayer()
+        knockout.fillRule = .evenOdd
+        shadowLayer.mask = knockout
+        shadow.layer = shadowLayer
+        shadow.wantsLayer = true
+        // The shadow MUST be set through the view API: AppKit syncs the
+        // view's `shadow` property onto the layer on every display pass, so
+        // raw layer shadow properties get clobbered (observed: shadowOpacity
+        // reset to 0 while radius and path survived). The explicit
+        // shadowPath (layoutNow) still keeps per-tick resizes cheap.
+        // Numbers are a pixel-measured clone of the WindowServer shadow this
+        // panel wears at rest (bottom: ~16% edge darkening over ~17px, sides
+        // ~11%), so the rest<->flight swap is invisible.
+        let menuShadow = NSShadow()
+        menuShadow.shadowColor = NSColor.black.withAlphaComponent(0.21)
+        menuShadow.shadowBlurRadius = 8.5
+        menuShadow.shadowOffset = NSSize(width: 0, height: -4)
+        shadow.shadow = menuShadow
+        root.addSubview(shadow)
+
         // Blocks live INSIDE a plain container, never as the window
         // contentView: as contentView, NSHostingView installs its own
         // window-sizing machinery that fights manual resizes.
-        let shell = NSView(frame: NSRect(x: 0, y: 0, width: canvas.width, height: 400))
+        let shell = NSView(frame: NSRect(x: canvas.sideMargin, y: 0, width: canvas.width, height: 400))
         // Clip the whole container to the panel shape: the glass view's
         // square bounds otherwise peek past the rounded corners (double edge).
         shell.wantsLayer = true
         shell.layer?.cornerRadius = 16
         shell.layer?.masksToBounds = true
-        // The menu backdrop fills the WINDOW (not the content), so while the
-        // window height animates the glass always reaches the bottom edge.
-        // macOS 26 Liquid Glass, the material Control Center panels actually
-        // use (no NSVisualEffectView grade matches it). Its materialize bloom
-        // plays only when the view first comes on screen, which happens once
-        // during hidden warm-up; the panel never orders out afterwards.
+        // The WindowServer shadow strokes a two-line rim around the window
+        // shape (measured: ~0.38 black just outside the boundary, ~0.32
+        // white on the first row inside; light mode shows the black line,
+        // dark mode the white one), and both vanish with hasShadow off.
+        // Flights redraw the white line as this border (width toggled in
+        // PanelCanvas); the black line lives on the outset shadow twin.
+        shell.layer?.borderColor = NSColor.white.withAlphaComponent(0.25).cgColor
+        // The menu backdrop: macOS 26 Liquid Glass, the material Control
+        // Center panels actually use (no NSVisualEffectView grade matches
+        // it). Its materialize bloom plays only when the view first comes on
+        // screen, which happens once during hidden warm-up; the panel never
+        // orders out afterwards.
         let backdrop: NSView
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: shell.bounds)
@@ -385,19 +440,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             material.layer?.masksToBounds = true
             backdrop = material
         }
-        // Oversized fixed canvas glued to the window top, clipped by the
-        // shell's rounded mask: resizing the window then only MOVES the glass
-        // layer. Autoresizing the glass with the window cost ~3ms per tick in
-        // its internal layout, blowing the 120Hz budget on animated resizes.
+        // Oversized fixed canvas glued to the shell top, clipped by the
+        // shell's rounded mask: resizing the shell then only MOVES the glass
+        // layer (autoresizing it with the shell cost ~3ms per tick in its
+        // internal layout).
         let backdropHeight: CGFloat = 2200
         backdrop.frame = NSRect(x: 0, y: shell.bounds.height - backdropHeight,
                                 width: canvas.width, height: backdropHeight)
         backdrop.autoresizingMask = [.minYMargin]
         shell.addSubview(backdrop)
+        root.addSubview(shell)
+        root.shell = shell
+        root.onOutsideClick = { [weak self] in self?.closePanel() }
 
-        p.setFrame(NSRect(x: 0, y: -4000, width: canvas.width, height: 400), display: false)
-        p.contentView = shell
-        canvas.install(shell: shell, panel: p)
+        p.setFrame(NSRect(x: 0, y: -4000, width: windowW, height: 480), display: false)
+        p.contentView = root
+        canvas.install(shell: shell, shadow: shadow, panel: p)
+        canvas.shadowMask = knockout
         canvas.isShown = { [weak self] in self?.isPanelShown ?? false }
         // Off-screen anchor for the warm-up; openPanel sets the real one.
         canvas.setAnchor(topY: -4000, x: 0)
@@ -440,12 +499,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let state = sectionState
         let settings = SettingsService.shared
         func host<V: View>(_ id: String, @ViewBuilder _ content: () -> V) -> NSView {
-            NSHostingView(rootView: AnyView(
+            let h = NSHostingView(rootView: AnyView(
                 BlockHost(onHeight: { [weak self] h in self?.canvas.contentChanged(id, height: h) }) {
                     content()
                 }
                 .environmentObject(dm)
             ))
+            // Blocks near the window's top/bottom edge otherwise get a phantom
+            // safe-area inset: content shifts inside the host while the AppKit
+            // frame stays put, so clicks land ~12pt off (dead bands at the
+            // edges) and the inset flips with window height (spurious height
+            // reports, visible as jumps).
+            h.safeAreaRegions = []
+            return h
         }
         func block<V: View>(_ id: String, isOpen: @escaping () -> Bool = { true },
                             @ViewBuilder _ content: () -> V) -> PanelBlock {
@@ -640,6 +706,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Native menus appear at full size with all content visible at once;
         // only size changes AFTER opening animate.
         positionPanel(p)
+        canvas.retargetLinkIfNeeded()
         // The display order can differ per open (panel-screen-first sort);
         // rebuild happens hidden, before the fade.
         rebuildBlocksIfNeeded()
@@ -693,7 +760,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if clickMonitor == nil {
             clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
                 Task { @MainActor in
-                    guard let self, let p = self.panel else { return }
+                    guard let self, self.panel != nil else { return }
                     // Don't dismiss while our own admin auth dialog is up: those
                     // clicks land in SecurityAgent (outside the panel). Same for a
                     // tracking menu whose items spill outside the panel frame, or an
@@ -703,8 +770,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     // on the menu itself go to our own menu window and never reach
                     // this global monitor, so selecting an item (even one spilled
                     // past the panel edge) is unaffected.
+                    // The window frame includes transparent shadow margins;
+                    // the VISIBLE panel is the shell (canvas).
+                    let visible = self.canvas.visibleScreenFrame()
                     if PanelOpenGuard.isMenuTracking {
-                        if !p.frame.contains(NSEvent.mouseLocation) {
+                        if !visible.contains(NSEvent.mouseLocation) {
                             self.trackingMenu?.cancelTracking()
                         }
                         return
@@ -716,7 +786,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     // mode crossfade the system's snapshot overlay intercepts
                     // every click, so an inside click arrives here too; close
                     // only when the cursor is genuinely outside the panel.
-                    if p.frame.contains(NSEvent.mouseLocation) { return }
+                    if visible.contains(NSEvent.mouseLocation) { return }
                     self.closePanel()
                 }
             }
@@ -759,7 +829,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         p.isMovable = false
         p.isOpaque = false
         p.backgroundColor = .clear
-        p.hasShadow = true
+        // The shadow is a CALayer twin of the shell (PanelCanvas), not the
+        // WindowServer's: the server recomputes a transparent window's shadow
+        // from its alpha shape on EVERY setFrame (~5ms, measured), which is
+        // what made animated resizes judder.
+        p.hasShadow = false
         p.animationBehavior = .none
         p.isReleasedWhenClosed = false
         p.collectionBehavior = [.transient, .ignoresCycle]
@@ -783,8 +857,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if Date() < PanelOpenGuard.resignKeyGraceUntil { return }
             // Same overlay caveat as the click monitor: during the crossfade
             // the snapshot window can steal key while the user is clicking
-            // INSIDE the panel; don't treat that as clicking away.
-            if let p = panel, p.frame.contains(NSEvent.mouseLocation) { return }
+            // INSIDE the panel; don't treat that as clicking away. The window
+            // frame includes shadow margins, so test the visible shell.
+            if canvas.visibleScreenFrame().contains(NSEvent.mouseLocation) { return }
             closePanel()
         }
     }
