@@ -7,127 +7,13 @@ import os.log
 
 /// Borderless key-capable panel for the menu bar UI.
 /// Owning the panel (instead of MenuBarExtra's window) removes the WindowServer
-/// zoom-in materialization and gives us native-menu open behavior.
+/// zoom-in materialization and gives us native-menu open behavior. All resize
+/// animation lives in PanelCanvas (docs/panel-resize.md); the panel itself is
+/// just the shell.
 final class MenuPanel: NSPanel {
     var onCancel: (() -> Void)?
-    /// While set, every frame change re-anchors to this top edge (screen Y of
-    /// the panel top). AppKit windows anchor bottom-left, so the auto-resize
-    /// from the hosting view would otherwise grow the panel upward.
-    var pinnedTopY: CGFloat?
-
-    /// The SwiftUI hosting view inside the container content view.
-    weak var hostingView: NSView?
-    /// Last content size reported by SwiftUI layout (source of truth for
-    /// the panel's natural size when showing).
-    var lastContentSize: NSSize?
-    private var resizeLink: CADisplayLink?
-    private var resizeTarget: NSSize?
-    private var resizeFrom: NSSize = .zero
-    private var resizeStart: CFTimeInterval = 0
-    private var resizeOmega: Double = 0
-    /// Spring-start velocity (pt/s), carried over from the running spring on a
-    /// retarget so an interrupted resize keeps its momentum instead of popping
-    /// to a fresh zero-velocity curve (SwiftUI's springs preserve velocity on
-    /// retarget; the window must match or the edges visibly disagree).
-    private var resizeV0 = CGSize.zero
-    /// Live velocity of the running spring, updated per tick. Zero when idle,
-    /// so a spring started from rest still starts from rest.
-    private var resizeVelocity = CGSize.zero
-
     override var canBecomeKey: Bool { true }
     override func cancelOperation(_ sender: Any?) { onCancel?() }
-
-    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
-        var r = frameRect
-        if let top = pinnedTopY { r.origin.y = top - r.height }
-        super.setFrame(r, display: flag)
-    }
-
-    func applyContentSize(_ size: NSSize) {
-        lastContentSize = size
-        // Already animating toward this exact size: let the spring finish.
-        if let t = resizeTarget, resizeLink != nil,
-           abs(t.height - size.height) < 0.5, abs(t.width - size.width) < 0.5 { return }
-        guard abs(frame.height - size.height) > 0.5 || abs(frame.width - size.width) > 0.5 else { return }
-        resizeLink?.invalidate()
-        resizeLink = nil
-        resizeTarget = nil
-
-        // Hidden (alpha 0) means warm-up layout: snap so the panel opens at
-        // full size instantly.
-        if alphaValue == 0 {
-            resizeVelocity = .zero
-            var f = frame
-            f.size = size
-            setFrame(f, display: false)
-            return
-        }
-
-        // SwiftUI's onGeometryChange reports only the final model height (one
-        // callback per change, no animation frames), so the eased motion can't
-        // be measured out of the layout. Instead the window runs the SAME
-        // spring the content runs: Animation.smooth(duration:) is a critically
-        // damped spring, x(t) = T + (x0-T)(1 + wt)e^(-wt) with w = 2*pi/d.
-        // Same curve, same duration, started in the same runloop turn ->
-        // window edge and curtain land on the same value every frame.
-        // CADisplayLink, not a Timer: an unsynced timer beats against vsync,
-        // and the tick that lands late forces its full layout pass past the
-        // frame deadline (visible as a stutter). The link ticks once per
-        // refresh of the display the panel is on, right after vsync.
-        // Not animator(): NSWindow's frame animator runs on a background
-        // thread and tears reads of pinnedTopY.
-        guard let view = contentView ?? hostingView else {
-            resizeVelocity = .zero
-            var f = frame
-            f.size = size
-            setFrame(f, display: false)
-            return
-        }
-        resizeOmega = 2 * Double.pi / Animation.panelResizeDuration
-        resizeFrom = frame.size
-        // Carry the on-screen momentum into the new spring. resizeVelocity is
-        // zero when no spring ran (start from rest) and the last tick's true
-        // velocity when one did, so bunched retargets (panel-open cascades, a
-        // toggle interrupted mid-flight) stay continuous instead of popping.
-        resizeV0 = resizeVelocity
-        resizeStart = CACurrentMediaTime()
-        resizeTarget = size
-        let link = view.displayLink(target: self, selector: #selector(resizeTick(_:)))
-        link.add(to: .main, forMode: .common)
-        resizeLink = link
-    }
-
-    @objc private func resizeTick(_ link: CADisplayLink) {
-        guard let target = resizeTarget else {
-            link.invalidate()
-            resizeLink = nil
-            return
-        }
-        let dt = CACurrentMediaTime() - resizeStart
-        let e = exp(-resizeOmega * dt)
-        // Critically damped spring with initial velocity v0:
-        // x(t) = T + (d0 + (v0 + w*d0) t) e^(-wt), d0 = x0 - T.
-        func axis(_ from: Double, _ to: Double, _ v0: Double) -> (x: Double, v: Double) {
-            let d0 = from - to
-            let a = v0 + resizeOmega * d0
-            return (x: to + (d0 + a * dt) * e,
-                    v: (a - resizeOmega * (d0 + a * dt)) * e)
-        }
-        let h = axis(resizeFrom.height, target.height, resizeV0.height)
-        let w = axis(resizeFrom.width, target.width, resizeV0.width)
-        var f = frame
-        if abs(h.x - target.height) < 0.25, abs(w.x - target.width) < 0.25 {
-            link.invalidate()
-            resizeLink = nil
-            resizeTarget = nil
-            resizeVelocity = .zero
-            f.size = target
-        } else {
-            f.size = NSSize(width: w.x, height: h.x)
-            resizeVelocity = CGSize(width: w.v, height: h.v)
-        }
-        setFrame(f, display: false)
-    }
 }
 
 @MainActor
@@ -139,6 +25,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var repositionWorkItem: DispatchWorkItem?
     private var clickMonitor: Any?
     private var clickInterceptor: Any?
+    /// Temporary probe: logs where every in-panel mouse-down lands in the view
+    /// tree, to corner the dead-click zones. Remove with the other probes.
     // The NSMenu currently tracking (a SwiftUI Menu / context menu), captured so an
     // outside-panel click can cancel it the way native menus dismiss on click-away.
     private var trackingMenu: NSMenu?
@@ -298,6 +186,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.warmPanel()
         }
 
+        // Launch-time update check (self-throttled to one network call/hour);
+        // showPanel re-checks per open. Lived in MenuBarView's .task before
+        // the split-canvas migration.
+        Task { await UpdateService.shared.checkForUpdates() }
+
+        // Mirror changes made elsewhere (Control Center, brightness keys,
+        // other apps) while the panel is visible. Poll forever but only touch
+        // hardware when shown.
+        Task { [weak self] in
+            while !Task.isCancelled {
+                self?.pollExternalState()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    private func pollExternalState() {
+        // The panel is never ordered out (hidden = alpha 0), so isVisible
+        // alone is always true; alpha is the actual shown state.
+        guard isPanelShown, let p = panel, p.alphaValue > 0 else { return }
+        // Don't fight the user's own adjustments (or busy the DDC bus mid-drag).
+        if let last = BrightnessService.shared.lastManualAdjustDate,
+           Date().timeIntervalSince(last) < 3 { return }
+        CoreBrightnessService.shared.refresh()
+        let autoBrightnessOn = AutoBrightnessService.shared.isEnabled
+        for display in visibleDisplays() {
+            // Skip any display something else is actively driving (see the
+            // original note in MenuBarView history, issue #12 follow-up).
+            if display.isBuiltin || autoBrightnessOn { continue }
+            Task { await BrightnessService.shared.refreshBrightness(for: display) }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -432,38 +351,96 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// in to mask one-time on-screen costs; later shows are instant.
     private var hasShownOnce = false
 
+    /// Split-canvas resize engine and the shared section state (docs/panel-resize.md).
+    private let canvas = PanelCanvas()
+    private let sectionState = PanelSectionState()
+    private var canvasCancellables = Set<AnyCancellable>()
+    /// Identity of the block list currently built; rebuilt when it changes
+    /// (displays connect/disconnect/reorder).
+    private var blocksSignature = ""
+
     private func warmPanel() {
         let p = panel ?? makePanel()
         panel = p
         guard !isWarmed else { return }
         isWarmed = true
-        // The hosting view lives INSIDE a plain container, never as the
-        // window contentView: as contentView, NSHostingView installs its own
-        // window-sizing machinery that snaps the frame back to content size
-        // on every layout pass, fighting the unfurl and any manual resize.
-        let hosting = NSHostingView(rootView: PanelRootView(displayManager: displayManager))
-        let size = hosting.fittingSize
-        let container = NSView(frame: NSRect(origin: .zero, size: size))
+        // Static-window architecture: the window never resizes while an
+        // animation is in flight (a per-frame shadowed-window resize costs
+        // 5-9ms in the WindowServer, the measured root cause of every
+        // cadence failure). The visible panel is the `shell` inside a larger
+        // transparent window; the spring animates the shell as pure layer
+        // work, and the shadow is a CALayer twin that resizes in the same
+        // atomic commit.
+        let windowW = canvas.width + canvas.sideMargin * 2
+        let root = PanelRootView(frame: NSRect(x: 0, y: 0, width: windowW, height: 480))
+        let shadow = NSView(frame: .zero)
+        let shadowLayer = CALayer()
+        shadowLayer.masksToBounds = false
+        // The twin sits OUTSET one device pixel from the shell (PanelCanvas
+        // computes it), so this black stroke falls just OUTSIDE the glass,
+        // where the WindowServer rim strokes its 1px hairline.
+        // Width 2, not 1: the knockout mask trims the band back to a 1px
+        // ring on straight edges, but at corners the wider stroke keeps the
+        // arc at full darkness where a 1px border is AA-diluted. Alpha is
+        // appearance-dependent and set per flight in PanelCanvas (measured:
+        // ~0.29 light mode, ~0.85 dark mode).
+        shadowLayer.borderWidth = 2
+        shadowLayer.borderColor = NSColor.black.withAlphaComponent(0.29).cgColor
+        shadowLayer.cornerRadius = 17
+        // Knockout mask: an empty layer does not cover its own shadow, so
+        // the blurred silhouette is visible through the shape interior too,
+        // and the glass backdrop would sample it (the whole panel reads
+        // darker in flight). Even-odd keeps only the ring outside the shell.
+        let knockout = CAShapeLayer()
+        knockout.fillRule = .evenOdd
+        shadowLayer.mask = knockout
+        shadow.layer = shadowLayer
+        shadow.wantsLayer = true
+        // The shadow MUST be set through the view API: AppKit syncs the
+        // view's `shadow` property onto the layer on every display pass, so
+        // raw layer shadow properties get clobbered (observed: shadowOpacity
+        // reset to 0 while radius and path survived). The explicit
+        // shadowPath (layoutNow) still keeps per-tick resizes cheap.
+        // Numbers are a pixel-measured clone of the WindowServer shadow this
+        // panel wears at rest (bottom: ~16% edge darkening over ~17px, sides
+        // ~11%), so the rest<->flight swap is invisible.
+        let menuShadow = NSShadow()
+        menuShadow.shadowColor = NSColor.black.withAlphaComponent(0.21)
+        menuShadow.shadowBlurRadius = 8.5
+        menuShadow.shadowOffset = NSSize(width: 0, height: -4)
+        shadow.shadow = menuShadow
+        root.addSubview(shadow)
+
+        // Blocks live INSIDE a plain container, never as the window
+        // contentView: as contentView, NSHostingView installs its own
+        // window-sizing machinery that fights manual resizes.
+        let shell = NSView(frame: NSRect(x: canvas.sideMargin, y: 0, width: canvas.width, height: 400))
         // Clip the whole container to the panel shape: the glass view's
         // square bounds otherwise peek past the rounded corners (double edge).
-        container.wantsLayer = true
-        container.layer?.cornerRadius = 16
-        container.layer?.masksToBounds = true
-        // The menu backdrop fills the WINDOW (not the content), so while the
-        // window height animates the glass always reaches the bottom edge.
-        // macOS 26 Liquid Glass, the material Control Center panels actually
-        // use (no NSVisualEffectView grade matches it). Its materialize bloom
-        // plays only when the view first comes on screen, which happens once
-        // during hidden warm-up; the panel never orders out afterwards.
+        shell.wantsLayer = true
+        shell.layer?.cornerRadius = 16
+        shell.layer?.masksToBounds = true
+        // The WindowServer shadow strokes a two-line rim around the window
+        // shape (measured: ~0.38 black just outside the boundary, ~0.32
+        // white on the first row inside; light mode shows the black line,
+        // dark mode the white one), and both vanish with hasShadow off.
+        // Flights redraw the white line as this border (width toggled in
+        // PanelCanvas); the black line lives on the outset shadow twin.
+        shell.layer?.borderColor = NSColor.white.withAlphaComponent(0.25).cgColor
+        // The menu backdrop: macOS 26 Liquid Glass, the material Control
+        // Center panels actually use (no NSVisualEffectView grade matches
+        // it). Its materialize bloom plays only when the view first comes on
+        // screen, which happens once during hidden warm-up; the panel never
+        // orders out afterwards.
         let backdrop: NSView
         if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView(frame: container.bounds)
+            let glass = NSGlassEffectView(frame: shell.bounds)
             glass.cornerRadius = 16
             backdrop = glass
         } else {
             // Pre-Tahoe: .popover is the translucent grade native menus and
             // Control Center panels show on macOS 15.
-            let material = NSVisualEffectView(frame: container.bounds)
+            let material = NSVisualEffectView(frame: shell.bounds)
             material.material = .popover
             material.state = .active
             material.wantsLayer = true
@@ -471,28 +448,210 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             material.layer?.masksToBounds = true
             backdrop = material
         }
-        backdrop.autoresizingMask = [.width, .height]
-        container.addSubview(backdrop)
-        // The hosting view is a fixed, oversized canvas glued to the window
-        // top and extending far past the bottom edge; the window edge simply
-        // reveals or clips it. Because it NEVER resizes with the window,
-        // animated height changes cause zero SwiftUI re-layout and no
-        // transient content shifts at the top.
-        let canvasHeight: CGFloat = 2400
-        hosting.frame = NSRect(x: 0, y: container.bounds.height - canvasHeight,
-                               width: size.width, height: canvasHeight)
-        hosting.autoresizingMask = [.minYMargin]
-        container.addSubview(hosting)
-        p.hostingView = hosting
-        p.lastContentSize = size
-        p.setFrame(NSRect(origin: NSPoint(x: 0, y: -4000), size: size), display: false)
-        p.contentView = container
-        p.layoutIfNeeded()
+        // Oversized fixed canvas glued to the shell top, clipped by the
+        // shell's rounded mask: resizing the shell then only MOVES the glass
+        // layer (autoresizing it with the shell cost ~3ms per tick in its
+        // internal layout).
+        let backdropHeight: CGFloat = 2200
+        backdrop.frame = NSRect(x: 0, y: shell.bounds.height - backdropHeight,
+                                width: canvas.width, height: backdropHeight)
+        backdrop.autoresizingMask = [.minYMargin]
+        shell.addSubview(backdrop)
+        root.addSubview(shell)
+        root.shell = shell
+        root.onOutsideClick = { [weak self] in self?.closePanel() }
+
+        p.setFrame(NSRect(x: 0, y: -4000, width: windowW, height: 480), display: false)
+        p.contentView = root
+        canvas.install(shell: shell, shadow: shadow, panel: p)
+        canvas.shadowMask = knockout
+        canvas.isShown = { [weak self] in self?.isPanelShown ?? false }
+        // Off-screen anchor for the warm-up; openPanel sets the real one.
+        canvas.setAnchor(topY: -4000, x: 0)
+        rebuildBlocksIfNeeded(force: true)
+        wireCanvasSubscriptions()
+
         // Bring the surface on screen invisibly so the backdrop's one-time
-        // materialize animation plays now, while nobody can see it.
+        // materialize animation plays now, while nobody can see it, and every
+        // block paints once (no first reveal is ever a first paint).
         p.alphaValue = 0
         p.ignoresMouseEvents = true
         p.orderFrontRegardless()
+        canvas.prePaint()
+    }
+
+    /// Displays that get their own section, in panel order (screen the panel
+    /// was opened on first, then builtin, then physical arrangement).
+    private func visibleDisplays() -> [DisplayInfo] {
+        let active = displayManager.activePanelDisplayID
+        return displayManager.displays
+            .filter { !VirtualDisplayService.shared.isVirtualDisplay($0.displayID) }
+            .sorted {
+                if ($0.displayID == active) != ($1.displayID == active) { return $0.displayID == active }
+                if $0.isBuiltin != $1.isBuiltin { return $0.isBuiltin }
+                let a = CGDisplayBounds($0.displayID), b = CGDisplayBounds($1.displayID)
+                return a.minY != b.minY ? a.minY < b.minY : a.minX < b.minX
+            }
+    }
+
+    /// Builds the block list when its identity changed (display set/order).
+    /// Rebuild is a snap, not an animation; it only happens on discontinuous
+    /// events (connect/disconnect, or a different screen on open).
+    private func rebuildBlocksIfNeeded(force: Bool = false) {
+        let vis = visibleDisplays()
+        let signature = vis.map(\.displayUUID).joined(separator: "|")
+        guard force || signature != blocksSignature else { return }
+        blocksSignature = signature
+
+        let dm = displayManager
+        let state = sectionState
+        let settings = SettingsService.shared
+        func host<V: View>(_ id: String, @ViewBuilder _ content: () -> V) -> NSView {
+            let h = NSHostingView(rootView: AnyView(
+                BlockHost(onHeight: { [weak self] h in self?.canvas.contentChanged(id, height: h) }) {
+                    content()
+                }
+                .environmentObject(dm)
+            ))
+            // Blocks near the window's top/bottom edge otherwise get a phantom
+            // safe-area inset: content shifts inside the host while the AppKit
+            // frame stays put, so clicks land ~12pt off (dead bands at the
+            // edges) and the inset flips with window height (spurious height
+            // reports, visible as jumps).
+            h.safeAreaRegions = []
+            return h
+        }
+        func block<V: View>(_ id: String, isOpen: @escaping () -> Bool = { true },
+                            @ViewBuilder _ content: () -> V) -> PanelBlock {
+            PanelBlock(id: id, host: host(id, content), isOpen: isOpen)
+        }
+
+        var blocks: [PanelBlock] = []
+        for (index, display) in vis.enumerated() {
+            let id = display.displayID
+            blocks.append(block("dhead-\(display.displayUUID)") {
+                DisplayHeaderBlock(display: display, isFirst: index == 0, state: state)
+            })
+            blocks.append(block("ddetail-\(display.displayUUID)",
+                                isOpen: { state.expandedDisplayIDs.contains(id) }) {
+                DisplayDetailView(display: display)
+            })
+        }
+        blocks.append(block("reconnect") { ReconnectDisplaysSection() })
+        let visCount = vis.count
+        blocks.append(block("combined",
+                            isOpen: { settings.showCombinedBrightness && visCount > 1 }) {
+            VStack(spacing: 0) {
+                SectionDivider()
+                CombinedBrightnessView(displays: vis)
+            }
+        })
+        if CoreBrightnessService.shared.darkModeAvailable
+            || CoreBrightnessService.shared.nightShiftAvailable
+            || CoreBrightnessService.shared.trueToneAvailable {
+            blocks.append(block("effects") { ScreenEffectsView() })
+        }
+        blocks.append(block("presets") {
+            VStack(alignment: .leading, spacing: 0) {
+                SectionDivider()
+                SectionHeader(title: "Presets")
+                PresetListView()
+            }
+        })
+        blocks.append(block("toolshead") {
+            VStack(alignment: .leading, spacing: 0) {
+                SectionDivider()
+                ExpandableRowStateful(icon: "wrench.and.screwdriver.fill", iconActive: false,
+                                      label: "Tools", state: state, key: \.showTools)
+            }
+        })
+        blocks.append(block("toolsA", isOpen: { state.showTools }) {
+            VStack(alignment: .leading, spacing: 0) {
+                KeepAwakeRow()
+                ExpandableRowStateful(icon: "display.2", iconActive: false,
+                                      label: "Virtual Displays", state: state, key: \.showVirtualDisplays)
+            }
+            .padding(.leading, 8)
+        })
+        blocks.append(block("vdrows", isOpen: { state.showTools && state.showVirtualDisplays }) {
+            VirtualDisplayView()
+                .padding(.leading, 16)
+        })
+        blocks.append(block("toolsB", isOpen: { [weak dm] in
+            state.showTools && (dm?.displays.count ?? 0) > 1
+        }) {
+            ExpandableRowStateful(icon: "rectangle.3.offgrid", iconActive: false,
+                                  label: "Arrange Displays", state: state, key: \.showArrangement)
+                .padding(.leading, 8)
+        })
+        blocks.append(block("arrangerows", isOpen: { [weak dm] in
+            state.showTools && state.showArrangement && (dm?.displays.count ?? 0) > 1
+        }) {
+            ArrangementView()
+                .padding(.leading, 8)
+        })
+        blocks.append(block("settingshead") {
+            ExpandableRowStateful(icon: "gearshape.fill", iconActive: false,
+                                  label: "Settings", state: state, key: \.showSettings)
+        })
+        blocks.append(block("settingsrows", isOpen: { state.showSettings }) {
+            SettingsView()
+                .padding(.leading, 8)
+        })
+        blocks.append(block("update") { UpdateBlockView() })
+
+        let footer = block("footer") { PanelFooterBlock() }
+        canvas.setBlocks(blocks, footer: footer)
+        canvas.snapToTargets()
+    }
+
+    /// Everything that must drive the canvas: section state, the combined
+    /// brightness preference, display list changes, and the deferred
+    /// resolution-section expand after a soft-reconnect.
+    private func wireCanvasSubscriptions() {
+        sectionState.objectWillChange
+            .sink { [weak self] _ in self?.canvas.requestApply() }
+            .store(in: &canvasCancellables)
+        // Light<->dark switched while the panel is open: re-tint the rim/shadow
+        // live (Control Center / System Settings post this app-wide). The async
+        // hop lets NSApp.effectiveAppearance settle to the new value first.
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.canvas.refreshAppearance() }
+        }
+        SettingsService.shared.$showCombinedBrightness
+            .dropFirst()
+            .sink { [weak self] _ in self?.canvas.requestApply() }
+            .store(in: &canvasCancellables)
+        displayManager.$displays
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newDisplays in
+                guard let self else { return }
+                let validIDs = Set(newDisplays.map { $0.displayID })
+                self.sectionState.expandedDisplayIDs.formIntersection(validIDs)
+                self.rebuildBlocksIfNeeded()
+                self.canvas.requestApply()
+            }
+            .store(in: &canvasCancellables)
+        displayManager.$pendingResolutionExpandUUID
+            .compactMap { $0 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] uuid in
+                // A smooth-scaling reconnect rebuilt this display's row collapsed;
+                // re-expand its detail so the reopened Resolution section shows.
+                guard let self,
+                      let d = self.displayManager.displays.first(where: { $0.displayUUID == uuid })
+                else { return }
+                self.sectionState.expandedDisplayIDs.insert(d.displayID)
+            }
+            .store(in: &canvasCancellables)
+        NotificationCenter.default.publisher(for: .crispPanelDidClose)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.sectionState.collapseAll() }
+            .store(in: &canvasCancellables)
     }
 
     @objc private func togglePanel() {
@@ -520,7 +679,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func positionPanel(_ p: MenuPanel, preferOrigin: Bool = false) {
-        let size = p.lastContentSize ?? p.frame.size
         guard let btnWindow = statusItem?.button?.window else { return }
         let btnFrame = btnWindow.frame
         let btnScreen = btnWindow.screen ?? NSScreen.main
@@ -540,9 +698,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             topY = origin.visibleFrame.maxY - 1
         }
         displayManager.activePanelDisplayID = screen?.displayID
-        var x = anchorMidX - size.width / 2
+        let width = canvas.width
+        var x = anchorMidX - width / 2
         if let vis = screen?.visibleFrame {
-            x = min(max(x, vis.minX + 8), vis.maxX - size.width - 8)
+            x = min(max(x, vis.minX + 8), vis.maxX - width - 8)
         }
         if let vis = screen?.visibleFrame {
             // Cap like the native Wi-Fi panel: grow to ~80% of the drop below
@@ -550,10 +709,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // the screen bottom instead of touching it.
             PanelMetrics.maxContentHeight = max(400, (topY - vis.minY) * 0.8)
         }
-        p.pinnedTopY = nil
-        p.setFrame(NSRect(x: x, y: topY - size.height, width: size.width, height: size.height),
-                   display: false)
-        p.pinnedTopY = topY
+        canvas.setAnchor(topY: topY, x: x)
+        canvas.snapToTargets()
     }
 
     private func showPanel() {
@@ -566,9 +723,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Native menus appear at full size with all content visible at once;
         // only size changes AFTER opening animate.
         positionPanel(p)
+        canvas.retargetLinkIfNeeded()
+        // The display order can differ per open (panel-screen-first sort);
+        // rebuild happens hidden, before the fade.
+        rebuildBlocksIfNeeded()
         // Remember where this open happened (fresh each open; the menu bar the
         // user clicked is the anchor, not wherever a previous open ended up).
         panelOriginDisplayUUID = displayManager.activePanelDisplayID.flatMap { displayUUID(for: $0) }
+
+        // Re-apply the appearance-tied rim/shadow before the panel becomes
+        // visible: the colors are only otherwise refreshed on a flight, so the
+        // first open (launch-time appearance) or an open after a light<->dark
+        // switch would show the other mode's rim until an expansion fixed it.
+        canvas.refreshAppearance()
 
         p.ignoresMouseEvents = false
         // First open only: fade in briefly so the panel's one-time on-screen costs
@@ -616,7 +783,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if clickMonitor == nil {
             clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
                 Task { @MainActor in
-                    guard let self, let p = self.panel else { return }
+                    guard let self, self.panel != nil else { return }
                     // Don't dismiss while our own admin auth dialog is up: those
                     // clicks land in SecurityAgent (outside the panel). Same for a
                     // tracking menu whose items spill outside the panel frame, or an
@@ -626,8 +793,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     // on the menu itself go to our own menu window and never reach
                     // this global monitor, so selecting an item (even one spilled
                     // past the panel edge) is unaffected.
+                    // The window frame includes transparent shadow margins;
+                    // the VISIBLE panel is the shell (canvas).
+                    let visible = self.canvas.visibleScreenFrame()
                     if PanelOpenGuard.isMenuTracking {
-                        if !p.frame.contains(NSEvent.mouseLocation) {
+                        if !visible.contains(NSEvent.mouseLocation) {
                             self.trackingMenu?.cancelTracking()
                         }
                         return
@@ -639,7 +809,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     // mode crossfade the system's snapshot overlay intercepts
                     // every click, so an inside click arrives here too; close
                     // only when the cursor is genuinely outside the panel.
-                    if p.frame.contains(NSEvent.mouseLocation) { return }
+                    if visible.contains(NSEvent.mouseLocation) { return }
                     self.closePanel()
                 }
             }
@@ -682,7 +852,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         p.isMovable = false
         p.isOpaque = false
         p.backgroundColor = .clear
-        p.hasShadow = true
+        // The shadow is a CALayer twin of the shell (PanelCanvas), not the
+        // WindowServer's: the server recomputes a transparent window's shadow
+        // from its alpha shape on EVERY setFrame (~5ms, measured), which is
+        // what made animated resizes judder.
+        p.hasShadow = false
         p.animationBehavior = .none
         p.isReleasedWhenClosed = false
         p.collectionBehavior = [.transient, .ignoresCycle]
@@ -706,46 +880,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if Date() < PanelOpenGuard.resignKeyGraceUntil { return }
             // Same overlay caveat as the click monitor: during the crossfade
             // the snapshot window can steal key while the user is clicking
-            // INSIDE the panel; don't treat that as clicking away.
-            if let p = panel, p.frame.contains(NSEvent.mouseLocation) { return }
+            // INSIDE the panel; don't treat that as clicking away. The window
+            // frame includes shadow margins, so test the visible shell.
+            if canvas.visibleScreenFrame().contains(NSEvent.mouseLocation) { return }
             closePanel()
         }
     }
 }
 
-/// Root SwiftUI view of the panel: menu content on the system glass backdrop.
-struct PanelRootView: View {
-    let displayManager: DisplayManager
-
-    // Temporary probe: cadence of the root geometry callback vs the window's
-    // actual height, to settle whether onGeometryChange delivers per-frame
-    // eased values or one final value per change. Read with:
-    //   log show --last 5m --predicate 'subsystem == "com.crisp.app" && category == "panelresize"'
-    static let resizeLogger = Logger(subsystem: "com.crisp.app", category: "panelresize")
-
-    var body: some View {
-        // Top-aligned inside the window: if window and content ever disagree,
-        // the excess window area is transparent below the glass instead of an
-        // empty glass gap above the content.
-        VStack(spacing: 0) {
-            MenuBarView()
-                .environmentObject(displayManager)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .onGeometryChange(for: CGSize.self) { proxy in
-                    proxy.size
-                } action: { size in
-                    // Resize the window synchronously with content layout so the
-                    // two can never disagree. MenuPanel re-anchors every frame
-                    // change to its pinned top, so growth goes downward.
-                    guard size.width > 0, size.height > 0,
-                          let w = NSApp.windows.first(where: { $0 is MenuPanel }) as? MenuPanel else { return }
-                    PanelRootView.resizeLogger.log("geo h=\(size.height, format: .fixed(precision: 1)) win=\(w.frame.height, format: .fixed(precision: 1))")
-                    w.applyContentSize(size)
-                }
-        }
-        // Top-glued: while the window is shorter than the content (the open
-        // unfurl), the overflow extends below the window edge and is clipped,
-        // instead of the content centering inside the short window.
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-}
