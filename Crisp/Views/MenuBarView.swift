@@ -653,13 +653,16 @@ struct DisplayRowView: View {
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 .accessibilityHidden(true)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        // Tap AFTER the padding so the clickable shape is the full padded row,
+        // identical to the hover highlight; before it, the padding was a dead
+        // border (clicks on the visibly highlighted edge did nothing).
         .contentShape(Rectangle())
         .onTapGesture {
             guard PanelOpenGuard.allowsActivation else { return }
             onToggleExpand()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
         .menuRowHover(isHovered)
         .onHover { isHovered = $0 }
         .contextMenu {
