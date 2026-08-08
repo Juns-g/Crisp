@@ -116,6 +116,13 @@
             <td class="c"><span class="yes">✓</span></td>
           </tr>
           <tr>
+            <th>显示器音箱音量（DDC）</th>
+            <td class="c col-me"><span class="yes">✓</span></td>
+            <td class="c"><span class="yes">✓</span></td>
+            <td class="c"><span class="yes">✓</span></td>
+            <td class="c"><span class="yes">✓</span></td>
+          </tr>
+          <tr>
             <th>自适应 / 环境光亮度</th>
             <td class="c col-me"><span class="yes">✓</span></td>
             <td class="c">~</td>
@@ -152,7 +159,7 @@
           </tr>
           <tr>
             <th>XDR / HDR 亮度增强</th>
-            <td class="c col-me"><span class="no">✗</span></td>
+            <td class="c col-me"><span class="yes">✓</span></td>
             <td class="c"><span class="pro">Pro</span></td>
             <td class="c"><span class="pro">Pro</span></td>
             <td class="c"><span class="no">✗</span></td>
@@ -185,13 +192,13 @@
     <p class="note">价格和免费 / Pro 的划分参考各自的官方文档整理（BetterDisplay、Lunar，截至 2026 年年中）。功能会在版本间调整，具体以官网为准。</p>
 
     <h2>为什么选 Crisp</h2>
-    <p>如果你要的只是 1440p 或 4K 显示器上清晰的 HiDPI，再加上亮度（Mac 的亮度键也能直接调外接屏，和内建屏一样）、预设和排列，Crisp 全都免费给你。<strong>不用重置试用期，不用花钱买授权码，更不用去找破解版</strong>，因为它根本没有付费版。开源（MIT），代码随便看，也能自己编译。</p>
+    <p>如果你要的只是 1440p 或 4K 显示器上清晰的 HiDPI，再加上亮度（Mac 的亮度键也能直接调外接屏，和内建屏一样）、预设和排列，Crisp 全都免费给你。现在还包括 <strong>XDR/HDR 额外亮度</strong>，把 XDR MacBook 或 HDR 显示器推过 100%，这项功能 BetterDisplay 和 Lunar 都锁在 Pro 里；另外还能通过 DDC 调显示器自带音箱的音量。<strong>不用重置试用期，不用花钱买授权码，更不用去找破解版</strong>，因为它根本没有付费版。开源（MIT），代码随便看，也能自己编译。</p>
 
     <h2>BetterDisplay Pro 仍然领先的地方</h2>
-    <p>先把话说清楚：Crisp 目前<strong>不支持</strong> XDR/HDR 亮度增强、EDID 覆写、画中画，也没有快捷指令和命令行自动化。如果你就是需要这些，<strong>BetterDisplay Pro 更合适</strong>，它成熟、维护得好，21.99 美元也算公道。但如果你要的只是日常的显示器控制，清晰又免费，Crisp 完全够用。</p>
+    <p>先把话说清楚：Crisp 目前<strong>不支持</strong> EDID 覆写、画中画，也没有快捷指令和命令行自动化。如果你就是需要这些，<strong>BetterDisplay Pro 更合适</strong>，它成熟、维护得好，21.99 美元也算公道。但如果你要的只是日常的显示器控制，清晰又免费，Crisp 完全够用。</p>
 
     <h2>Crisp 对比 BetterDisplay、Lunar、MonitorControl</h2>
-    <p><strong>Crisp 对比 BetterDisplay：</strong>日常功能高度重合，但 BetterDisplay 把灵活的 HiDPI 缩放锁进了 Pro（21.99 美元），还多了 XDR/HDR、EDID 覆写、画中画这些 Crisp 没有的功能。想免费用上清晰的 HiDPI、亮度和预设，就选 Crisp；需要那些进阶功能，就买 BetterDisplay Pro。</p>
+    <p><strong>Crisp 对比 BetterDisplay：</strong>日常功能高度重合，但 BetterDisplay 把灵活的 HiDPI 缩放和 XDR/HDR 亮度增强锁进了 Pro（21.99 美元），还多了 EDID 覆写、画中画这些 Crisp 没有的功能。想免费用上清晰的 HiDPI、亮度、XDR/HDR 增强和预设，就选 Crisp；需要那些进阶功能，就买 BetterDisplay Pro。</p>
     <p><strong>Crisp 对比 Lunar：</strong>Lunar 专攻亮度，自适应、环境光调光做得很好，不过都锁进了 Pro；它不支持 HiDPI 缩放，免费版每天调超过 100 次就停了。Crisp 既能开 HiDPI 又能调亮度，而且没有每天的次数上限。</p>
     <p><strong>Crisp 对比 MonitorControl：</strong>MonitorControl 同样免费开源，但只管亮度和音量。如果你只需要这些，它很好用；要是还想要 HiDPI 缩放、预设和排列，那就选 Crisp。</p>
 
@@ -223,7 +230,7 @@
       <span class="prompt">$</span> brew install --cask didriksg/tap/crisp
       <span class="hint">点击复制</span>
     </div>
-    <p class="note">也可以到 GitHub Releases 下载 DMG，拖进「应用程序」即可。要求 macOS 15 及以上。</p>
+    <p class="note">也可以到 GitHub Releases 下载 DMG，拖进「应用程序」即可。要求 macOS 14 及以上。</p>
   </article>
 
   <div class="cta">

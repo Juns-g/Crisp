@@ -12,7 +12,7 @@ Sharp HiDPI scaling, DDC brightness, presets and virtual displays.
 [<img src="docs/download-macos.png" alt="Download Crisp for macOS" width="180">](https://github.com/didriksg/Crisp/releases/latest/download/Crisp.dmg)
 
 [![Downloads](https://img.shields.io/github/downloads/didriksg/Crisp/total?label=downloads&color=2f81f7)](https://github.com/didriksg/Crisp/releases)
-[![Platform](https://img.shields.io/badge/platform-macOS%2015%2B-blue)](#requirements)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)](#requirements)
 [![License](https://img.shields.io/github/license/didriksg/Crisp?color=3fb950)](LICENSE)
 
 [Website](https://didriksg.github.io/Crisp/) · [Crisp vs BetterDisplay & Lunar](https://didriksg.github.io/Crisp/crisp-vs-betterdisplay.html) · [Fix a blurry external monitor](https://didriksg.github.io/Crisp/fix-blurry-external-monitor-macos.html) · [中文](https://didriksg.github.io/Crisp/zh.html)
