@@ -5,8 +5,8 @@ import CoreGraphics
 ///
 /// `DDCServiceMatcher` is compiled directly into this test target (see `project.yml`
 /// sources, same route as `DisplayModeGeometry`), so no `@testable import Crisp` is
-/// needed — that would pull IOKit + the private bridging header and defeat headless
-/// purity. Each test names the mutation it is designed to kill in a trailing comment.
+/// needed (that would pull IOKit + the private bridging header and defeat headless
+/// purity). Each test names the mutation it is designed to kill in a trailing comment.
 final class DDCServiceMatcherTests: XCTestCase {
 
     // MARK: - Strategy 1: exact (vendor + product + serial) matching
@@ -20,8 +20,8 @@ final class DDCServiceMatcherTests: XCTestCase {
             services: [idA],
             displays: [(id: 1, identity: idA)]
         )
-        XCTAssertEqual(result.assignments, [.init(displayID: 1, serviceIndex: 0)])
-        XCTAssertEqual(result.unmatchedServiceIndices, [])
+        XCTAssertEqual(result.byDisplayID, [1: 0])
+        XCTAssertEqual(unmatchedIndices(services: [idA], result: result), [])
         XCTAssertFalse(result.ambiguous)
     }
 
@@ -38,8 +38,8 @@ final class DDCServiceMatcherTests: XCTestCase {
                 (id: 1, identity: .init(vendor: 0x10ac, product: 0x41c0, serial: 0x0005))
             ]
         )
-        XCTAssertEqual(result.assignments, [.init(displayID: 1, serviceIndex: 0)])
-        XCTAssertEqual(result.unmatchedServiceIndices, [])
+        XCTAssertEqual(result.byDisplayID, [1: 0])
+        XCTAssertEqual(unmatchedIndices(services: [svc], result: result), [])
         XCTAssertFalse(result.ambiguous)
     }
 
@@ -53,14 +53,14 @@ final class DDCServiceMatcherTests: XCTestCase {
             services: [svc],
             displays: [(id: 1, identity: .init(vendor: 0x10ac, product: 0x41c0, serial: 0x9999))]
         )
-        XCTAssertEqual(result.assignments, [.init(displayID: 1, serviceIndex: 0)])
-        XCTAssertEqual(result.unmatchedServiceIndices, [])
+        XCTAssertEqual(result.byDisplayID, [1: 0])
+        XCTAssertEqual(unmatchedIndices(services: [svc], result: result), [])
         XCTAssertFalse(result.ambiguous)
     }
 
     /// Serial-0 service; display 5 shares vendor+product, display 2 does not. Correct
     /// byModel matching claims display 5. If byModel were dropped (M1), the service
-    /// falls through to Strategy 2 and claims leftovers[0] = display 2 — a mis-pair.
+    /// falls through to Strategy 2 and claims leftovers[0] = display 2, a mis-pair.
     /// Kills mutation M1: "remove the byModel fallback, keep only exact match".
     func testByModelFallbackPicksCorrectDisplayNotFallbackOrder() {
         let svc = DDCServiceMatcher.Identity(vendor: 0x10ac, product: 0x41c0, serial: 0)
@@ -71,8 +71,8 @@ final class DDCServiceMatcherTests: XCTestCase {
                 (id: 2, identity: .init(vendor: 0x9999, product: 0x8888, serial: 0x0001))
             ]
         )
-        XCTAssertEqual(result.assignments, [.init(displayID: 5, serviceIndex: 0)])
-        XCTAssertEqual(result.unmatchedServiceIndices, [])
+        XCTAssertEqual(result.byDisplayID, [5: 0])
+        XCTAssertEqual(unmatchedIndices(services: [svc], result: result), [])
         XCTAssertFalse(result.ambiguous)
     }
 
@@ -87,11 +87,8 @@ final class DDCServiceMatcherTests: XCTestCase {
             services: [idA, idB],
             displays: [(id: 1, identity: idA), (id: 2, identity: idB)]
         )
-        XCTAssertEqual(result.assignments, [
-            .init(displayID: 1, serviceIndex: 0),
-            .init(displayID: 2, serviceIndex: 1)
-        ])
-        XCTAssertEqual(result.unmatchedServiceIndices, [])
+        XCTAssertEqual(result.byDisplayID, [1: 0, 2: 1])
+        XCTAssertEqual(unmatchedIndices(services: [idA, idB], result: result), [])
         XCTAssertFalse(result.ambiguous)
     }
 
@@ -105,17 +102,14 @@ final class DDCServiceMatcherTests: XCTestCase {
             services: [idA, idA],
             displays: [(id: 1, identity: idA), (id: 2, identity: idA)]
         )
-        XCTAssertEqual(result.assignments, [
-            .init(displayID: 1, serviceIndex: 0),
-            .init(displayID: 2, serviceIndex: 1)
-        ])
-        XCTAssertEqual(result.unmatchedServiceIndices, [])
+        XCTAssertEqual(result.byDisplayID, [1: 0, 2: 1])
+        XCTAssertEqual(unmatchedIndices(services: [idA, idA], result: result), [])
         XCTAssertFalse(result.ambiguous)
     }
 
     /// *Two identical monitors (same real serial).* Documents the known limitation: this
     /// is NOT flagged ambiguous (a deliberate product decision, pinned here, not changed).
-    /// Also pins that Strategy 1's `.first` scan honors the given `displays` order —
+    /// Also pins that Strategy 1's `.first` scan honors the given `displays` order:
     /// service0 claims display 7 (first), service1 claims display 3.
     /// Kills mutation M4: "sort `displays` before the Strategy 1 scan" → would flip to
     /// [(3, 0), (7, 1)].
@@ -125,11 +119,8 @@ final class DDCServiceMatcherTests: XCTestCase {
             services: [idX, idX],
             displays: [(id: 7, identity: idX), (id: 3, identity: idX)]
         )
-        XCTAssertEqual(result.assignments, [
-            .init(displayID: 7, serviceIndex: 0),
-            .init(displayID: 3, serviceIndex: 1)
-        ])
-        XCTAssertEqual(result.unmatchedServiceIndices, [])
+        XCTAssertEqual(result.byDisplayID, [7: 0, 3: 1])
+        XCTAssertEqual(unmatchedIndices(services: [idX, idX], result: result), [])
         XCTAssertFalse(result.ambiguous)
     }
 
@@ -145,44 +136,41 @@ final class DDCServiceMatcherTests: XCTestCase {
             services: [nil, nil],
             displays: [(id: 5, identity: any), (id: 2, identity: any)]
         )
-        XCTAssertEqual(result.assignments, [
-            .init(displayID: 2, serviceIndex: 0),
-            .init(displayID: 5, serviceIndex: 1)
-        ])
-        XCTAssertEqual(result.unmatchedServiceIndices, [])
+        XCTAssertEqual(result.byDisplayID, [2: 0, 5: 1])
+        XCTAssertEqual(unmatchedIndices(services: [nil, nil], result: result), [])
         XCTAssertTrue(result.ambiguous)
     }
 
     /// *More services than displays (truncation).* service0 exact-matches display 1;
     /// services 1 and 2 have nil identity and no leftover to claim.
     /// Kills mutation: a fallback loop that assigns past `leftovers.count` (index-out-of-
-    /// bounds crash), or a matcher that reports `unmatchedServiceIndices` pre-fallback.
+    /// bounds crash), or one that surfaces a service as unmatched even after the fallback
+    /// claimed it.
     func testMoreServicesThanDisplaysTruncatesGracefully() {
         let idA = DDCServiceMatcher.Identity(vendor: 0x10ac, product: 0x41c0, serial: 0x1)
         let result = DDCServiceMatcher.match(
             services: [idA, nil, nil],
             displays: [(id: 1, identity: idA)]
         )
-        XCTAssertEqual(result.assignments, [.init(displayID: 1, serviceIndex: 0)])
-        XCTAssertEqual(result.unmatchedServiceIndices, [1, 2])
+        XCTAssertEqual(result.byDisplayID, [1: 0])
+        XCTAssertEqual(unmatchedIndices(services: [idA, nil, nil], result: result), [1, 2])
         XCTAssertFalse(result.ambiguous)
     }
 
     /// A single nil-identity service: Strategy 1 skips it, but Strategy 2 assigns it the
-    /// sole leftover (display 1). It is therefore NOT in the post-fallback unmatched set
-    /// (the documented departure from the original's scratch array), and with one leftover
-    /// it is not ambiguous.
-    /// Kills mutation: crashing on `nil`; including nil-identity services in
-    /// `unmatchedServiceIndices` even after the fallback claims them; or forgetting to run
-    /// Strategy 2 for services that skipped Strategy 1.
+    /// sole leftover (display 1). It is therefore NOT unmatched post-fallback, and with
+    /// one leftover it is not ambiguous.
+    /// Kills mutation: crashing on `nil`; leaving a nil-identity service unassigned after
+    /// the fallback should have claimed it; or forgetting to run Strategy 2 for services
+    /// that skipped Strategy 1.
     func testNilIdentityServiceSkipsStrategy1() {
         let idA = DDCServiceMatcher.Identity(vendor: 0x10ac, product: 0x41c0, serial: 0x1)
         let result = DDCServiceMatcher.match(
             services: [nil],
             displays: [(id: 1, identity: idA)]
         )
-        XCTAssertEqual(result.assignments, [.init(displayID: 1, serviceIndex: 0)])
-        XCTAssertEqual(result.unmatchedServiceIndices, [])
+        XCTAssertEqual(result.byDisplayID, [1: 0])
+        XCTAssertEqual(unmatchedIndices(services: [nil], result: result), [])
         XCTAssertFalse(result.ambiguous)
     }
 
@@ -224,7 +212,7 @@ final class DDCServiceMatcherTests: XCTestCase {
     // MARK: - Empty-input edges
 
     /// No services and/or no displays must not crash and must yield an empty result
-    /// (never ambiguous — there are never >1 leftover to guess among). The no-services
+    /// (never ambiguous: there are never >1 leftover to guess among). The no-services
     /// case is production-reachable: an external display is present but the IOKit walk
     /// found zero working DDC channels, so `ordered`/`identities` (and thus `services`)
     /// are empty while `displays` is not.
@@ -233,20 +221,34 @@ final class DDCServiceMatcherTests: XCTestCase {
 
         // No services → nothing to assign; the lone display is simply unclaimed.
         let noServices = DDCServiceMatcher.match(services: [], displays: [(id: 1, identity: any)])
-        XCTAssertEqual(noServices.assignments, [])
-        XCTAssertEqual(noServices.unmatchedServiceIndices, [])
+        XCTAssertEqual(noServices.byDisplayID, [:])
+        XCTAssertEqual(unmatchedIndices(services: [], result: noServices), [])
         XCTAssertFalse(noServices.ambiguous)
 
         // No displays → every service is unmatched; still not ambiguous (0 leftovers).
         let noDisplays = DDCServiceMatcher.match(services: [nil], displays: [])
-        XCTAssertEqual(noDisplays.assignments, [])
-        XCTAssertEqual(noDisplays.unmatchedServiceIndices, [0])
+        XCTAssertEqual(noDisplays.byDisplayID, [:])
+        XCTAssertEqual(unmatchedIndices(services: [nil], result: noDisplays), [0])
         XCTAssertFalse(noDisplays.ambiguous)
 
         // Both empty → trivially empty.
         let bothEmpty = DDCServiceMatcher.match(services: [], displays: [])
-        XCTAssertEqual(bothEmpty.assignments, [])
-        XCTAssertEqual(bothEmpty.unmatchedServiceIndices, [])
+        XCTAssertEqual(bothEmpty.byDisplayID, [:])
+        XCTAssertEqual(unmatchedIndices(services: [], result: bothEmpty), [])
         XCTAssertFalse(bothEmpty.ambiguous)
+    }
+
+    // MARK: - Derived helpers
+
+    /// Post-fallback service indices that no display claimed, derived from the mapping.
+    /// The production `Result` carries only the displayID-keyed mapping and the ambiguity
+    /// flag, so tests recompute this same fact: a service is unmatched iff its index
+    /// never appears as a value in `byDisplayID`.
+    private func unmatchedIndices(
+        services: [DDCServiceMatcher.Identity?],
+        result: DDCServiceMatcher.Result
+    ) -> [Int] {
+        let claimed = Set(result.byDisplayID.values)
+        return services.indices.filter { !claimed.contains($0) }
     }
 }

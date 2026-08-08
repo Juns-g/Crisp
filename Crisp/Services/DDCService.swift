@@ -55,13 +55,6 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     /// and we fall back to traversal-order AVService assignment.
     @Published var mappingWarning: String? = nil
 
-    /// A physical display's identity as reported by IOKit's DisplayAttributes → ProductAttributes.
-    private struct DisplayIdentity {
-        let vendor: UInt32
-        let product: UInt32
-        let serial: UInt32
-    }
-
     /// Builds a display→AVService map by walking the IOService registry depth-first.
     ///
     /// On Apple Silicon the DDC channel (DCPAVServiceProxy) and the display's identity
@@ -105,8 +98,8 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         defer { IOObjectRelease(iterator) }
 
         var ordered: [IOAVServiceRef] = []
-        var identities: [DisplayIdentity?] = []
-        var lastIdentity: DisplayIdentity? = nil
+        var identities: [DDCServiceMatcher.Identity?] = []
+        var lastIdentity: DDCServiceMatcher.Identity? = nil
 
         var entry = IOIteratorNext(iterator)
         while entry != IO_OBJECT_NULL {
@@ -141,23 +134,22 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 
         // Strategy 1 + Strategy 2 + the ambiguity flag live in the pure, headless-testable
         // `DDCServiceMatcher` (Crisp/Models/DDCServiceMatcher.swift). Its inputs are the
-        // IORegistry identities collected above and the CoreGraphics display list; the
-        // matching semantics are byte-for-byte those the inline code used previously.
-        let services = identities.map { idty -> DDCServiceMatcher.Identity? in
-            guard let idty else { return nil }
-            return DDCServiceMatcher.Identity(vendor: idty.vendor, product: idty.product, serial: idty.serial)
-        }
+        // IORegistry identities collected above (already `DDCServiceMatcher.Identity`) and
+        // the CoreGraphics display list; the matching semantics are byte-for-byte those the
+        // inline code used previously.
         let displays: [(id: CGDirectDisplayID, identity: DDCServiceMatcher.Identity)] = externalIDs.map {
             (id: $0, identity: DDCServiceMatcher.Identity(
                 vendor: CGDisplayVendorNumber($0),
                 product: CGDisplayModelNumber($0),
                 serial: CGDisplaySerialNumber($0)))
         }
-        let result = DDCServiceMatcher.match(services: services, displays: displays)
+        let result = DDCServiceMatcher.match(services: identities, displays: displays)
 
         var map: [CGDirectDisplayID: IOAVServiceRef] = [:]
-        for assignment in result.assignments {
-            map[assignment.displayID] = ordered[assignment.serviceIndex]
+        // Safe: each CGDirectDisplayID key is assigned exactly once, so the unspecified
+        // Dictionary iteration order cannot drop or overwrite an entry.
+        for (displayID, serviceIndex) in result.byDisplayID {
+            map[displayID] = ordered[serviceIndex]
         }
 
         // Warn only when the fallback had to guess among >1 indistinguishable displays.
@@ -172,7 +164,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     /// Extracts vendor/product/serial from a ProductAttributes dictionary. The numeric
     /// LegacyManufacturerID / ProductID / SerialNumber match CGDisplayVendorNumber /
     /// CGDisplayModelNumber / CGDisplaySerialNumber for the same physical display.
-    private func displayIdentity(from productAttributes: [String: Any]) -> DisplayIdentity? {
+    private func displayIdentity(from productAttributes: [String: Any]) -> DDCServiceMatcher.Identity? {
         func u32(_ value: Any?) -> UInt32? {
             if let v = value as? UInt32 { return v }
             if let v = value as? Int { return UInt32(bitPattern: Int32(truncatingIfNeeded: v)) }
@@ -181,8 +173,8 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         }
         guard let vendor = u32(productAttributes["LegacyManufacturerID"]),
               let product = u32(productAttributes["ProductID"]) else { return nil }
-        return DisplayIdentity(vendor: vendor, product: product,
-                               serial: u32(productAttributes["SerialNumber"]) ?? 0)
+        return DDCServiceMatcher.Identity(vendor: vendor, product: product,
+                                          serial: u32(productAttributes["SerialNumber"]) ?? 0)
     }
 
     /// Returns the IOKit class name of a registry entry.
