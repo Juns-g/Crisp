@@ -89,7 +89,7 @@ extension Notification.Name {
 extension Animation {
     /// Duration shared by the SwiftUI curtains nested inside blocks and the
     /// panel window's FrameSpring (PanelCanvas); change both by changing this.
-    static let panelResizeDuration: Double = 0.18
+    static let panelResizeDuration: Double = 0.16
     /// The one curve every panel size change shares (rows, footer, window, and
     /// icon state fades): the smooth spring Control Center panels use when a list
     /// expands.
