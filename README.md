@@ -72,7 +72,7 @@ Thank you to the people chipping in toward keeping Crisp signed and notarized:
 
 ## Requirements
 
-- macOS 15 (Sequoia) or later; on macOS 26 the panel uses the native Liquid Glass backdrop
+- macOS 14 (Sonoma) or later; on macOS 26 the panel uses the native Liquid Glass backdrop
 
 ## Permissions
 
