@@ -529,12 +529,71 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         var blocks: [PanelBlock] = []
         for (index, display) in vis.enumerated() {
             let id = display.displayID
-            blocks.append(block("dhead-\(display.displayUUID)") {
+            let uuid = display.displayUUID
+            blocks.append(block("dhead-\(uuid)") {
                 DisplayHeaderBlock(display: display, isFirst: index == 0, state: state)
             })
-            blocks.append(block("ddetail-\(display.displayUUID)",
-                                isOpen: { state.expandedDisplayIDs.contains(id) }) {
-                DisplayDetailView(display: display)
+            // The expanded detail, split so every dropdown is its own block:
+            // the canvas animates each reveal as a clip over content that
+            // rendered once at natural height, so nothing re-renders per frame
+            // (the 120Hz fix for the nested dropdowns; docs/panel-resize.md).
+            // Controllers hold the state the sibling blocks share; the block
+            // hosts retain them. Every detail block carries the shaded band
+            // (leading padding + background) the one-piece detail view had.
+            let modeC = DisplayModeController(display: display, displayManager: dm)
+            let profC = DisplayProfileController(display: display)
+            let detailOpen = { state.expandedDisplayIDs.contains(id) }
+            func detail<V: View>(_ sub: String, isOpen: @escaping () -> Bool,
+                                 @ViewBuilder _ content: () -> V) -> PanelBlock {
+                block("\(sub)-\(uuid)", isOpen: isOpen) {
+                    content()
+                        .padding(.leading, 4)
+                        .background(Color.primary.opacity(0.08))
+                }
+            }
+            blocks.append(detail("dres-head", isOpen: detailOpen) {
+                ResolutionHeadBlock(controller: modeC, display: display, state: state)
+            })
+            blocks.append(detail("dres-body", isOpen: {
+                detailOpen() && state.resolutionOpenIDs.contains(id)
+            }) {
+                ResolutionSliderBlock(controller: modeC, display: display, state: state)
+            })
+            blocks.append(detail("dres-all", isOpen: {
+                detailOpen() && state.resolutionOpenIDs.contains(id)
+                    && state.allResolutionsOpenIDs.contains(id)
+            }) {
+                ResolutionFullListBlock(controller: modeC, display: display)
+            })
+            blocks.append(detail("dref-head", isOpen: detailOpen) {
+                RefreshHeadBlock(controller: modeC, display: display, state: state)
+            })
+            blocks.append(detail("dref-body", isOpen: {
+                detailOpen() && state.refreshOpenIDs.contains(id)
+            }) {
+                RefreshListBlock(controller: modeC, display: display)
+            })
+            blocks.append(detail("dmode-tail", isOpen: detailOpen) {
+                ModeTailBlock(controller: modeC, display: display)
+            })
+            blocks.append(detail("dprof-head", isOpen: detailOpen) {
+                ProfileHeadBlock(controller: profC, state: state)
+            })
+            blocks.append(detail("dprof-body", isOpen: {
+                detailOpen() && state.profileOpenIDs.contains(id)
+            }) {
+                ProfileBodyBlock(controller: profC)
+            })
+            blocks.append(detail("dimg-head", isOpen: detailOpen) {
+                ImageHeadBlock(display: display, state: state)
+            })
+            blocks.append(detail("dimg-body", isOpen: {
+                detailOpen() && state.imageOpenIDs.contains(id)
+            }) {
+                ImageBodyBlock(display: display, state: state)
+            })
+            blocks.append(detail("dtail", isOpen: detailOpen) {
+                DetailTailBlock(display: display)
             })
         }
         blocks.append(block("reconnect") { ReconnectDisplaysSection() })
@@ -631,7 +690,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .sink { [weak self] newDisplays in
                 guard let self else { return }
                 let validIDs = Set(newDisplays.map { $0.displayID })
-                self.sectionState.expandedDisplayIDs.formIntersection(validIDs)
+                self.sectionState.retainDisplays(validIDs)
                 self.rebuildBlocksIfNeeded()
                 self.canvas.requestApply()
             }
@@ -641,11 +700,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] uuid in
                 // A smooth-scaling reconnect rebuilt this display's row collapsed;
-                // re-expand its detail so the reopened Resolution section shows.
+                // re-expand its detail and reopen its Resolution section, so the
+                // user lands back where they were.
                 guard let self,
                       let d = self.displayManager.displays.first(where: { $0.displayUUID == uuid })
                 else { return }
                 self.sectionState.expandedDisplayIDs.insert(d.displayID)
+                self.sectionState.resolutionOpenIDs.insert(d.displayID)
+                // Consume the request (the compactMap above ignores the nil).
+                DispatchQueue.main.async { self.displayManager.pendingResolutionExpandUUID = nil }
             }
             .store(in: &canvasCancellables)
         NotificationCenter.default.publisher(for: .crispPanelDidClose)

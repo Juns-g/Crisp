@@ -1,73 +1,129 @@
 import SwiftUI
 
-// MARK: - DisplayDetailView
+// The expanded per-display detail, split into canvas blocks (docs/panel-resize.md):
+// the mode section (DisplayModeListView.swift), then the preset / color-profile
+// section, image adjustment, and the trailing toggle rows below. Each dropdown
+// is its own block so the canvas animates its reveal as a clip over content that
+// rendered once; nothing SwiftUI-animates block geometry.
 
-struct DisplayDetailView: View {
-    @ObservedObject var display: DisplayInfo
-    @EnvironmentObject var displayManager: DisplayManager
-    @State private var showPreset: Bool = false
-    @State private var showColorProfile: Bool = false
-    @State private var showImageAdjustment: Bool = false
-    @State private var activeProfileName: String = ""
-    @State private var presetName: String = ""
+/// Per-display preset / color-profile names, shared by the header row (subtitle)
+/// and the body list, which are separate blocks. Created per display when the
+/// block list is (re)built; the block hosts retain it.
+@MainActor
+final class DisplayProfileController: ObservableObject {
+    let display: DisplayInfo
+    @Published var presetName: String = ""
+    @Published var activeProfileName: String = ""
+
+    init(display: DisplayInfo) {
+        self.display = display
+    }
+
+    func reload() {
+        activeProfileName = ColorProfileService.shared.currentColorSpaceName(for: display.displayID)
+        let svc = DisplayPresetService.shared
+        if let idx = svc.activePresetIndex(for: display.displayID) {
+            presetName = svc.presets(for: display.displayID)
+                .first(where: { $0.index == idx })?.name ?? ""
+        } else {
+            presetName = ""
+        }
+    }
+
+    func refreshActiveProfileName() {
+        activeProfileName = ColorProfileService.shared.currentColorSpaceName(for: display.displayID)
+    }
+}
+
+/// Preset (XDR builtin panels, mirrors the System Settings "Preset" menu) or
+/// Color Profile header row; the two are mutually exclusive, matching System
+/// Settings (XDR panels get Preset instead of a profile picker).
+struct ProfileHeadBlock: View {
+    @ObservedObject var controller: DisplayProfileController
+    @ObservedObject var state: PanelSectionState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-
-            // Brightness slider is inline at the top level (avoid duplication); HiDPI toggle moved to Settings
-
-            // Resolution + Refresh Rate, each a top-level one-click section
-            DisplayModeSection(display: display)
-
-            SectionDivider()
-
-            // Reference preset section (XDR builtin panels), mirrors the
-            // System Settings "Preset" menu
-            if !presetName.isEmpty {
+        Group {
+            if !controller.presetName.isEmpty {
                 ExpandableRow(
                     icon: "camera.filters",
                     iconActive: false,
                     label: "Preset",
-                    subtitle: presetName,
-                    isExpanded: $showPreset
+                    subtitle: controller.presetName,
+                    isExpanded: state.openBinding(\.profileOpenIDs, controller.display.displayID)
                 )
-
-                DisplayPresetView(displayID: display.displayID, activeName: $presetName)
-                    .curtainReveal(showPreset)
-            }
-
-            // Color profile section; hidden when the display has presets,
-            // matching System Settings (XDR panels get Preset instead)
-            if presetName.isEmpty {
+            } else {
                 ExpandableRow(
                     icon: "paintpalette.fill",
                     iconActive: false,
                     label: "Color Profile",
-                    subtitle: activeProfileName,
-                    isExpanded: $showColorProfile
+                    subtitle: controller.activeProfileName,
+                    isExpanded: state.openBinding(\.profileOpenIDs, controller.display.displayID)
                 )
-
-                VStack(spacing: 0) {
-                    if showColorProfile {
-                        ColorProfileView(display: display, activeProfileName: $activeProfileName)
-                            .transition(.opacity)
-                    }
-                }
-                .clipped()
             }
+        }
+        .task { controller.reload() }
+        // The active profile changes outside this view: System Settings, and
+        // HDR mode switches (macOS swaps the display's profile with the mode).
+        // Re-read on panel open and on screen reconfiguration, debounced
+        // because mode switches emit bursts.
+        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidOpen)) { _ in
+            controller.refreshActiveProfileName()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+                .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+        ) { _ in
+            controller.refreshActiveProfileName()
+        }
+    }
+}
 
-            // Image adjustment section
-            ExpandableRow(
-                icon: "slider.horizontal.3",
-                iconActive: false,
-                label: "Image Adjustment",
-                isExpanded: $showImageAdjustment
-            )
+/// The preset or color-profile list under the header row.
+struct ProfileBodyBlock: View {
+    @ObservedObject var controller: DisplayProfileController
 
-            ImageAdjustmentView(display: display, isExpanded: showImageAdjustment)
-                .padding(.leading, 8)
-                .curtainReveal(showImageAdjustment)
+    var body: some View {
+        if !controller.presetName.isEmpty {
+            DisplayPresetView(displayID: controller.display.displayID, activeName: $controller.presetName)
+        } else {
+            ColorProfileView(display: controller.display, activeProfileName: $controller.activeProfileName)
+        }
+    }
+}
 
+/// Image adjustment header row.
+struct ImageHeadBlock: View {
+    let display: DisplayInfo
+    @ObservedObject var state: PanelSectionState
+
+    var body: some View {
+        ExpandableRow(
+            icon: "slider.horizontal.3",
+            iconActive: false,
+            label: "Image Adjustment",
+            isExpanded: state.openBinding(\.imageOpenIDs, display.displayID)
+        )
+    }
+}
+
+/// Image adjustment sliders.
+struct ImageBodyBlock: View {
+    let display: DisplayInfo
+    @ObservedObject var state: PanelSectionState
+
+    var body: some View {
+        ImageAdjustmentView(display: display, isExpanded: state.imageOpenIDs.contains(display.displayID))
+            .padding(.leading, 8)
+    }
+}
+
+/// The plain rows below the dropdown sections.
+struct DetailTailBlock: View {
+    let display: DisplayInfo
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
             SectionDivider()
 
             // Set as main display
@@ -92,45 +148,6 @@ struct DisplayDetailView: View {
 
             // Notch management (built-in with notch only)
             NotchView(display: display)
-
-        }
-        .padding(.leading, 4)
-        // Region background: a full-width shaded band behind the whole expanded
-        // detail so its start and end are obvious. Color.primary adapts to mode
-        // (darkens in light, lifts in dark); no rounded corners/inset, so it reads
-        // as a grouped band, not a floating card.
-        .background(Color.primary.opacity(0.08))
-        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
-            // Reopen fresh, like a native menu (this view persists across opens, so
-            // its sections stay expanded until reset).
-            showPreset = false
-            showColorProfile = false
-            showImageAdjustment = false
-        }
-        .task(id: display.displayID) {
-            activeProfileName = ""
-            presetName = ""
-            guard !Task.isCancelled else { return }
-            activeProfileName = ColorProfileService.shared.currentColorSpaceName(for: display.displayID)
-            let svc = DisplayPresetService.shared
-            if let idx = svc.activePresetIndex(for: display.displayID) {
-                presetName = svc.presets(for: display.displayID)
-                    .first(where: { $0.index == idx })?.name ?? ""
-            }
-        }
-        // The active profile changes outside this view: System Settings, and
-        // HDR mode switches (macOS swaps the display's profile with the mode).
-        // Re-read on panel open and on screen reconfiguration, debounced
-        // because mode switches emit bursts.
-        .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidOpen)) { _ in
-            activeProfileName = ColorProfileService.shared.currentColorSpaceName(for: display.displayID)
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
-                .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
-        ) { _ in
-            activeProfileName = ColorProfileService.shared.currentColorSpaceName(for: display.displayID)
         }
     }
 }
-

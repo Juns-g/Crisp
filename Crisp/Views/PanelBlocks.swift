@@ -17,6 +17,14 @@ final class PanelSectionState: ObservableObject {
     @Published var showArrangement = false
     @Published var showSettings = false
     @Published var expandedDisplayIDs: Set<CGDirectDisplayID> = []
+    // Per-display dropdown sections inside the expanded detail, lifted here
+    // (out of view @State) so each reveal is its own canvas block: the clip
+    // animates, the content renders once, nothing re-renders per frame.
+    @Published var resolutionOpenIDs: Set<CGDirectDisplayID> = []
+    @Published var allResolutionsOpenIDs: Set<CGDirectDisplayID> = []
+    @Published var refreshOpenIDs: Set<CGDirectDisplayID> = []
+    @Published var profileOpenIDs: Set<CGDirectDisplayID> = []
+    @Published var imageOpenIDs: Set<CGDirectDisplayID> = []
 
     /// Reopen collapsed, like a native menu (called once the panel finished hiding).
     func collapseAll() {
@@ -25,6 +33,35 @@ final class PanelSectionState: ObservableObject {
         showArrangement = false
         showSettings = false
         expandedDisplayIDs.removeAll()
+        resolutionOpenIDs.removeAll()
+        allResolutionsOpenIDs.removeAll()
+        refreshOpenIDs.removeAll()
+        profileOpenIDs.removeAll()
+        imageOpenIDs.removeAll()
+    }
+
+    /// Drop state for displays that disappeared (disconnect, reconfiguration).
+    func retainDisplays(_ valid: Set<CGDirectDisplayID>) {
+        expandedDisplayIDs.formIntersection(valid)
+        resolutionOpenIDs.formIntersection(valid)
+        allResolutionsOpenIDs.formIntersection(valid)
+        refreshOpenIDs.formIntersection(valid)
+        profileOpenIDs.formIntersection(valid)
+        imageOpenIDs.formIntersection(valid)
+    }
+
+    /// Binding into one of the per-display sets, for ExpandableRow chevrons.
+    func openBinding(
+        _ keyPath: ReferenceWritableKeyPath<PanelSectionState, Set<CGDirectDisplayID>>,
+        _ id: CGDirectDisplayID
+    ) -> Binding<Bool> {
+        Binding(
+            get: { self[keyPath: keyPath].contains(id) },
+            set: {
+                if $0 { self[keyPath: keyPath].insert(id) }
+                else { self[keyPath: keyPath].remove(id) }
+            }
+        )
     }
 }
 
