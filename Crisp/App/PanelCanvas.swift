@@ -100,6 +100,14 @@ final class FrameSpring: NSObject {
         target = Double(tg)
         v0 = velocity
         t = 0
+        // Start the clock at the flight's start, not the last idle vsync. The
+        // link ticks continuously and updates lastTick even while inactive, so
+        // without this the first active tick advanced t by a whole stale frame,
+        // snapping the clip ~one frame ahead of the SwiftUI curtain it should
+        // move in step with. That gap is invisible in 1.3.2 (the visible edge is
+        // the curtain-driven content), but here the visible edge is this
+        // spring-driven shell, so the inner content lagged the outer edge.
+        lastTick = CACurrentMediaTime()
         active = true
     }
 
@@ -189,6 +197,16 @@ final class PanelCanvas {
     private let topInset: CGFloat = 8
     private let docTopInset: CGFloat = 4
     private let docBottomInset: CGFloat = 4
+    /// Slack added to each block's NSHostingView canvas ABOVE its content height.
+    /// The top-glue in BlockHost (.frame(maxHeight:.infinity, alignment:.top))
+    /// only engages when the content MODEL is shorter than the canvas: only then
+    /// does it fill the slack and pin the content's frame to the top, so a
+    /// mid-reveal curtain (shorter presentation) animates INSIDE a fixed
+    /// top-aligned frame. A canvas sized exactly to the content (no slack) lets
+    /// NSHostingView position by the shorter presentation instead -> it centered
+    /// the reveal and dropped the top on open. 1.3.2 got this for free with one
+    /// fixed 2400 canvas for the whole panel; the split canvas needs it per block.
+    private let hostSlack: CGFloat = 1200
 
     private(set) var blocks: [PanelBlock] = []
     private var footer: PanelBlock?
@@ -218,6 +236,12 @@ final class PanelCanvas {
     private var animFromSum: CGFloat = 0
     private var scrollOffset: CGFloat = 0
     private var animatePending = false
+    /// The shell is layer-driven and presents its frame change in the CURRENT
+    /// CATransaction; SwiftUI commits the inner curtain's render and presents it
+    /// ONE frame later. Applying each spring tick one frame late lands the shell
+    /// on the same frame the curtain does, so the outer edge and inner content
+    /// move together (the "inner lags the outer" residual). Reset per flight.
+    private var pendingScalar: CGFloat?
     /// Window height last handed to setFrame; a mismatch at the next layout
     /// means someone else resized the window (EXT in the log).
     private var lastSetWindowH: CGFloat = -1
@@ -246,7 +270,14 @@ final class PanelCanvas {
             return self.doc.frame.height > self.viewport.frame.height + 0.5
         }
         spring.warm(view: shell)
-        spring.onTick = { [weak self] x in self?.applyScalar(CGFloat(x)) }
+        spring.onTick = { [weak self] x in
+            guard let self else { return }
+            // One-frame buffer: apply the previous tick, hold this one. See
+            // pendingScalar. onSettle sets the exact targets, superseding any
+            // held value, so the last frame lands precisely.
+            if let prev = self.pendingScalar { self.applyScalar(prev) }
+            self.pendingScalar = CGFloat(x)
+        }
         spring.onSettle = { [weak self] in
             guard let self, self.animTarget.count == self.blocks.count else { return }
             for (i, b) in self.blocks.enumerated() { b.current = self.animTarget[i] }
@@ -314,6 +345,7 @@ final class PanelCanvas {
 
     func snapToTargets() {
         spring.cancel()
+        pendingScalar = nil
         for b in blocks { b.current = b.target }
         if let f = footer { f.current = f.target }
         layoutNow()
@@ -335,6 +367,7 @@ final class PanelCanvas {
         animTarget = blocks.map { $0.target }
         animFromSum = fromSum
         animTargetSum = targetSum
+        pendingScalar = nil
         // One window grow per toggle, HERE at rest (nothing moves in this
         // frame, so its WindowServer cost cannot jump); per-tick work during
         // the flight is layer-only. Shadow swaps first so the grow's setFrame
@@ -352,7 +385,14 @@ final class PanelCanvas {
         let s = (x - animFromSum) / denom
         for (i, b) in blocks.enumerated() {
             let exact = animFrom[i] + s * (animTarget[i] - animFrom[i])
-            b.current = min(max(exact, 0), b.contentHeight)
+            // Ceiling is the TALLER of this flight's endpoints, not the current
+            // contentHeight. A nested reveal closing (Image Adjustment) sets the
+            // block's contentHeight to its new SHORT value before the flight
+            // starts; clamping to that snapped current down instantly on frame
+            // one (outer panel closed instant while the inner curtain animated),
+            // yet grew smoothly on open. Bounding by the start height instead
+            // lets the clip spring down in step with the curtain.
+            b.current = min(max(exact, 0), max(animFrom[i], animTarget[i]))
         }
         layoutNow()
     }
@@ -371,7 +411,13 @@ final class PanelCanvas {
             let h = y - cursor
             let clipR = NSRect(x: 0, y: cursor, width: width, height: h)
             if b.clip.frame != clipR { b.clip.frame = clipR }
-            let hostR = NSRect(x: 0, y: 0, width: width, height: b.contentHeight.rounded(.up))
+            // The host canvas is TALLER than the content (hostSlack), so the
+            // top-glue in BlockHost engages and pins the content to the top; the
+            // clip above reveals only `current` of it and masks the slack. A
+            // canvas sized to the content let NSHostingView center the shorter
+            // mid-reveal presentation, dropping the top on every open.
+            let hostR = NSRect(x: 0, y: 0, width: width,
+                               height: (b.contentHeight + hostSlack).rounded(.up))
             if b.host.frame != hostR { b.host.frame = hostR }
             cursor = y
         }

@@ -35,10 +35,21 @@ struct BlockHost<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) { content }
+        // Report the content's natural height (its final, fully-laid-out size);
+        // the canvas springs the clip to it.
+        content
             .frame(width: 308)
-            .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onHeight($0) }
+            // Top-glue, exactly like 1.3.2's PanelRootView (which has no
+            // .fixedSize here): the AppKit host is a canvas at the FINAL block
+            // height, but a nested curtain renders the content shorter
+            // mid-reveal. Without this, NSHostingView CENTERS the shorter content
+            // in the taller canvas, so the whole block (its top row included)
+            // drops and floats back up: the "inner menu top drifts" on open.
+            // Pinning to .top spills the excess off the bottom (clipped by the
+            // block's clip) so the top never moves. A .fixedSize on the measured
+            // content defeats this fill, so it is deliberately absent.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
