@@ -322,6 +322,26 @@
         }
       }
     },
+    ", main display" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "，主显示器"
+          }
+        }
+      }
+    },
+    ", selected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "，已选中"
+          }
+        }
+      }
+    },
     "%@, expanded" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1308,6 +1328,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "软件"
+          }
+        }
+      }
+    },
+    "DDC" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DDC"
+          }
+        }
+      }
+    },
+    "Show Volume Sliders" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示音量滑块"
+          }
+        }
+      }
+    },
+    "Speaker volume" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扬声器音量"
           }
         }
       }

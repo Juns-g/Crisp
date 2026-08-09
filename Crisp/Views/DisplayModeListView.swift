@@ -814,7 +814,11 @@ struct CheckmarkRow: View {
             action()
         }
         .onHover { isHovered = $0 }
-        .accessibilityLabel(isSelected ? "\(label), selected" : label)
+        .accessibilityLabel(
+            isSelected
+                ? "\(NSLocalizedString(label, comment: "")), \(NSLocalizedString(", selected", comment: ""))"
+                : NSLocalizedString(label, comment: "")
+        )
         .accessibilityAddTraits(.isButton)
     }
 }
