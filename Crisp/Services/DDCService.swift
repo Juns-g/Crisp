@@ -19,6 +19,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     // VCP feature codes (DDC/CI standard)
     static let brightnessVCP: UInt8 = 0x10
     static let contrastVCP: UInt8   = 0x12
+    static let volumeVCP: UInt8     = 0x62
     static let powerVCP: UInt8      = 0xD6
 
     private let ddcQueue = DispatchQueue(label: "com.crisp.ddc", qos: .userInitiated)
@@ -309,6 +310,17 @@ final class DDCService: ObservableObject, @unchecked Sendable {
             return nil
         }
 
+        // Header bytes alone are only 4 bytes of protection: a wedged DDC
+        // controller (seen on the AOC Q27G3XMN) streams noise that acks reads,
+        // and a lucky frame can pass the signature with garbage value bytes,
+        // poisoning the stored max. The DDC/CI checksum (0x50 seed XORed over
+        // bytes 0-9) must match byte 10 before the payload is trusted.
+        var expectedChecksum = UInt8(0x50)
+        for i in 0...9 { expectedChecksum ^= replyBuf[i] }
+        guard expectedChecksum == replyBuf[10] else {
+            return nil
+        }
+
         let maxVal = (UInt16(replyBuf[6]) << 8) | UInt16(replyBuf[7])
         let curVal = (UInt16(replyBuf[8]) << 8) | UInt16(replyBuf[9])
         // A zero max is also invalid (would make every write 0); reject it.
@@ -405,13 +417,44 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 #endif
     }
 
+    /// Consecutive raw read failures per display. Past the threshold the
+    /// display's reads are quarantined (fail fast, no I2C traffic) until its
+    /// cache is cleared on reconnect. A wedged DDC controller (AOC Q27G3XMN)
+    /// streams garbage and degrades further under retry hammering, so backing
+    /// off protects both the monitor and the shared DCP I2C engine. Writes
+    /// are unaffected; they keep working on wedged controllers. Accessed only
+    /// on ddcQueue.
+    private var readFailStreak: [CGDirectDisplayID: Int] = [:]
+    private let readQuarantineThreshold = 6
+    /// Quarantine expiry per display: after it passes, one fresh probe window
+    /// opens (streak resets); persistent failure re-quarantines. Without an
+    /// expiry, a transient failure burst on a static setup (no reconnects to
+    /// clear the cache) would kill reads for the rest of the session.
+    private var readQuarantineUntil: [CGDirectDisplayID: Date] = [:]
+    private let readQuarantineInterval: TimeInterval = 600
+
     /// Synchronous DDC read (VCP Get). Returns (current, max) or nil on failure.
     private func readSynchronous(displayID: CGDirectDisplayID, command: UInt8) -> (current: UInt16, max: UInt16)? {
+        if let until = readQuarantineUntil[displayID] {
+            guard Date() >= until else { return nil }
+            readQuarantineUntil.removeValue(forKey: displayID)
+            readFailStreak[displayID] = 0
+        }
 #if arch(arm64)
-        return arm64Read(displayID: displayID, command: command)
+        let result = arm64Read(displayID: displayID, command: command)
 #else
-        return intelReadSynchronous(displayID: displayID, command: command)
+        let result = intelReadSynchronous(displayID: displayID, command: command)
 #endif
+        if result == nil {
+            let streak = readFailStreak[displayID, default: 0] + 1
+            readFailStreak[displayID] = streak
+            if streak >= readQuarantineThreshold {
+                readQuarantineUntil[displayID] = Date().addingTimeInterval(readQuarantineInterval)
+            }
+        } else {
+            readFailStreak[displayID] = 0
+        }
+        return result
     }
 
     // MARK: - Intel Write/Read (renamed from original writeSynchronous/readSynchronous)
@@ -523,6 +566,9 @@ final class DDCService: ObservableObject, @unchecked Sendable {
                     // a monitor can ack the transaction yet return stale/null bytes, whose
                     // bogus "max" would compress the usable brightness range.
                     guard rb[0] == 0x6E, rb[2] == 0x02, rb[3] == 0x00, rb[4] == command else { return }
+                    // Header bytes are weak protection against a noise stream;
+                    // require the DDC/CI checksum too (see arm64Read).
+                    guard self.ddcChecksum(destAddress: 0x50, bytes: Array(rb[0...9])) == rb[10] else { return }
                     let maxVal = (UInt16(rb[6]) << 8) | UInt16(rb[7])
                     let curVal = (UInt16(rb[8]) << 8) | UInt16(rb[9])
                     guard maxVal > 0 else { return }
@@ -541,8 +587,32 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         cacheLock.lock()
         vcpCache.removeValue(forKey: displayID)
         cacheLock.unlock()
+        ddcQueue.async {
+            self.readFailStreak.removeValue(forKey: displayID)
+            self.readQuarantineUntil.removeValue(forKey: displayID)
+        }
 #if arch(arm64)
         invalidateAVServiceCache(for: displayID)
+#endif
+    }
+
+    /// Drops every cached display-to-AVService pairing (and read quarantines)
+    /// so the next DDC operation re-walks the registry and re-matches by
+    /// identity. Called on any display reconfiguration: CGDisplay IDs get
+    /// reshuffled across reconnect storms on Apple Silicon, and two IDs that
+    /// both survive a storm can end up naming swapped physical panels. A
+    /// per-removed-ID cleanup never sees that, and the stale map then writes
+    /// one monitor's brightness into the other's channel.
+    func invalidateAllChannelMappings() {
+        ddcQueue.async {
+            self.readFailStreak.removeAll()
+            self.readQuarantineUntil.removeAll()
+        }
+#if arch(arm64)
+        avServiceLock.lock()
+        avServiceCache.removeAll()
+        allExternalAVServices.removeAll()
+        avServiceLock.unlock()
 #endif
     }
 

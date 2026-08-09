@@ -44,6 +44,15 @@ struct ColorProfileView: View {
             }
         }
         .task { await loadProfiles() }
+        // HDR mode switches (and System Settings) change the active profile
+        // while this list is expanded; re-snap the checkmark. Debounced
+        // because mode switches emit bursts of reconfigurations.
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+                .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+        ) { _ in
+            Task { await loadProfiles() }
+        }
     }
 
     // MARK: - Actions
@@ -57,7 +66,9 @@ struct ColorProfileView: View {
 
     @MainActor
     private func loadProfiles() async {
-        isLoading = true
+        // Spinner only on first load; silent re-snap when refreshing an
+        // already-populated list (screen reconfiguration).
+        isLoading = profiles.isEmpty
         let displayID = display.displayID
         let displayUUID = display.displayUUID
         let svc = ColorProfileService.shared

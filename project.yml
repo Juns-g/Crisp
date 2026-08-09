@@ -2,7 +2,7 @@ name: Crisp
 options:
   bundleIdPrefix: com.crisp
   deploymentTarget:
-    macOS: "15.0"
+    macOS: "14.0"
   developmentLanguage: en
   knownRegions:
     - en
@@ -13,7 +13,7 @@ targets:
   Crisp:
     type: application
     platform: macOS
-    deploymentTarget: "15.0"
+    deploymentTarget: "14.0"
     sources:
       - path: Crisp
         excludes:
@@ -24,7 +24,7 @@ targets:
         # Without an explicit MARKETING_VERSION the generated Info.plist omits
         # CFBundleShortVersionString and the app self-reports 1.0.0 forever,
         # which keeps the update banner visible even on the latest release.
-        MARKETING_VERSION: "1.3.2"
+        MARKETING_VERSION: "1.4.0"
         CURRENT_PROJECT_VERSION: "5"
         INFOPLIST_KEY_LSUIElement: true
         INFOPLIST_KEY_NSHumanReadableCopyright: "Crisp - Free & Open Source"
@@ -46,7 +46,7 @@ targets:
   CrispTests:
     type: bundle.unit-test
     platform: macOS
-    deploymentTarget: "15.0"
+    deploymentTarget: "14.0"
     sources:
       - path: CrispTests
       - path: Crisp/Models/DisplayModeGeometry.swift

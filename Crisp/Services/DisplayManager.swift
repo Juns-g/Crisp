@@ -89,6 +89,13 @@ class DisplayManager: ObservableObject {
     }
 
     func refreshDisplays() {
+        // Display IDs can be reshuffled across a reconnect storm with no ID
+        // ever leaving the online list (two panels swapping IDs), so the
+        // per-removed-ID cleanup below can miss a now-crossed channel map.
+        // Always drop the whole map; it lazily rebuilds with identity
+        // matching on the next DDC operation.
+        DDCService.shared.invalidateAllChannelMappings()
+
         var displayCount: UInt32 = 0
         CGGetOnlineDisplayList(0, nil, &displayCount)
         var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
@@ -127,16 +134,19 @@ class DisplayManager: ObservableObject {
         // Only load details / refresh brightness for newly appeared displays
         for display in addedDisplays {
             Task { await BrightnessService.shared.refreshBrightness(for: display) }
+            VolumeService.shared.refreshVolume(for: display)
             // Monitors often answer DDC with nothing (or garbage) for the first
             // seconds after link training, and a failed connect-time read has no
             // retry: with auto-brightness on the panel poll skips externals, so a
             // stale slider seed would stick until the next panel open. One delayed
             // re-read heals it; the adopt deadband makes it a no-op if the first
-            // read was fine.
+            // read was fine. Volume rides the same retry: a failed first probe
+            // would otherwise hide the slider until the next reconnect.
             if !display.isBuiltin {
                 Task {
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     await BrightnessService.shared.refreshBrightness(for: display)
+                    VolumeService.shared.refreshVolume(for: display)
                 }
             }
             Task {
@@ -160,11 +170,19 @@ class DisplayManager: ObservableObject {
         for display in updatedDisplays where keptIDs.contains(display.displayID) {
             display.bounds = CGDisplayBounds(display.displayID)
             display.isMain = CGDisplayIsMain(display.displayID) != 0
+            // Reconfigurations (mode switches, post-wake link retraining) can reset
+            // the transfer table macOS-side, losing gamma adjustments (issue #25).
+            // Restore any active adjustment, same as added displays already get;
+            // the in-memory reapply is a no-op when there is none.
+            GammaService.shared.reapply(for: display.displayID)
         }
 
         // Keep the physical-disconnect list honest: drop any record whose display came back
         // online (re-plugged, or macOS re-enabled it).
         PhysicalDisplayToggleService.shared.reconcile()
+        // A physical unplug bypasses disconnect()'s last-screen guard: internal disabled via
+        // Crisp + external cable pulled = zero active displays, all black. Bring one back.
+        PhysicalDisplayToggleService.shared.restoreIfNoActiveDisplay()
 
         // Keep the built-in brightness observer pointed at the current built-in so the
         // slider tracks system brightness changes (keys, auto-brightness) live.
@@ -198,8 +216,10 @@ class DisplayManager: ObservableObject {
         // Install the dense smooth-scaling ladder directly, not just the coarse HiDPI set: this
         // admin prompt is the one interruption, so make it deliver the full scaled slider in one
         // shot. Anyone enabling HiDPI on a 2K+ external wants that range anyway.
+        // Panel-space dims: the override plist is rotation-blind (see panelNativeResolution).
+        let (panelW, panelH) = display.panelNativeResolution
         let err = HiDPIService.shared.enableSmoothScaling(
-            vendor: vendor, product: product, nativeWidth: nativeW, nativeHeight: nativeH)
+            vendor: vendor, product: product, nativeWidth: panelW, nativeHeight: panelH)
 
         // On success, soft-reconnect so the freshly written override enumerates now (screen
         // blanks ~1s), instead of the weak probe that left the modes dormant until a physical

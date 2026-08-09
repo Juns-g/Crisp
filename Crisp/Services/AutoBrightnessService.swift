@@ -265,7 +265,11 @@ final class AutoBrightnessService: ObservableObject, @unchecked Sendable {
                     offsets[display.displayID] = display.brightness - builtinPct
                 }
                 let offset = offsets[display.displayID] ?? 0
-                target = min(100.0, max(0.0, builtinPct + offset))
+                // Clamp to the display's own ceiling, not a literal 100: while
+                // Extra Brightness is on, the pinned offset can place the target
+                // in the boost region, and capping at 100 would silently drag a
+                // boosted display back down on every built-in change.
+                target = min(display.maxBrightness, max(0.0, builtinPct + offset))
             } else {
                 // Absolute mirror (old behavior): external tracks the built-in's level.
                 target = min(100.0, max(0.0, builtin * sensitivity * 100.0))

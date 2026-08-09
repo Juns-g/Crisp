@@ -23,6 +23,8 @@ private func brightnessKeyEventCallback(
 /// When the cursor is on an external display the key event is consumed and the external
 /// display's brightness is adjusted via BrightnessService. When the cursor is on the
 /// built-in display the event is passed through so macOS adjusts it normally.
+/// Also intercepts the volume/mute keys when the default audio output is a monitor with
+/// DDC speaker volume, routing them to VolumeService (see routeVolumePress).
 @MainActor
 final class BrightnessKeyService: @unchecked Sendable {
     static let shared = BrightnessKeyService()
@@ -52,9 +54,15 @@ final class BrightnessKeyService: @unchecked Sendable {
     private nonisolated(unsafe) static let nxKeytypeBrightnessUp: Int = 2
     /// NX_KEYTYPE_BRIGHTNESS_DOWN
     private nonisolated(unsafe) static let nxKeytypeBrightnessDown: Int = 3
+    /// NX_KEYTYPE_SOUND_UP / NX_KEYTYPE_SOUND_DOWN / NX_KEYTYPE_MUTE
+    private nonisolated(unsafe) static let nxKeytypeSoundUp: Int = 0
+    private nonisolated(unsafe) static let nxKeytypeSoundDown: Int = 1
+    private nonisolated(unsafe) static let nxKeytypeMute: Int = 7
 
     /// Each key press moves brightness by 1/16 (≈ 6.25 %), matching macOS native behaviour.
     private nonisolated(unsafe) static let brightnessStep: Double = 100.0 / 16.0
+    /// Volume keys use the same 1/16 step as macOS's own volume control.
+    private nonisolated(unsafe) static let volumeStep: Double = 100.0 / 16.0
 
     // MARK: - Start / Stop
 
@@ -68,13 +76,18 @@ final class BrightnessKeyService: @unchecked Sendable {
         let retained = Unmanaged.passRetained(self)
         selfRetained = retained
 
-        let systemDefinedMask = CGEventMask(1 << Self.cgEventTypeSystemDefinedRaw)
+        // Also tap keyDown (type 10), not just NX_SYSDEFINED. When there is no built-in display to
+        // target (e.g. clamshell) macOS can suppress the brightness NX_SYSDEFINED aux event while
+        // the raw keyDown still flows, so a SYSDEFINED-only tap goes dead there. See the keyDown
+        // fallback in handleEventFromCallback. (issue #21)
+        let mask = CGEventMask(1 << Self.cgEventTypeSystemDefinedRaw)
+            | CGEventMask(1 << CGEventType.keyDown.rawValue)
 
         let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
-            eventsOfInterest: systemDefinedMask,
+            eventsOfInterest: mask,
             callback: brightnessKeyEventCallback,
             userInfo: retained.toOpaque()
         )
@@ -224,6 +237,24 @@ final class BrightnessKeyService: @unchecked Sendable {
             return Unmanaged.passRetained(event)
         }
 
+        // Fallback path: raw keyDown for brightness. macOS normally delivers brightness as an
+        // NX_SYSDEFINED aux event (handled below), but when there is no built-in display to target
+        // (e.g. clamshell on some macOS versions) it can suppress that event while the raw keyDown
+        // still flows. Keycodes 144/145 are the brightness media keys. Mirrors MonitorControl's
+        // dual-path capture, which is why it keeps working in clamshell where a SYSDEFINED-only tap
+        // goes dead. (issue #21)
+        if type.rawValue == CGEventType.keyDown.rawValue {
+            let kc = event.getIntegerValueField(.keyboardEventKeycode)
+            switch kc {
+            case 144:
+                return routeBrightnessPress(up: true, event: event)
+            case 145:
+                return routeBrightnessPress(up: false, event: event)
+            default:
+                return Unmanaged.passRetained(event)
+            }
+        }
+
         guard type.rawValue == Self.cgEventTypeSystemDefinedRaw else {
             return Unmanaged.passRetained(event)
         }
@@ -238,19 +269,31 @@ final class BrightnessKeyService: @unchecked Sendable {
         let keyCode = (data1 >> 16) & 0xFF
         let isKeyDown = (data1 & 0x0100) == 0   // bit 8 clear → key down
 
-        // Only intercept brightness keys.
-        guard keyCode == Self.nxKeytypeBrightnessUp || keyCode == Self.nxKeytypeBrightnessDown else {
+        switch keyCode {
+        case Self.nxKeytypeBrightnessUp, Self.nxKeytypeBrightnessDown:
+            // For key-up events always pass through, only consume key-down on external displays.
+            guard isKeyDown else { return Unmanaged.passRetained(event) }
+            return routeBrightnessPress(up: keyCode == Self.nxKeytypeBrightnessUp, event: event)
+        case Self.nxKeytypeSoundUp, Self.nxKeytypeSoundDown, Self.nxKeytypeMute:
+            guard isKeyDown else { return Unmanaged.passRetained(event) }
+            return routeVolumePress(keyCode: keyCode, event: event)
+        default:
             return Unmanaged.passRetained(event)
         }
+    }
 
-        // For key-up events always pass through, only consume key-down on external displays.
-        guard isKeyDown else { return Unmanaged.passRetained(event) }
+    /// Shared routing for a brightness key-down, called by both the NX_SYSDEFINED media-key path
+    /// and the raw-keyDown fallback path. Applies the step to the configured target(s), shows the
+    /// HUD, and returns nil to CONSUME the event when we adjusted an external display (so macOS does
+    /// not also bump the built-in), or a pass-through of `event` when we did not handle it (target
+    /// not attached / cursor on built-in / no controllable external).
+    nonisolated private func routeBrightnessPress(up: Bool, event: CGEvent) -> Unmanaged<CGEvent>? {
+        let step = up ? Self.brightnessStep : -Self.brightnessStep
 
         // Route by user preference. Read on the main actor, this callback runs on
         // the main run loop (see class docs), so assumeIsolated is safe here.
         switch MainActor.assumeIsolated({ SettingsService.shared.brightnessKeyTarget }) {
         case .allDisplays:
-            let step = (keyCode == Self.nxKeytypeBrightnessUp) ? Self.brightnessStep : -Self.brightnessStep
             Task { @MainActor in self.adjustDisplays(DisplayManagerAccessor.shared.displays, step: step) }
             // Consume: we adjust every display (built-in included) ourselves, so
             // macOS must not also bump the built-in on top.
@@ -264,7 +307,6 @@ final class BrightnessKeyService: @unchecked Sendable {
                 DisplayManagerAccessor.shared.displays.contains { selected.contains($0.displayUUID) }
             }
             if anyAttached {
-                let step = (keyCode == Self.nxKeytypeBrightnessUp) ? Self.brightnessStep : -Self.brightnessStep
                 Task { @MainActor in
                     let targets = DisplayManagerAccessor.shared.displays.filter { selected.contains($0.displayUUID) }
                     self.adjustDisplays(targets, step: step)
@@ -305,13 +347,11 @@ final class BrightnessKeyService: @unchecked Sendable {
             return Unmanaged.passRetained(event)
         }
 
-        let step = (keyCode == Self.nxKeytypeBrightnessUp) ? Self.brightnessStep : -Self.brightnessStep
-
         // All data captured here is Sendable (CGDirectDisplayID = UInt32, Double).
         Task { @MainActor in
             let displays = DisplayManagerAccessor.shared.displays
             guard let display = displays.first(where: { $0.displayID == displayID }) else { return }
-            let newBrightness = max(0.0, min(100.0, display.brightness + step))
+            let newBrightness = max(0.0, min(display.maxBrightness, display.brightness + step))
             // Use smooth animation, cancels any in-progress animation automatically.
             BrightnessService.shared.setBrightnessSmooth(newBrightness, for: display)
 
@@ -319,11 +359,47 @@ final class BrightnessKeyService: @unchecked Sendable {
             if let screen = NSScreen.screens.first(where: {
                 ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == displayID
             }) {
-                BrightnessHUDService.shared.show(brightness: newBrightness, on: screen)
+                BrightnessHUDService.shared.show(brightness: newBrightness / display.maxBrightness * 100.0, on: screen)
             }
         }
 
         // Return nil to consume (suppress) the event so macOS doesn't also adjust built-in brightness.
+        return nil
+    }
+
+    /// Routes a volume/mute key-down to the monitor's DDC speaker volume, but ONLY
+    /// when the default audio output IS that monitor (issue #23). HDMI/DP audio has
+    /// no macOS volume control, so without this the system just shows the crossed-out
+    /// OSD; any other audio route passes through untouched, macOS keeps owning it.
+    nonisolated private func routeVolumePress(keyCode: Int, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // Resolved synchronously on the main thread (this tap runs on the main run
+        // loop): consume only when a live DDC-volume display owns the audio output.
+        let target = MainActor.assumeIsolated {
+            VolumeService.shared.displayForDefaultAudioOutput(in: DisplayManagerAccessor.shared.displays)
+        }
+        guard let target else { return Unmanaged.passRetained(event) }
+
+        Task { @MainActor in
+            let service = VolumeService.shared
+            switch keyCode {
+            case Self.nxKeytypeMute:
+                service.toggleMute(for: target)
+            case Self.nxKeytypeSoundUp:
+                service.setVolume(target.volume + Self.volumeStep, for: target)
+            default:
+                service.setVolume(target.volume - Self.volumeStep, for: target)
+            }
+            if let screen = NSScreen.screens.first(where: {
+                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == target.displayID
+            }) {
+                BrightnessHUDService.shared.show(
+                    level: target.volume,
+                    image: target.volume <= 0 ? .mute : .volume,
+                    on: screen
+                )
+            }
+        }
+        // Consume: macOS must not also show its "no volume control" OSD on top.
         return nil
     }
 
@@ -335,12 +411,12 @@ final class BrightnessKeyService: @unchecked Sendable {
     private func adjustDisplays(_ displays: [DisplayInfo], step: Double) {
         let screens = NSScreen.screens
         for display in displays {
-            let newBrightness = max(0.0, min(100.0, display.brightness + step))
+            let newBrightness = max(0.0, min(display.maxBrightness, display.brightness + step))
             BrightnessService.shared.setBrightnessSmooth(newBrightness, for: display)
             if let screen = screens.first(where: {
                 ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == display.displayID
             }) {
-                BrightnessHUDService.shared.show(brightness: newBrightness, on: screen)
+                BrightnessHUDService.shared.show(brightness: newBrightness / display.maxBrightness * 100.0, on: screen)
             }
         }
     }

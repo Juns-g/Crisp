@@ -126,7 +126,28 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "外接显示器跟随内置显示器，但保持你设置的亮度差异"
+            "value" : "外接显示器跟随内建显示器，但保持你设置的亮度差异"
+          }
+        }
+      }
+    },
+    "Extra Brightness" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "额外亮度"
+          }
+        }
+      }
+    },
+    "HDR" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HDR"
           }
         }
       }
@@ -276,7 +297,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已拒绝断开：这会导致没有可用的显示器。"
+            "value" : "无法断开：这会导致没有可用的显示器。"
           }
         }
       }
@@ -286,7 +307,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 颜色"
+            "value" : "%@"
           }
         }
       }
@@ -416,7 +437,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "内置显示器"
+            "value" : "内建显示器"
           }
         }
       }
@@ -1036,7 +1057,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未检测到内置显示器"
+            "value" : "未检测到内建显示器"
           }
         }
       }
@@ -1306,7 +1327,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在与内置显示器亮度同步"
+            "value" : "正在与内建显示器亮度同步"
           }
         }
       }
@@ -1586,7 +1607,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "外接显示器跟随内置显示器的亮度"
+            "value" : "外接显示器跟随内建显示器的亮度"
           }
         }
       }

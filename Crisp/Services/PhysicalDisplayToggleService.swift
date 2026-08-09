@@ -105,7 +105,17 @@ final class PhysicalDisplayToggleService: ObservableObject {
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
         guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return 0 }
         let virtual = VirtualDisplayService.shared
-        return ids.prefix(Int(count)).filter { !virtual.isVirtualDisplay($0) }.count
+        return ids.prefix(Int(count)).filter { id in
+            guard !virtual.isVirtualDisplay(id) else { return false }
+            // Once the last real display is gone macOS spawns a placeholder
+            // display (vendor 'unkn' 0x756E6B6E, model 'virt' 0x76697274,
+            // fingerprinted live on macOS 26). It is not a viewable screen, and
+            // counting it kept restoreIfNoActiveDisplay from ever firing in the
+            // all-screens-black state it exists to fix.
+            let isPlaceholder = CGDisplayVendorNumber(id) == 0x756E6B6E
+                && CGDisplayModelNumber(id) == 0x76697274
+            return !isPlaceholder
+        }.count
     }
 
     private func uuid(for displayID: CGDirectDisplayID) -> String {
@@ -231,6 +241,41 @@ final class PhysicalDisplayToggleService: ObservableObject {
         let before = disconnected.count
         disconnected.removeAll { onlineUUIDs.contains($0.uuid) }
         if disconnected.count != before { saveDesired() }
+    }
+
+    /// Guards against overlapping restore attempts from reconfiguration-callback bursts.
+    private var restoreInFlight = false
+
+    /// Called on every display-list refresh. The guard in disconnect() can't stop a physical
+    /// unplug: with the internal disabled via Crisp and the external cable pulled, zero active
+    /// displays remain and macOS does NOT re-enable the disabled one, every screen stays black.
+    /// Re-enable a still-attached disconnected display (built-in first) so the machine always
+    /// has a live screen. The settle delay rides out transient empty display lists during
+    /// wake/replug storms, so a monitor that comes right back keeps the disconnect intact.
+    func restoreIfNoActiveDisplay() {
+        guard isSupported, !disconnected.isEmpty, !restoreInFlight else { return }
+        guard physicalActiveDisplayCount() == 0 else { return }
+        restoreInFlight = true
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self else { return }
+            defer { self.restoreInFlight = false }
+            guard self.physicalActiveDisplayCount() == 0 else { return }
+            // In the placeholder-display state SLSGetDisplayList shrinks to just
+            // the placeholder (verified live), so records that fail to resolve
+            // must fall back to their last-known ID rather than being dropped:
+            // SLSConfigureDisplayEnabled still honors a stale ID for attached
+            // hardware, while detached hardware fails at
+            // CGCompleteDisplayConfiguration (error 1001) and the loop moves on.
+            // Prefer the built-in panel when the ID still classifies; stale IDs
+            // answer CGDisplayIsBuiltin with garbage, which sorts as non-builtin.
+            let candidates = self.disconnected
+                .map { record in (record, self.resolveCurrentID(for: record) ?? record.displayID) }
+                .sorted { CGDisplayIsBuiltin($0.1) == 1 && CGDisplayIsBuiltin($1.1) != 1 }
+            for (record, _) in candidates {
+                if case .success = await self.reconnect(uuid: record.uuid) { return }
+            }
+        }
     }
 
     /// Re-applies disconnect for displays macOS re-enabled after wake-from-sleep. Called from

@@ -21,10 +21,10 @@
 <link rel="alternate" hreflang="x-default" href="https://didriksg.github.io/Crisp/">
 <link rel="icon" href="icon.png">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Crisp","operatingSystem":"macOS 15+","applicationCategory":"UtilitiesApplication","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"url":"https://didriksg.github.io/Crisp/zh.html","downloadUrl":"https://github.com/didriksg/Crisp/releases/latest/download/Crisp.dmg","screenshot":"https://didriksg.github.io/Crisp/screenshot-zh.png","softwareLicense":"https://github.com/didriksg/Crisp/blob/main/LICENSE","author":{"@type":"Person","name":"Didrik Galteland","url":"https://github.com/didriksg"}}
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Crisp","operatingSystem":"macOS 14+","applicationCategory":"UtilitiesApplication","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"url":"https://didriksg.github.io/Crisp/zh.html","downloadUrl":"https://github.com/didriksg/Crisp/releases/latest/download/Crisp.dmg","screenshot":"https://didriksg.github.io/Crisp/screenshot-zh.png","softwareLicense":"https://github.com/didriksg/Crisp/blob/main/LICENSE","author":{"@type":"Person","name":"Didrik Galteland","url":"https://github.com/didriksg"}}
 </script>
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"VideoObject","name":"Crisp 菜单栏演示","description":"Crisp 是一个免费的 macOS 菜单栏工具，支持 HiDPI 缩放、DDC 亮度、预设和显示器排列，这是功能演示。","thumbnailUrl":"https://didriksg.github.io/Crisp/screenshot-zh.png","uploadDate":"2026-07-31","contentUrl":"https://didriksg.github.io/Crisp/demo.mp4","width":1920,"height":1080}
+{"@context":"https://schema.org","@type":"VideoObject","name":"Crisp 菜单栏演示","description":"Crisp 是一个免费的 macOS 菜单栏工具，支持 HiDPI 缩放、DDC 亮度、预设和显示器排列，这是功能演示。","thumbnailUrl":"https://didriksg.github.io/Crisp/screenshot-zh.png","uploadDate":"2026-07-31T12:00:00+02:00","contentUrl":"https://didriksg.github.io/Crisp/demo.mp4","width":1920,"height":1080}
 </script>
 <script>document.documentElement.classList.add('js')</script>
 <link rel="stylesheet" href="styles.css?v=7">
@@ -74,10 +74,12 @@
         <div class="card reveal"><h3>任意显示器都能开 HiDPI</h3><p>给外接显示器补上 Retina 级的缩放分辨率，不再发虚或太小，2K 及以上自动配好，且始终跑满面板刷新率。</p></div>
         <div class="card reveal"><h3>平滑缩放</h3><p>以更小的步进微调界面大小，远超 macOS 默认的那几档。很多人当初装 BetterDisplay，就是为了这种灵活缩放，现在内建了。</p></div>
         <div class="card reveal"><h3>哪块屏都能调亮度</h3><p>外接屏走 DDC 硬件控制，不支持的用软件兜底；键盘亮度键可作用在光标所在的屏、全部屏或你指定的几块。</p></div>
+        <div class="card reveal"><h3>额外亮度</h3><p>解锁 HDR 亮度余量，把 XDR MacBook 和 HDR 显示器的亮度推过 100%。BetterDisplay 把这个功能放在 Pro 里卖，Crisp 免费。</p></div>
+        <div class="card reveal"><h3>显示器音量</h3><p>通过 DDC 调外接显示器自带音箱的音量，每块屏一个滑块；当显示器是当前音频输出时，键盘音量键直接生效。</p></div>
         <div class="card reveal"><h3>预设</h3><p>把分辨率、亮度、排列存成一套，一键切换。</p></div>
         <div class="card reveal"><h3>排列</h3><p>拖拽摆位、一键切换主显示器。</p></div>
         <div class="card reveal"><h3>系统开关</h3><p>深色模式、夜览、原彩显示，直接在面板里切，不用进系统设置。</p></div>
-        <div class="card reveal"><h3>色彩</h3><p>ICC 配置切换，外加 gamma、对比度、增益微调。</p></div>
+        <div class="card reveal"><h3>色彩</h3><p>ICC 配置切换、每块屏独立开关 HDR，外加 gamma、对比度、增益微调。</p></div>
         <div class="card reveal"><h3>虚拟显示器</h3><p>创建 HiDPI 虚拟屏，用于直播、随航或无头 Mac。</p></div>
         <div class="card reveal"><h3>更多</h3><p>合并亮度滑块、自动亮度跟随内建屏、防止睡眠、隐藏刘海、开机启动。</p></div>
       </div>
@@ -117,11 +119,11 @@
         </details>
         <details>
           <summary>使用 Crisp 需要什么条件？</summary>
-          <p>macOS 15（Sequoia）及以上，Apple 芯片和 Intel Mac 都支持。少数功能（如从菜单断开显示器）仅限 Apple 芯片。</p>
+          <p>macOS 14（Sonoma）及以上，Apple 芯片和 Intel Mac 都支持。少数功能（如从菜单断开显示器）仅限 Apple 芯片。</p>
         </details>
         <details>
           <summary>Crisp 和 BetterDisplay、Lunar 有什么区别？</summary>
-          <p>它们通常收费的功能，灵活的 HiDPI 缩放、DDC 亮度、预设、排列，在 Crisp 里都免费。详见逐项对比：<a href="crisp-vs-betterdisplay-zh.html">Crisp 和 BetterDisplay / Lunar / MonitorControl</a>。</p>
+          <p>它们通常收费的功能，灵活的 HiDPI 缩放、DDC 亮度、XDR/HDR 额外亮度、预设、排列，在 Crisp 里都免费。详见逐项对比：<a href="crisp-vs-betterdisplay-zh.html">Crisp 和 BetterDisplay / Lunar / MonitorControl</a>。</p>
         </details>
       </div>
       </div>
@@ -130,7 +132,7 @@
 
   <footer>
     <div class="wrap">
-      <p>免费开源，MIT 许可。要求 macOS 15 及以上。</p>
+      <p>免费开源，MIT 许可。要求 macOS 14 及以上。</p>
       <p>最初 fork 自 <a href="https://github.com/huberdf/FreeDisplay">FreeDisplay</a>，感谢当初的启发。</p>
       <p>对比：<a href="crisp-vs-betterdisplay-zh.html">Crisp 和 BetterDisplay / Lunar / MonitorControl</a></p>
       <p>指南：<a href="mac-hidpi.html">外接显示器在 Mac 上总是发虚？怎么修</a></p>

@@ -124,6 +124,10 @@ preset.
 - The preset-name text field is the standing exception to the Panels HIG.
 - The Refresh Rate section icon (`speedometer`) is the weakest glyph; a better
   symbol would tighten the icon set.
-- If SwiftUI's `MenuBarExtra` `.window` ever matches our custom panel on
+- ~~If SwiftUI's `MenuBarExtra` `.window` ever matches our custom panel on
   positioning and glass, migrating onto it would put Crisp on the exact
-  documented path instead of emulating it with a custom `NSPanel`.
+  documented path instead of emulating it with a custom `NSPanel`.~~
+  Resolved August 2026: an isolated spike showed `MenuBarExtra` `.window`
+  jumps during animated resize on macOS 26 at any duration, on top of its
+  non-disableable materialize animation. The custom panel stays; its resize
+  machinery is documented in `panel-resize.md`.

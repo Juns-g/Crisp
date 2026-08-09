@@ -16,6 +16,15 @@ class DisplayInfo: ObservableObject, Identifiable {
     @Published var pixelWidth: Int
     @Published var pixelHeight: Int
     @Published var brightness: Double
+    /// UI brightness ceiling. 100 normally; above 100 while Extra Brightness
+    /// (EDR upscaling) is enabled, where the range 100...maxBrightness maps to
+    /// the EDR overlay boost instead of hardware.
+    @Published var maxBrightness: Double = 100.0
+    /// DDC speaker volume 0–100. Meaningful only while volumeSupported.
+    @Published var volume: Double = 0
+    /// True once a DDC read of VCP 0x62 succeeded, i.e. the monitor exposes
+    /// controllable speaker volume. Gates the volume slider and key routing.
+    @Published var volumeSupported: Bool = false
     @Published var availableModes: [DisplayMode]
     @Published var currentDisplayMode: DisplayMode?
     @Published var ddcValues: [UInt8: UInt16?] = [:]
@@ -35,11 +44,27 @@ class DisplayInfo: ObservableObject, Identifiable {
     }
 
     /// The native (highest non-HiDPI) resolution, used for HiDPI enablement and presets.
+    /// Reported in CG's rotated space: on a 90/270-rotated display this is portrait,
+    /// matching availableModes.
     var nativeResolution: (width: Int, height: Int) {
         let nativeMode = availableModes
             .filter { !$0.isHiDPI }
             .max(by: { ($0.width * $0.height) < ($1.width * $1.height) })
         return (nativeMode?.width ?? pixelWidth, nativeMode?.height ?? pixelHeight)
+    }
+
+    /// Whether macOS renders this display rotated 90/270 (portrait on a landscape panel).
+    var isRotated: Bool {
+        Int(CGDisplayRotation(displayID).rounded()) % 180 != 0
+    }
+
+    /// nativeResolution in the panel's unrotated scanout space. The scale-resolutions
+    /// override plist describes the panel hardware, which knows nothing about rotation,
+    /// so plist writes and checks must use these dims; mode-list comparisons stay in
+    /// the rotated space of nativeResolution/availableModes.
+    var panelNativeResolution: (width: Int, height: Int) {
+        let (w, h) = nativeResolution
+        return isRotated ? (h, w) : (w, h)
     }
 
     init(displayID: CGDirectDisplayID) {

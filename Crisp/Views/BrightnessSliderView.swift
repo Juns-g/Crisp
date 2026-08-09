@@ -105,7 +105,7 @@ struct BrightnessSliderView: View {
                 BrightnessStepButton(systemName: "sun.min.fill") { step(-brightnessStep) }
 
                 // Native macOS slider, exactly as in the system Display panel.
-                Slider(value: $localBrightness, in: 0...100) { editing in
+                Slider(value: $localBrightness, in: 0...max(100.0, display.maxBrightness)) { editing in
                     if editing {
                         isDragging = true
                         dragConfirmed = false
@@ -135,7 +135,28 @@ struct BrightnessSliderView: View {
                         }
                     }
                 }
-                .tint(Color.accentColor)
+                .modifier(BoostTintModifier(progress: localBrightness > 100.5 ? 1 : 0))
+                .animation(.easeInOut(duration: 0.3), value: localBrightness > 100.5)
+                .overlay {
+                    if display.maxBrightness > 100 {
+                        GeometryReader { geo in
+                            // Notch at the 100% mark: the track to its right is
+                            // the Extra Brightness region. The slider's track is
+                            // inset by roughly the knob radius on each side;
+                            // ponytail: 10pt eyeballed for .small controls, tune
+                            // here if the notch sits visibly off the thumb
+                            // center when parked at exactly 100.
+                            let inset: CGFloat = 10
+                            let usable = geo.size.width - inset * 2
+                            let x = inset + usable * 100.0 / display.maxBrightness
+                            RoundedRectangle(cornerRadius: 0.75)
+                                .fill(Color.secondary.opacity(0.55))
+                                .frame(width: 1.5, height: 8)
+                                .position(x: x, y: geo.size.height / 2)
+                        }
+                        .allowsHitTesting(false)
+                    }
+                }
                 .controlSize(.small)
                 .accessibilityLabel("Display brightness")
                 .accessibilityValue("\(Int(localBrightness))%")
@@ -189,6 +210,33 @@ struct BrightnessSliderView: View {
         }
     }
 
+    /// Animates the slider tint between accent and boost yellow when the
+    /// value crosses 100. Tint on a control does not interpolate on its own,
+    /// so the blend progress is the animatable data and the mixed color is
+    /// recomputed every frame of the transition.
+    private struct BoostTintModifier: ViewModifier, Animatable {
+        var progress: Double
+        var animatableData: Double {
+            get { progress }
+            set { progress = newValue }
+        }
+        func body(content: Content) -> some View {
+            content.tint(boostTint)
+        }
+
+        private var boostTint: Color {
+            guard progress > 0 else { return .accentColor }
+            let fraction = min(1.0, progress)
+            if #available(macOS 15.0, *) {
+                return Color.accentColor.mix(with: .yellow, by: fraction)
+            }
+            // macOS 14: Color.mix is 15+; AppKit's blend interpolates in a
+            // slightly different space, indistinguishable across a tint ramp.
+            return Color(nsColor: NSColor.controlAccentColor
+                .blended(withFraction: fraction, of: .systemYellow) ?? .controlAccentColor)
+        }
+    }
+
     private func updateDDCStatus() {
         ddcStatus = BrightnessService.shared.isDDCAvailable(for: display.displayID)
     }
@@ -197,7 +245,7 @@ struct BrightnessSliderView: View {
     private var brightnessStep: Double { 10.0 }
 
     private func step(_ delta: Double) {
-        let target = max(0, min(100, display.brightness + delta))
+        let target = max(0, min(display.maxBrightness, display.brightness + delta))
         // The smooth fade updates display.brightness per frame; localBrightness
         // follows through the existing onChange sync.
         BrightnessService.shared.setBrightnessSmooth(target, for: display)
@@ -214,7 +262,10 @@ struct CombinedBrightnessView: View {
 
     private var averageBrightness: Double {
         guard !displays.isEmpty else { return 50 }
-        return displays.map(\.brightness).reduce(0, +) / Double(displays.count)
+        // Proportional: each display contributes its position within its own
+        // range, so a boosted display at 160/160 and a plain one at 100/100
+        // both read as 100%.
+        return displays.map { $0.brightness / $0.maxBrightness * 100.0 }.reduce(0, +) / Double(displays.count)
     }
 
     var body: some View {
@@ -245,7 +296,7 @@ struct CombinedBrightnessView: View {
                             // probe sync would snap it back down through the fade.
                             clickGliding = true
                             for display in displays {
-                                BrightnessService.shared.setBrightnessSmooth(combinedBrightness, for: display)
+                                BrightnessService.shared.setBrightnessSmooth(combinedBrightness / 100.0 * display.maxBrightness, for: display)
                             }
                             Task { @MainActor in
                                 try? await Task.sleep(nanoseconds: 600_000_000)  // fallback release
@@ -255,7 +306,7 @@ struct CombinedBrightnessView: View {
                             // Drag ended, flush final value to all displays.
                             Task { @MainActor in
                                 for display in displays {
-                                    await BrightnessService.shared.setBrightness(combinedBrightness, for: display)
+                                    await BrightnessService.shared.setBrightness(combinedBrightness / 100.0 * display.maxBrightness, for: display)
                                 }
                             }
                         }
@@ -276,8 +327,9 @@ struct CombinedBrightnessView: View {
                     }
                     Task { @MainActor in
                         for display in displays {
-                            display.brightness = newValue
-                            await BrightnessService.shared.setBrightness(newValue, for: display)
+                            let target = newValue / 100.0 * display.maxBrightness
+                            display.brightness = target
+                            await BrightnessService.shared.setBrightness(target, for: display)
                         }
                     }
                 }
@@ -317,7 +369,7 @@ struct CombinedBrightnessView: View {
         // the displays' real brightness via BrightnessProbe, so it glides in exact
         // sync with the per-display handles instead of lagging a separate ramp.
         for display in displays {
-            BrightnessService.shared.setBrightnessSmooth(target, for: display)
+            BrightnessService.shared.setBrightnessSmooth(target / 100.0 * display.maxBrightness, for: display)
         }
     }
 }

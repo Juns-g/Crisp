@@ -56,6 +56,7 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
         static let launchAtLoginPrompted  = "crisp.launchAtLogin.prompted"
         static let menuWidth              = "crisp.menuWidth"
         static let showCombinedBrightness = "crisp.showCombinedBrightness"
+        static let showVolumeSliders      = "crisp.showVolumeSliders"
         static let ddcCacheTTL            = "crisp.ddcCacheTTL"
         static let colorPickerHistory     = "crisp.colorPickerHistory"
         static let brightnessKeyTarget    = "crisp.brightnessKeyTarget"
@@ -82,6 +83,12 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
 
     @Published var showCombinedBrightness: Bool = true {
         didSet { defaults.set(showCombinedBrightness, forKey: Keys.showCombinedBrightness) }
+    }
+
+    /// Volume sliders for DDC-volume monitors. Hiding them only affects the
+    /// panel; the volume keys keep routing to the monitor.
+    @Published var showVolumeSliders: Bool = true {
+        didSet { defaults.set(showVolumeSliders, forKey: Keys.showVolumeSliders) }
     }
 
     @Published var ddcCacheTTL: Double = 5.0 {
@@ -169,6 +176,8 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
             ? defaults.double(forKey: Keys.menuWidth) : 320
         showCombinedBrightness = defaults.object(forKey: Keys.showCombinedBrightness) != nil
             ? defaults.bool(forKey: Keys.showCombinedBrightness) : true
+        showVolumeSliders = defaults.object(forKey: Keys.showVolumeSliders) != nil
+            ? defaults.bool(forKey: Keys.showVolumeSliders) : true
         ddcCacheTTL = defaults.object(forKey: Keys.ddcCacheTTL) != nil
             ? defaults.double(forKey: Keys.ddcCacheTTL) : 5.0
         colorPickerHistory = defaults.stringArray(forKey: Keys.colorPickerHistory) ?? []
