@@ -351,6 +351,9 @@ final class BrightnessBoostService {
     }
 
     @objc private func screenParametersChanged() {
+        // DisplayIDs can be reassigned across a reconfiguration; drop the
+        // capability cache before anything re-reads it.
+        hdrSupportCache.removeAll()
         // Reconcile after connect/disconnect storms settle (mirrors the panel's
         // own debounce; mid-reconfig geometry and headroom reads are garbage).
         Task { @MainActor in
@@ -418,9 +421,19 @@ final class BrightnessBoostService {
         return displays.first { ($0.value(forKey: "displayID") as? UInt32) == displayID }
     }
 
+    /// Hardware capability, cached per displayID: the MPDisplay read is a
+    /// synchronous WindowServer round-trip (SLSDisplaySupportsHDRMode), and
+    /// HDRToggleView's body hits this on every render, 125x/s during a
+    /// brightness glide. The cache clears on screen reconfiguration, the only
+    /// time capability (or displayID assignment) can change.
+    private var hdrSupportCache: [CGDirectDisplayID: Bool] = [:]
+
     private func supportsHDRMode(_ displayID: CGDirectDisplayID) -> Bool {
+        if let cached = hdrSupportCache[displayID] { return cached }
         guard let d = mpDisplay(for: displayID) else { return false }
-        return (d.value(forKey: "hasHDRModes") as? Bool) == true
+        let supported = (d.value(forKey: "hasHDRModes") as? Bool) == true
+        hdrSupportCache[displayID] = supported
+        return supported
     }
 
     @discardableResult

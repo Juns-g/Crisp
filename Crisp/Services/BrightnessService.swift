@@ -598,13 +598,16 @@ final class BrightnessService: @unchecked Sendable {
             let currentStatus: Bool? = ddcAvailableLock.withLock { ddcAvailable[displayID] }
 
             if currentStatus == false {
-                // Software (gamma) path
-                anim.animate(from: fromBrightness, to: clamped, steps: smoothSteps, duration: duration) { [weak display] value, _ in
-                    guard let display else { return }
+                // Software (gamma) path. The transfer-table write is a
+                // synchronous WindowServer call, so it goes to the background
+                // queue like the built-in path's IOKit write; at 125 steps/s
+                // it would otherwise stall the main thread mid-glide.
+                anim.animate(from: fromBrightness, to: clamped, steps: smoothSteps, duration: duration) { [weak self, weak display] value, _ in
+                    guard let self, let display else { return }
                     display.brightness = value
                     // Above 100 the boost sync owns the transfer table (see setBrightness).
                     if value <= 100 {
-                        BrightnessService.shared.setSoftwareBrightness(value, for: displayID)
+                        self.queue.async { self.setSoftwareBrightness(value, for: displayID) }
                     }
                     BrightnessBoostService.shared.syncOverlay(for: display)
                 }

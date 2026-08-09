@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 // Resolution and refresh-rate selection as native checkmarked lists, each a
 // top-level expandable row like the System Settings display menu: resolution is
@@ -28,16 +29,42 @@ final class DisplayModeController: ObservableObject {
     @Published var smoothOn: Bool = false
     @Published var smoothWouldPrompt: Bool = true
     private var isSwitching: Bool = false
+    private var cachedGroups: [ResolutionGroup]?
+    private var cachedSliderModes: [DisplayMode]?
+    private var displayRelay: AnyCancellable?
 
     init(display: DisplayInfo, displayManager: DisplayManager) {
         self.display = display
         self.displayManager = displayManager
+        // The mode blocks render only from currentDisplayMode/availableModes,
+        // so relay exactly those instead of having the views observe the whole
+        // DisplayInfo: its brightness publishes at 125Hz during a click-glide,
+        // and re-rendering six hosting views per step (each regrouping the
+        // AOC's ~100-mode list) was the glide jank. dropFirst(2) skips the
+        // initial replays both @Published publishers emit on subscribe.
+        displayRelay = display.$currentDisplayMode.map { _ in }
+            .merge(with: display.$availableModes.map { _ in })
+            .dropFirst(2)
+            .sink { [weak self] _ in
+                self?.cachedGroups = nil
+                self?.cachedSliderModes = nil
+                self?.objectWillChange.send()
+            }
     }
 
     var currentMode: DisplayMode? { display.currentDisplayMode }
 
     /// Group modes by (resolution + HiDPI), sorted by resolution descending.
+    /// Cached: several block views read this per render, and it rebuilds the
+    /// full grouped/sorted mode list. The relay above invalidates it.
     fileprivate var resolutionGroups: [ResolutionGroup] {
+        if let cachedGroups { return cachedGroups }
+        let computed = computeResolutionGroups()
+        cachedGroups = computed
+        return computed
+    }
+
+    private func computeResolutionGroups() -> [ResolutionGroup] {
         let (nativeW, nativeH) = display.nativeResolution
 
         let base = display.availableModes.filter {
@@ -207,8 +234,12 @@ final class DisplayModeController: ObservableObject {
     /// "looks like" stops macOS's own slider shows (no 1x "native" stop, since macOS caps
     /// More Space at the largest HiDPI mode). External: smoothModes (HiDPI ladder + native
     /// pixel-for-pixel as the More Space end), which the smooth-scaling toggle densifies.
+    /// Cached like resolutionGroups; the relay invalidates it.
     var sliderModes: [DisplayMode] {
-        display.isBuiltin ? builtinLooksLikeModes : smoothModes
+        if let cachedSliderModes { return cachedSliderModes }
+        let computed = display.isBuiltin ? builtinLooksLikeModes : smoothModes
+        cachedSliderModes = computed
+        return computed
     }
 
     /// Built-in "looks like" stops: the native-aspect HiDPI modes (e.g. 1024×665 …
@@ -422,7 +453,7 @@ final class DisplayModeController: ObservableObject {
 /// detail is expanded.
 struct ResolutionHeadBlock: View {
     @ObservedObject var controller: DisplayModeController
-    @ObservedObject var display: DisplayInfo
+    private var display: DisplayInfo { controller.display }
     @ObservedObject var state: PanelSectionState
 
     var body: some View {
@@ -442,7 +473,7 @@ struct ResolutionHeadBlock: View {
 /// are too few slider stops.
 struct ResolutionSliderBlock: View {
     @ObservedObject var controller: DisplayModeController
-    @ObservedObject var display: DisplayInfo
+    private var display: DisplayInfo { controller.display }
     @ObservedObject var state: PanelSectionState
 
     var body: some View {
@@ -456,7 +487,7 @@ struct ResolutionSliderBlock: View {
                 )
             }
         } else {
-            ResolutionListView(controller: controller, display: display)
+            ResolutionListView(controller: controller)
         }
     }
 
@@ -551,11 +582,11 @@ struct ResolutionSliderBlock: View {
 /// ResolutionSliderBlock instead.
 struct ResolutionFullListBlock: View {
     @ObservedObject var controller: DisplayModeController
-    @ObservedObject var display: DisplayInfo
+    private var display: DisplayInfo { controller.display }
 
     var body: some View {
         if controller.sliderModes.count >= 2 {
-            ResolutionListView(controller: controller, display: display)
+            ResolutionListView(controller: controller)
         }
     }
 }
@@ -563,7 +594,7 @@ struct ResolutionFullListBlock: View {
 /// The checkmarked resolution list, grouped HiDPI / Non-HiDPI.
 private struct ResolutionListView: View {
     @ObservedObject var controller: DisplayModeController
-    @ObservedObject var display: DisplayInfo
+    private var display: DisplayInfo { controller.display }
 
     var body: some View {
         let groups = controller.resolutionGroups
@@ -626,7 +657,7 @@ private struct ResolutionListView: View {
 /// Only shown when the current resolution actually offers a choice.
 struct RefreshHeadBlock: View {
     @ObservedObject var controller: DisplayModeController
-    @ObservedObject var display: DisplayInfo
+    private var display: DisplayInfo { controller.display }
     @ObservedObject var state: PanelSectionState
 
     var body: some View {
@@ -645,7 +676,7 @@ struct RefreshHeadBlock: View {
 /// The checkmarked refresh-rate list for the current resolution group.
 struct RefreshListBlock: View {
     @ObservedObject var controller: DisplayModeController
-    @ObservedObject var display: DisplayInfo
+    private var display: DisplayInfo { controller.display }
 
     var body: some View {
         if let group = controller.currentGroup, group.hasMultipleRates {
@@ -668,7 +699,7 @@ struct RefreshListBlock: View {
 /// only), the transient switch-failure message, and the section divider.
 struct ModeTailBlock: View {
     @ObservedObject var controller: DisplayModeController
-    @ObservedObject var display: DisplayInfo
+    private var display: DisplayInfo { controller.display }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
