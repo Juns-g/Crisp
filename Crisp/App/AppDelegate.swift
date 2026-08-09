@@ -530,53 +530,59 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         for (index, display) in vis.enumerated() {
             let id = display.displayID
             let uuid = display.displayUUID
-            blocks.append(block("dhead-\(uuid)") {
+            let dhead = block("dhead-\(uuid)") {
                 DisplayHeaderBlock(display: display, isFirst: index == 0, state: state)
-            })
+            }
+            dhead.liveInFlight = true   // display row chevron
+            blocks.append(dhead)
             // The expanded detail, split so every dropdown is its own block:
             // the canvas animates each reveal as a clip over content that
             // rendered once at natural height, so nothing re-renders per frame
             // (the 120Hz fix for the nested dropdowns; docs/panel-resize.md).
             // Controllers hold the state the sibling blocks share; the block
             // hosts retain them. Every detail block carries the shaded band
-            // (leading padding + background) the one-piece detail view had.
+            // the one-piece detail view had, painted on the clip layer
+            // (banded) so reveal fades dim only the content, never the band.
             let modeC = DisplayModeController(display: display, displayManager: dm)
             let profC = DisplayProfileController(display: display)
             let detailOpen = { state.expandedDisplayIDs.contains(id) }
             func detail<V: View>(_ sub: String, isOpen: @escaping () -> Bool,
+                                 live: Bool = false,
                                  @ViewBuilder _ content: () -> V) -> PanelBlock {
-                block("\(sub)-\(uuid)", isOpen: isOpen) {
+                let b = block("\(sub)-\(uuid)", isOpen: isOpen) {
                     content()
                         .padding(.leading, 4)
-                        .background(Color.primary.opacity(0.08))
                 }
+                b.banded = true
+                b.liveInFlight = live
+                return b
             }
-            blocks.append(detail("dres-head", isOpen: detailOpen) {
-                ResolutionHeadBlock(controller: modeC, display: display, state: state)
+            blocks.append(detail("dres-head", isOpen: detailOpen, live: true) {
+                ResolutionHeadBlock(controller: modeC, state: state)
             })
             blocks.append(detail("dres-body", isOpen: {
                 detailOpen() && state.resolutionOpenIDs.contains(id)
             }) {
-                ResolutionSliderBlock(controller: modeC, display: display, state: state)
+                ResolutionSliderBlock(controller: modeC, state: state)
             })
             blocks.append(detail("dres-all", isOpen: {
                 detailOpen() && state.resolutionOpenIDs.contains(id)
                     && state.allResolutionsOpenIDs.contains(id)
             }) {
-                ResolutionFullListBlock(controller: modeC, display: display)
+                ResolutionFullListBlock(controller: modeC)
             })
-            blocks.append(detail("dref-head", isOpen: detailOpen) {
-                RefreshHeadBlock(controller: modeC, display: display, state: state)
+            blocks.append(detail("dref-head", isOpen: detailOpen, live: true) {
+                RefreshHeadBlock(controller: modeC, state: state)
             })
             blocks.append(detail("dref-body", isOpen: {
                 detailOpen() && state.refreshOpenIDs.contains(id)
             }) {
-                RefreshListBlock(controller: modeC, display: display)
+                RefreshListBlock(controller: modeC)
             })
             blocks.append(detail("dmode-tail", isOpen: detailOpen) {
-                ModeTailBlock(controller: modeC, display: display)
+                ModeTailBlock(controller: modeC)
             })
-            blocks.append(detail("dprof-head", isOpen: detailOpen) {
+            blocks.append(detail("dprof-head", isOpen: detailOpen, live: true) {
                 ProfileHeadBlock(controller: profC, state: state)
             })
             blocks.append(detail("dprof-body", isOpen: {
@@ -584,7 +590,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }) {
                 ProfileBodyBlock(controller: profC)
             })
-            blocks.append(detail("dimg-head", isOpen: detailOpen) {
+            blocks.append(detail("dimg-head", isOpen: detailOpen, live: true) {
                 ImageHeadBlock(display: display, state: state)
             })
             blocks.append(detail("dimg-body", isOpen: {
@@ -617,42 +623,50 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 PresetListView()
             }
         })
-        blocks.append(block("toolshead") {
+        let toolshead = block("toolshead") {
             VStack(alignment: .leading, spacing: 0) {
                 SectionDivider()
                 ExpandableRowStateful(icon: "wrench.and.screwdriver.fill", iconActive: false,
                                       label: "Tools", state: state, key: \.showTools)
             }
-        })
-        blocks.append(block("toolsA", isOpen: { state.showTools }) {
+        }
+        toolshead.liveInFlight = true
+        blocks.append(toolshead)
+        let toolsA = block("toolsA", isOpen: { state.showTools }) {
             VStack(alignment: .leading, spacing: 0) {
                 KeepAwakeRow()
                 ExpandableRowStateful(icon: "display.2", iconActive: false,
                                       label: "Virtual Displays", state: state, key: \.showVirtualDisplays)
             }
             .padding(.leading, 8)
-        })
+        }
+        toolsA.liveInFlight = true   // Virtual Displays chevron
+        blocks.append(toolsA)
         blocks.append(block("vdrows", isOpen: { state.showTools && state.showVirtualDisplays }) {
             VirtualDisplayView()
                 .padding(.leading, 16)
         })
-        blocks.append(block("toolsB", isOpen: { [weak dm] in
+        let toolsB = block("toolsB", isOpen: { [weak dm] in
             state.showTools && (dm?.displays.count ?? 0) > 1
         }) {
             ExpandableRowStateful(icon: "rectangle.3.offgrid", iconActive: false,
                                   label: "Arrange Displays", state: state, key: \.showArrangement)
                 .padding(.leading, 8)
-        })
+        }
+        toolsB.liveInFlight = true
+        blocks.append(toolsB)
         blocks.append(block("arrangerows", isOpen: { [weak dm] in
             state.showTools && state.showArrangement && (dm?.displays.count ?? 0) > 1
         }) {
             ArrangementView()
                 .padding(.leading, 8)
         })
-        blocks.append(block("settingshead") {
+        let settingshead = block("settingshead") {
             ExpandableRowStateful(icon: "gearshape.fill", iconActive: false,
                                   label: "Settings", state: state, key: \.showSettings)
-        })
+        }
+        settingshead.liveInFlight = true
+        blocks.append(settingshead)
         blocks.append(block("settingsrows", isOpen: { state.showSettings }) {
             SettingsView()
                 .padding(.leading, 8)

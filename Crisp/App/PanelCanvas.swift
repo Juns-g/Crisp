@@ -183,6 +183,16 @@ final class PanelBlock {
     let isOpen: () -> Bool
     /// Displayed clip height right now (animates toward `target`).
     var current: CGFloat = 0
+    /// Detail-region blocks: the shaded band is painted on the CLIP's layer
+    /// (tintBands), not the SwiftUI content, so a reveal fade dims only the
+    /// content while the band slides with the clip. Fading the band left a
+    /// bare-glass hole mid-collapse.
+    var banded = false
+    /// Header rows keep SwiftUI layout live even when their own height is
+    /// static in a flight: their chevron rotation is a per-frame SwiftUI
+    /// render, and the static-block muting froze it until settle (the arrow
+    /// snapped instead of turning). One-row hosts, so staying live is cheap.
+    var liveInFlight = false
     var target: CGFloat { isOpen() ? contentHeight : 0 }
 
     init(id: String, host: NSView, isOpen: @escaping () -> Bool) {
@@ -250,6 +260,12 @@ final class PanelCanvas {
     private var animTarget: [CGFloat] = []
     private var animTargetSum: CGFloat = 0
     private var animFromSum: CGFloat = 0
+    /// Blocks fading with this flight: a section opening from zero fades in,
+    /// one closing to zero fades out, tracking the spring. Mirrors the soft
+    /// .opacity transition SwiftUI gives the in-block curtains (Brightness
+    /// Keys, Support), so every reveal gets the same treatment.
+    private var fadeInIdx: Set<Int> = []
+    private var fadeOutIdx: Set<Int> = []
     private var scrollOffset: CGFloat = 0
     private var animatePending = false
     /// The shell is layer-driven and presents its frame change in the CURRENT
@@ -317,6 +333,7 @@ final class PanelCanvas {
         footer = newFooter
         for b in blocks { doc.addSubview(b.clip) }
         if let shell = viewport.superview { shell.addSubview(newFooter.clip) }
+        tintBands()
         measureAll()
         for b in blocks { b.current = b.target }
         footer?.current = footer?.target ?? 0
@@ -398,6 +415,19 @@ final class PanelCanvas {
         animFromSum = fromSum
         animTargetSum = targetSum
         pendingScalar = nil
+        // Reveals fade while they slide: the HOST (content) fades, the clip
+        // (which carries the band for detail blocks) only resizes. Opening
+        // blocks start invisible (their clip is still zero-height this frame,
+        // so no flash either way); everything else snaps opaque in case a
+        // prior flight was retargeted mid-fade.
+        fadeInIdx.removeAll()
+        fadeOutIdx.removeAll()
+        for i in blocks.indices {
+            if animFrom[i] == 0, animTarget[i] > 0 { fadeInIdx.insert(i) }
+            else if animFrom[i] > 0, animTarget[i] == 0 { fadeOutIdx.insert(i) }
+            let a: CGFloat = fadeInIdx.contains(i) ? 0 : 1
+            if blocks[i].host.alphaValue != a { blocks[i].host.alphaValue = a }
+        }
         // One window grow per toggle, HERE at rest (nothing moves in this
         // frame, so its WindowServer cost cannot jump); per-tick work during
         // the flight is layer-only. Shadow swaps first so the grow's setFrame
@@ -417,7 +447,8 @@ final class PanelCanvas {
         // per-frame layout; muting it froze the inner reveal until settle.
         // endFlightMuting() at settle/snap runs one real pass at rest.
         for (i, b) in blocks.enumerated() {
-            (b.host as? CountedHostingView)?.muteLayout = (animFrom[i] == animTarget[i])
+            (b.host as? CountedHostingView)?.muteLayout =
+                (animFrom[i] == animTarget[i]) && !b.liveInFlight
         }
         (footer?.host as? CountedHostingView)?.muteLayout = true
         PanelCanvas.log.log("animate from=\(fromSum, format: .fixed(precision: 1)) to=\(targetSum, format: .fixed(precision: 1)) v0=\(self.spring.velocity, format: .fixed(precision: 1))")
@@ -428,6 +459,11 @@ final class PanelCanvas {
     /// mid-flight (hover states, live value changes, hit-zone mappings) lands
     /// now, at rest.
     private func endFlightMuting() {
+        // Fades land fully opaque; a closed block is invisible through its
+        // zero-height clip regardless of alpha.
+        for b in blocks where b.host.alphaValue != 1 { b.host.alphaValue = 1 }
+        fadeInIdx.removeAll()
+        fadeOutIdx.removeAll()
         for b in blocks {
             (b.host as? CountedHostingView)?.muteLayout = false
             b.host.needsLayout = true
@@ -443,6 +479,9 @@ final class PanelCanvas {
         guard abs(denom) > 0.001, animFrom.count == blocks.count,
               animTarget.count == blocks.count else { return }
         let s = (x - animFromSum) / denom
+        let fade = min(max(s, 0), 1)
+        for i in fadeInIdx { blocks[i].host.alphaValue = fade }
+        for i in fadeOutIdx { blocks[i].host.alphaValue = 1 - fade }
         for (i, b) in blocks.enumerated() {
             let exact = animFrom[i] + s * (animTarget[i] - animFrom[i])
             // Ceiling is the TALLER of this flight's endpoints, not the current
@@ -626,6 +665,22 @@ final class PanelCanvas {
     func refreshAppearance() {
         guard panel != nil else { return }
         useRestShadow()
+        tintBands()
+    }
+
+    /// Paints the detail band (labelColor at 8%, the AppKit resolution of the
+    /// SwiftUI Color.primary band the detail region used to carry) on banded
+    /// blocks' clip layers, resolved against the current appearance.
+    func tintBands() {
+        let appearance = shellView?.effectiveAppearance ?? NSApp.effectiveAppearance
+        var band = NSColor.labelColor.withAlphaComponent(0.08).cgColor
+        appearance.performAsCurrentDrawingAppearance {
+            band = NSColor.labelColor.withAlphaComponent(0.08).cgColor
+        }
+        for b in blocks where b.banded {
+            b.clip.wantsLayer = true
+            b.clip.layer?.backgroundColor = band
+        }
     }
 
     /// Screen rect of the VISIBLE panel. The window frame includes the
