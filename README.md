@@ -69,6 +69,7 @@ Completely optional, but you'll have my heartfelt thanks.
 Thank you to the people chipping in toward keeping Crisp signed and notarized:
 
 - **Barry** ([@BarryBarrywu](https://github.com/BarryBarrywu))
+- **[@kuldipmaharjan](https://github.com/kuldipmaharjan)**
 
 ## Requirements
 
