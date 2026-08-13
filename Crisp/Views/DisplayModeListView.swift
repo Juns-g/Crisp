@@ -816,7 +816,7 @@ struct CheckmarkRow: View {
         .onHover { isHovered = $0 }
         .accessibilityLabel(
             isSelected
-                ? "\(NSLocalizedString(label, comment: "")), \(NSLocalizedString(", selected", comment: ""))"
+                ? "\(NSLocalizedString(label, comment: ""))\(NSLocalizedString(", selected", comment: ""))"
                 : NSLocalizedString(label, comment: "")
         )
         .accessibilityAddTraits(.isButton)

@@ -322,6 +322,26 @@
         }
       }
     },
+    ", collapsed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "，已折叠"
+          }
+        }
+      }
+    },
+    ", expanded" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "，已展开"
+          }
+        }
+      }
+    },
     ", main display" : {
       "localizations" : {
         "zh-Hans" : {
