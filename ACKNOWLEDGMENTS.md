@@ -34,7 +34,8 @@ SOFTWARE.
 ## Contributions
 
 - [@caicaiks](https://github.com/caicaiks) ([#4](https://github.com/didriksg/Crisp/pull/4), [#13](https://github.com/didriksg/Crisp/pull/13))
-- [@shaw-baobao](https://github.com/shaw-baobao) ([#11](https://github.com/didriksg/Crisp/pull/11))
+- [@shaw-baobao](https://github.com/shaw-baobao) ([#11](https://github.com/didriksg/Crisp/pull/11), [#24](https://github.com/didriksg/Crisp/pull/24))
+- [@YuriNachos](https://github.com/YuriNachos) ([#27](https://github.com/didriksg/Crisp/pull/27), [#35](https://github.com/didriksg/Crisp/pull/35), [#36](https://github.com/didriksg/Crisp/pull/36))
 
 ## Translations
 
