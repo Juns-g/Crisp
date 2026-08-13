@@ -49,6 +49,11 @@ final class BrightnessBoostService {
     /// once nothing is boosted.
     private var headroomPollTask: Task<Void, Never>?
 
+    /// Pending post-reconfiguration reconcile. One at a time: a connect or
+    /// disconnect storm posts didChangeScreenParametersNotification many
+    /// times, and each reapplyAll is a full DDC/gamma/overlay pass.
+    private var reapplyAfterReconfigTask: Task<Void, Never>?
+
     /// When an enabled external first reported potentialHeadroom at or below
     /// hdrReadyThreshold: HDR capability disappeared out from under it (user
     /// turned HDR off, or a HiDPI mode switch dropped HDR advertisement).
@@ -350,14 +355,29 @@ final class BrightnessBoostService {
         EDROverlayManager.shared.removeAll()
     }
 
+    /// Drop all per-display state for a disconnected display so a reused
+    /// displayID cannot inherit it (same hazard as BrightnessService's
+    /// invalidateDDCState; DisplayManager calls both from its removed loop).
+    func invalidate(for displayID: CGDirectDisplayID) {
+        maxAnimators[displayID]?.cancel()
+        maxAnimators.removeValue(forKey: displayID)
+        headroomLossSince.removeValue(forKey: displayID)
+        hdrRequestGeneration.removeValue(forKey: displayID)
+        collapsingDisplays.remove(displayID)
+        hdrSupportCache.removeValue(forKey: displayID)
+    }
+
     @objc private func screenParametersChanged() {
         // DisplayIDs can be reassigned across a reconfiguration; drop the
         // capability cache before anything re-reads it.
         hdrSupportCache.removeAll()
-        // Reconcile after connect/disconnect storms settle (mirrors the panel's
-        // own debounce; mid-reconfig geometry and headroom reads are garbage).
-        Task { @MainActor in
+        // Reconcile ONCE after connect/disconnect storms settle (mirrors the
+        // panel's own debounce; mid-reconfig geometry and headroom reads are
+        // garbage): cancel any reconcile a previous notification scheduled.
+        reapplyAfterReconfigTask?.cancel()
+        reapplyAfterReconfigTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else { return }
             self.reapplyAll()
         }
     }
@@ -403,9 +423,13 @@ final class BrightnessBoostService {
         }
         // Wait on the live collapse set, not the isEnabled flag: a collapse
         // started moments earlier from the Extra Brightness row has already
-        // cleared the flag but is still animating this display.
-        while collapsingDisplays.contains(displayID) {
+        // cleared the flag but is still animating this display. Capped at 2s
+        // (the collapse runs 0.35s): an animator cancelled without its final
+        // tick would otherwise leave the marker set and spin this forever.
+        var waited = 0
+        while collapsingDisplays.contains(displayID), waited < 40 {
             try? await Task.sleep(nanoseconds: 50_000_000)
+            waited += 1
         }
         // Brief settle so the collapse's last brightness write lands
         // before the mode switch.
