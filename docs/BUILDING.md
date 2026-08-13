@@ -31,4 +31,16 @@ open /Applications/Crisp.app
 
 This is the fast dev loop: edit, compile, swap, relaunch, no Xcode involved.
 
+## Before opening a PR
+
+Run `make check`: it runs SwiftLint (strict), the unit tests, and the
+localization key check, the same checks CI enforces, so failures surface
+locally instead of on the PR. It needs full Xcode plus `swiftlint` and
+`xcodegen` (`brew install swiftlint xcodegen`). To run it automatically on
+every push, opt in once:
+
+```sh
+git config core.hooksPath .githooks
+```
+
 The app icon is generated from vector code: `scripts/generate-icon.swift`.

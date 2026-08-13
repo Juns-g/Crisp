@@ -116,6 +116,15 @@ final class FrameSpring: NSObject {
         velocity = 0
     }
 
+    var isAnimating: Bool { active }
+
+    /// Park/unpark the vsync tick while the panel is hidden. Pausing (not
+    /// invalidating) keeps the never-create-on-demand rule: the link object
+    /// survives, so resuming at open has it hot long before the first toggle.
+    func setPaused(_ paused: Bool) {
+        link?.isPaused = paused
+    }
+
     @objc private func tick(_ l: CADisplayLink) {
         let now = CACurrentMediaTime()
         let gap = (now - lastTick) * 1000
@@ -208,7 +217,7 @@ final class PanelBlock {
 /// keeps window frame + block frames consistent every tick.
 @MainActor
 final class PanelCanvas {
-    static let log = Logger(subsystem: "com.crisp.app", category: "panelcanvas")
+    nonisolated static let log = Logger(subsystem: "com.crisp.app", category: "panelcanvas")
     /// For the spring's tick log sub-timings (single instance in practice).
     static weak var shared: PanelCanvas?
 
@@ -385,7 +394,7 @@ final class PanelCanvas {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.animatePending = false
-            self.isShown() ? self.animateToTargets() : self.snapToTargets()
+            if self.isShown() { self.animateToTargets() } else { self.snapToTargets() }
         }
     }
 
@@ -423,8 +432,11 @@ final class PanelCanvas {
         fadeInIdx.removeAll()
         fadeOutIdx.removeAll()
         for i in blocks.indices {
-            if animFrom[i] == 0, animTarget[i] > 0 { fadeInIdx.insert(i) }
-            else if animFrom[i] > 0, animTarget[i] == 0 { fadeOutIdx.insert(i) }
+            if animFrom[i] == 0, animTarget[i] > 0 {
+                fadeInIdx.insert(i)
+            } else if animFrom[i] > 0, animTarget[i] == 0 {
+                fadeOutIdx.insert(i)
+            }
             let a: CGFloat = fadeInIdx.contains(i) ? 0 : 1
             if blocks[i].host.alphaValue != a { blocks[i].host.alphaValue = a }
         }
@@ -589,12 +601,12 @@ final class PanelCanvas {
         guard let panel else { return }
         // h is the VISIBLE height below anchorTopY; the window extends
         // topMargin above it (rim headroom, covered by the menu bar).
-        let H = h.rounded() + topMargin
-        let f = NSRect(x: anchorX - sideMargin, y: anchorTopY + topMargin - H,
-                       width: width + 2 * sideMargin, height: H)
+        let fullHeight = h.rounded() + topMargin
+        let f = NSRect(x: anchorX - sideMargin, y: anchorTopY + topMargin - fullHeight,
+                       width: width + 2 * sideMargin, height: fullHeight)
         if panel.frame != f {
             panel.setFrame(f, display: false)
-            lastSetWindowH = H
+            lastSetWindowH = fullHeight
             layoutNow()
         }
     }
@@ -704,6 +716,19 @@ final class PanelCanvas {
         spring.retarget(view: v)
         linkScreen = screen
         PanelCanvas.log.log("link fps=\(screen.maximumFramesPerSecond)")
+    }
+
+    /// Stop the vsync wakeups while the panel is hidden: idle ticks are no-ops,
+    /// but 60-165 process wakeups per second all day are not free. Snap any
+    /// in-flight animation first so a paused link cannot strand onSettle's
+    /// cleanup (unmuting, window tighten).
+    func parkSpring() {
+        if spring.isAnimating { snapToTargets() }
+        spring.setPaused(true)
+    }
+
+    func wakeSpring() {
+        spring.setPaused(false)
     }
 
     /// Warm-up pre-paint: draw every block once while the panel is invisible

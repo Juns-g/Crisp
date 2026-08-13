@@ -2,6 +2,8 @@ import Foundation
 import IOKit
 import IOKit.graphics
 import CoreGraphics
+// For CGDisplayCreateUUIDFromDisplayID (ApplicationServices, not CoreGraphics).
+import AppKit
 
 @_silgen_name("CGDisplayIOServicePort")
 private func CGDisplayIOServicePort(_ display: CGDirectDisplayID) -> io_service_t
@@ -189,8 +191,46 @@ final class BrightnessService: @unchecked Sendable {
     private var softwareBrightnessFactors: [CGDirectDisplayID: Double] = [:]
     private let softwareBrightnessLock = NSLock()
 
+    /// UUID-keyed like GammaPersistenceKey (issue #32): displayIDs are reused
+    /// across reconnects and reboots, so the old raw-ID key could hand this
+    /// display's dimming factor to a different physical display later.
     private func softBrightnessKey(for displayID: CGDirectDisplayID) -> String {
+        if let uuid = Self.displayUUIDString(for: displayID) {
+            return "crisp.softBrightness.uuid.\(uuid)"
+        }
+        // UUID lookup failed (display just went offline): legacy raw-ID key.
+        return Self.legacySoftBrightnessKey(for: displayID)
+    }
+
+    private static func legacySoftBrightnessKey(for displayID: CGDirectDisplayID) -> String {
         "crisp.softBrightness_\(displayID)"
+    }
+
+    /// Same primary path as DisplayInfo.displayUUID (CG UUID of an online
+    /// display), so both produce identical key strings.
+    private static func displayUUIDString(for displayID: CGDirectDisplayID) -> String? {
+        guard let cfUUID = CGDisplayCreateUUIDFromDisplayID(displayID) else { return nil }
+        return CFUUIDCreateString(nil, cfUUID.takeRetainedValue()) as String?
+    }
+
+    /// Moves any legacy, displayID-keyed software-brightness factor onto the
+    /// stable UUID key, for every display currently online. Same rules as
+    /// GammaService.migrateLegacyStateIfNeeded: repeated calls are no-ops, an
+    /// existing UUID entry is never overwritten, and a legacy key with no live
+    /// display is left alone (guessing which physical display it belonged to
+    /// is exactly the bug being fixed).
+    @MainActor
+    func migrateLegacySoftBrightnessIfNeeded(for displays: [DisplayInfo]) {
+        let defaults = UserDefaults.standard
+        for display in displays {
+            let legacyKey = Self.legacySoftBrightnessKey(for: display.displayID)
+            guard defaults.object(forKey: legacyKey) != nil else { continue }
+            let uuidKey = "crisp.softBrightness.uuid.\(display.displayUUID)"
+            if defaults.object(forKey: uuidKey) == nil {
+                defaults.set(defaults.double(forKey: legacyKey), forKey: uuidKey)
+            }
+            defaults.removeObject(forKey: legacyKey)
+        }
     }
 
     private func saveSoftwareBrightness(factor: Double, for displayID: CGDirectDisplayID) {
@@ -602,7 +642,8 @@ final class BrightnessService: @unchecked Sendable {
                 // synchronous WindowServer call, so it goes to the background
                 // queue like the built-in path's IOKit write; at 125 steps/s
                 // it would otherwise stall the main thread mid-glide.
-                anim.animate(from: fromBrightness, to: clamped, steps: smoothSteps, duration: duration) { [weak self, weak display] value, _ in
+                anim.animate(from: fromBrightness, to: clamped,
+                             steps: smoothSteps, duration: duration) { [weak self, weak display] value, _ in
                     guard let self, let display else { return }
                     display.brightness = value
                     // Above 100 the boost sync owns the transfer table (see setBrightness).
@@ -614,7 +655,8 @@ final class BrightnessService: @unchecked Sendable {
             } else {
                 // DDC path, routed through the coalescing writer so steps that
                 // outpace the I2C bus are dropped instead of queued.
-                anim.animate(from: fromBrightness, to: clamped, steps: smoothSteps, duration: duration) { [weak self, weak display] value, _ in
+                anim.animate(from: fromBrightness, to: clamped,
+                             steps: smoothSteps, duration: duration) { [weak self, weak display] value, _ in
                     guard let self, let display else { return }
                     display.brightness = value
                     // Above 100 the boost sync owns the transfer table (see setBrightness).
@@ -690,8 +732,9 @@ final class BrightnessService: @unchecked Sendable {
         ddcAvailableLock.withLock { ddcAvailable[displayID] }
     }
 
-    /// Clears DDC availability and max brightness cache for a disconnected display.
+    /// Clears all per-display state for a disconnected display.
     /// Call this when a display is removed so stale state cannot pollute a reconnect.
+    @MainActor
     func invalidateDDCState(for displayID: CGDirectDisplayID) {
         ddcAvailableLock.withLock {
             ddcAvailable.removeValue(forKey: displayID)
@@ -700,6 +743,21 @@ final class BrightnessService: @unchecked Sendable {
             // display's software-dimming routing would stick to whatever
             // display inherits its ID next.
             hdrDimmedDisplays.remove(displayID)
+        }
+        // Same ID-reuse hazard for the rest: reapplySoftwareBrightnessIfNeeded
+        // reads the in-memory factor first, so a display inheriting this ID
+        // would silently get the departed display's dimming factor.
+        animators[displayID]?.cancel()
+        animators.removeValue(forKey: displayID)
+        softwareBrightnessLock.withLock {
+            _ = softwareBrightnessFactors.removeValue(forKey: displayID)
+        }
+        ddcPumpLock.withLock {
+            pendingDDCPercent.removeValue(forKey: displayID)
+            ddcFailStreak.removeValue(forKey: displayID)
+            lastDDCWriteInstant.removeValue(forKey: displayID)
+            // ddcPumpActive stays: the pump owns it and removes itself once it
+            // sees no pending value.
         }
     }
 

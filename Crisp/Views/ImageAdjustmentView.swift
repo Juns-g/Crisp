@@ -33,7 +33,7 @@ struct ImageAdjustmentView: View {
     init(display: DisplayInfo, isExpanded: Bool) {
         _display = ObservedObject(wrappedValue: display)
         self.isExpanded = isExpanded
-        let saved = GammaService.shared.loadSavedState(for: display.displayID)
+        let saved = GammaService.shared.loadSavedState(for: display)
         _contrast = State(initialValue: saved?.contrast ?? 0)
         _gammaVal = State(initialValue: saved?.gammaVal ?? 0)
         _gain = State(initialValue: saved?.gain ?? 0)
@@ -53,10 +53,10 @@ struct ImageAdjustmentView: View {
         VStack(alignment: .leading, spacing: 0) {
 
             // ── Group 1: Global adjustments ────────────────────────────────
-            adjustRow(icon: "circle.righthalf.filled",   label: "Contrast",  value: $contrast)
-            adjustRow(icon: "sparkle",                   label: "Gamma",  value: $gammaVal)
-            adjustRow(icon: "bolt.fill",                 label: "Gain",    value: $gain)
-            adjustRow(icon: "thermometer.medium",        label: "Color Temp",    value: $colorTemperature)
+            adjustRow(icon: "circle.righthalf.filled", label: "Contrast", value: $contrast)
+            adjustRow(icon: "sparkle", label: "Gamma", value: $gammaVal)
+            adjustRow(icon: "bolt.fill", label: "Gain", value: $gain)
+            adjustRow(icon: "thermometer.medium", label: "Color Temp", value: $colorTemperature)
             quantizationRow
 
             Divider()
@@ -64,18 +64,18 @@ struct ImageAdjustmentView: View {
                 .padding(.vertical, 2)
 
             // ── Group 2: Per-channel gamma ─────────────────────────────────
-            adjustRow(icon: "r.circle",      label: "Gamma R",  value: $rGamma, accent: .red)
-            adjustRow(icon: "g.circle",      label: "Gamma G",  value: $gGamma, accent: .green)
-            adjustRow(icon: "b.circle",      label: "Gamma B",  value: $bGamma, accent: .blue)
+            adjustRow(icon: "r.circle", label: "Gamma R", value: $rGamma, accent: .red)
+            adjustRow(icon: "g.circle", label: "Gamma G", value: $gGamma, accent: .green)
+            adjustRow(icon: "b.circle", label: "Gamma B", value: $bGamma, accent: .blue)
 
             Divider()
                 .padding(.horizontal, 12)
                 .padding(.vertical, 2)
 
             // ── Group 3: Per-channel gain ──────────────────────────────────
-            adjustRow(icon: "r.circle.fill", label: "Gain R",    value: $rGain,  accent: .red)
-            adjustRow(icon: "g.circle.fill", label: "Gain G",    value: $gGain,  accent: .green)
-            adjustRow(icon: "b.circle.fill", label: "Gain B",    value: $bGain,  accent: .blue)
+            adjustRow(icon: "r.circle.fill", label: "Gain R", value: $rGain, accent: .red)
+            adjustRow(icon: "g.circle.fill", label: "Gain G", value: $gGain, accent: .green)
+            adjustRow(icon: "b.circle.fill", label: "Gain B", value: $bGain, accent: .blue)
 
             Divider()
                 .padding(.horizontal, 12)
@@ -215,7 +215,7 @@ struct ImageAdjustmentView: View {
     /// Save the current adjustment, or clear it and restore identity when neutral.
     private func persist() {
         if isIdentity {
-            GammaService.shared.clearSavedState(for: display.displayID)
+            GammaService.shared.clearSavedState(for: display)
             GammaService.shared.resetSingleDisplay(display.displayID)
         } else {
             let adj = GammaAdjustment(
@@ -226,7 +226,7 @@ struct ImageAdjustmentView: View {
                 quantizationLevels: Int(quantLevels),
                 isInverted: isInverted, isPaused: isPaused
             )
-            GammaService.shared.saveState(adj, for: display.displayID)
+            GammaService.shared.saveState(adj, for: display)
         }
     }
 
@@ -246,7 +246,7 @@ struct ImageAdjustmentView: View {
             gain: gain,
             colorTemperature: colorTemperature,
             rGamma: rGamma, gGamma: gGamma, bGamma: bGamma,
-            rGain: rGain,   gGain: gGain,   bGain: bGain,
+            rGain: rGain, gGain: gGain, bGain: bGain,
             quantizationLevels: Int(quantLevels),
             isInverted: isInverted,
             isPaused: false
@@ -262,7 +262,7 @@ struct ImageAdjustmentView: View {
         quantLevels = 256
         isInverted = false
         isPaused = false
-        GammaService.shared.clearSavedState(for: display.displayID)
+        GammaService.shared.clearSavedState(for: display)
         GammaService.shared.resetSingleDisplay(display.displayID)
     }
 }

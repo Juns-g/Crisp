@@ -187,7 +187,7 @@ final class ColorProfileService: @unchecked Sendable {
     func colorModeDescription(for displayID: CGDirectDisplayID) -> String {
         guard let mode = CGDisplayCopyDisplayMode(displayID) else { return "Unknown" }
         let encoding: String
-        if let cfEnc = mode.pixelEncoding { encoding = cfEnc as String } else { encoding = "" }
+        if let cfEnc = (mode as DisplayModePixelEncoding).pixelEncoding { encoding = cfEnc as String } else { encoding = "" }
         let bpc = bitsPerChannel(from: encoding)
         let source = CGDisplayIsBuiltin(displayID) != 0 ? "Internal" : "External"
         return "\(source) (\(bpc)-bit)"
@@ -202,13 +202,13 @@ final class ColorProfileService: @unchecked Sendable {
 
     // Bridge CGColorSpace CFString constants to Swift String for comparison
     private func humanReadable(_ name: String) -> String {
-        if name == (CGColorSpace.displayP3 as String)           { return "Display P3" }
-        if name == (CGColorSpace.sRGB as String)                { return "sRGB IEC61966-2.1" }
-        if name == (CGColorSpace.adobeRGB1998 as String)        { return "Adobe RGB (1998)" }
-        if name == (CGColorSpace.genericRGBLinear as String)    { return "Generic RGB Linear" }
-        if name == (CGColorSpace.extendedSRGB as String)        { return "Extended sRGB" }
-        if name == (CGColorSpace.linearSRGB as String)          { return "Linear sRGB" }
-        if name == (CGColorSpace.extendedLinearSRGB as String)  { return "Extended Linear sRGB" }
+        if name == (CGColorSpace.displayP3 as String) { return "Display P3" }
+        if name == (CGColorSpace.sRGB as String) { return "sRGB IEC61966-2.1" }
+        if name == (CGColorSpace.adobeRGB1998 as String) { return "Adobe RGB (1998)" }
+        if name == (CGColorSpace.genericRGBLinear as String) { return "Generic RGB Linear" }
+        if name == (CGColorSpace.extendedSRGB as String) { return "Extended sRGB" }
+        if name == (CGColorSpace.linearSRGB as String) { return "Linear sRGB" }
+        if name == (CGColorSpace.extendedLinearSRGB as String) { return "Extended Linear sRGB" }
         if name == (CGColorSpace.genericGrayGamma2_2 as String) { return "Generic Gray Gamma 2.2" }
         if name.hasPrefix("kCGColorSpace") {
             return String(name.dropFirst("kCGColorSpace".count))
@@ -285,3 +285,12 @@ final class ColorProfileService: @unchecked Sendable {
         )
     }
 }
+
+/// `CGDisplayMode.pixelEncoding` is deprecated (macOS 10.11, "No longer
+/// supported") but still returns real data and is the only source for the
+/// panel's bits-per-channel. Reading it through this protocol witness
+/// acknowledges the deprecation once instead of warning at every call site.
+private protocol DisplayModePixelEncoding {
+    var pixelEncoding: CFString? { get }
+}
+extension CGDisplayMode: DisplayModePixelEncoding {}

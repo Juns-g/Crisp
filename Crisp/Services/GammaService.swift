@@ -139,6 +139,15 @@ final class GammaService: @unchecked Sendable {
             0.0, 1.0, 1.0)
     }
 
+    /// Drop the in-memory adjustment for a disconnected display. Display IDs
+    /// are reused, so a stale entry would otherwise be pushed onto whatever
+    /// display inherits the ID next (refreshDisplays reapplies unconditionally
+    /// for kept displays). The UUID-keyed persisted copy stays untouched;
+    /// reapplyIfNeeded restores it when the same physical display returns.
+    func invalidate(for displayID: CGDirectDisplayID) {
+        _ = adjustmentsLock.withLock { activeAdjustments.removeValue(forKey: displayID) }
+    }
+
     /// Restore all online displays to identity gamma (per-display, avoids global reset).
     func restoreColorSync() {
         adjustmentsLock.withLock { activeAdjustments.removeAll() }
@@ -156,7 +165,7 @@ final class GammaService: @unchecked Sendable {
     /// is restored, preventing a "flat" / uncalibrated appearance after reset.
     /// Prefer this over `restoreColorSync()` whenever only one display needs resetting.
     func resetSingleDisplay(_ displayID: CGDirectDisplayID) {
-        adjustmentsLock.withLock { activeAdjustments.removeValue(forKey: displayID) }
+        _ = adjustmentsLock.withLock { activeAdjustments.removeValue(forKey: displayID) }
         let size = 256
         var r = (0..<size).map { CGGammaValue($0) / CGGammaValue(size - 1) }
         var g = r; var b = r
@@ -174,27 +183,30 @@ final class GammaService: @unchecked Sendable {
         }
     }
 
-    private static func stateKey(for displayID: CGDirectDisplayID) -> String {
-        "crisp.GammaService.savedAdjustment.\(displayID)"
-    }
+    // MARK: - Persistence (displayUUID keyed, survives displayID reassignment; issue #32)
 
-    func saveState(_ adj: GammaAdjustment, for displayID: CGDirectDisplayID) {
+    /// Persist an adjustment under the display's stable UUID, not its `CGDirectDisplayID`:
+    /// macOS can reassign the id across reboots/reconnects, which used to apply a saved
+    /// color temperature to the wrong physical display on a dual-external setup.
+    @MainActor
+    func saveState(_ adj: GammaAdjustment, for display: DisplayInfo) {
         let dict: [String: Any] = [
             "contrast": adj.contrast,
             "gammaVal": adj.gammaVal,
             "gain": adj.gain,
             "colorTemperature": adj.colorTemperature,
             "rGamma": adj.rGamma, "gGamma": adj.gGamma, "bGamma": adj.bGamma,
-            "rGain": adj.rGain,   "gGain": adj.gGain,   "bGain": adj.bGain,
+            "rGain": adj.rGain, "gGain": adj.gGain, "bGain": adj.bGain,
             "quantizationLevels": adj.quantizationLevels,
             "isInverted": adj.isInverted,
             "isPaused": adj.isPaused
         ]
-        UserDefaults.standard.set(dict, forKey: GammaService.stateKey(for: displayID))
+        UserDefaults.standard.set(dict, forKey: GammaPersistenceKey.uuidKey(for: display.displayUUID))
     }
 
-    func loadSavedState(for displayID: CGDirectDisplayID) -> GammaAdjustment? {
-        guard let dict = UserDefaults.standard.dictionary(forKey: GammaService.stateKey(for: displayID)) else { return nil }
+    @MainActor
+    func loadSavedState(for display: DisplayInfo) -> GammaAdjustment? {
+        guard let dict = UserDefaults.standard.dictionary(forKey: GammaPersistenceKey.uuidKey(for: display.displayUUID)) else { return nil }
         var adj = GammaAdjustment()
         adj.contrast           = dict["contrast"]           as? Double ?? 0
         adj.gammaVal           = dict["gammaVal"]           as? Double ?? 0
@@ -212,14 +224,45 @@ final class GammaService: @unchecked Sendable {
         return adj
     }
 
-    func clearSavedState(for displayID: CGDirectDisplayID) {
-        UserDefaults.standard.removeObject(forKey: GammaService.stateKey(for: displayID))
+    @MainActor
+    func clearSavedState(for display: DisplayInfo) {
+        UserDefaults.standard.removeObject(forKey: GammaPersistenceKey.uuidKey(for: display.displayUUID))
+    }
+
+    /// Moves any legacy, `CGDirectDisplayID`-keyed saved adjustment onto the stable
+    /// UUID key (issue #32), for every display currently online. Call whenever the
+    /// display list is (re)built, e.g. from `DisplayManager.refreshDisplays()`, before
+    /// anything reapplies a saved adjustment. Safe to call repeatedly: a no-op once a
+    /// display has no legacy entry left, and never overwrites an adjustment already
+    /// saved under the UUID key.
+    ///
+    /// Deliberately does not touch a legacy key whose displayID has no live display
+    /// right now: that id may simply belong to a disconnected monitor, and guessing
+    /// would risk applying a stale adjustment to the wrong physical display, the exact
+    /// bug this migration fixes.
+    @MainActor
+    func migrateLegacyStateIfNeeded(for displays: [DisplayInfo]) {
+        let defaults = UserDefaults.standard
+        let live = displays.map { (id: $0.displayID, uuid: $0.displayUUID) }
+        let legacyIDsWithState = Set(live.map(\.id).filter {
+            defaults.dictionary(forKey: GammaPersistenceKey.legacyKey(for: $0)) != nil
+        })
+        guard !legacyIDsWithState.isEmpty else { return }
+        for target in GammaPersistenceKey.migrationTargets(liveDisplays: live, legacyDisplayIDsWithSavedState: legacyIDsWithState) {
+            guard let legacyDict = defaults.dictionary(forKey: target.legacyKey) else { continue }
+            if defaults.dictionary(forKey: target.uuidKey) == nil {
+                defaults.set(legacyDict, forKey: target.uuidKey)
+            }
+            defaults.removeObject(forKey: target.legacyKey)
+        }
     }
 
     /// Re-applies the persisted gamma adjustment for a display (e.g. after wake from sleep
     /// or display reconnect). No-op if no saved state exists or the adjustment is paused.
-    func reapplyIfNeeded(for displayID: CGDirectDisplayID) {
-        guard let adj = loadSavedState(for: displayID), !adj.isPaused else { return }
+    @MainActor
+    func reapplyIfNeeded(for display: DisplayInfo) {
+        guard let adj = loadSavedState(for: display), !adj.isPaused else { return }
+        let displayID = display.displayID
         adjustmentsLock.withLock { activeAdjustments[displayID] = adj }
         applyInternal(adj, for: displayID)
     }
