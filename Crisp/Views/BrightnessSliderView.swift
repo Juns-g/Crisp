@@ -98,7 +98,13 @@ struct BrightnessSliderView: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 2)
-            .accessibilityLabel(display.isBuiltin ? "Brightness control mode: System" : "Brightness control mode: \(ddcStatus == true ? "DDC hardware" : "Software emulation")")
+            .accessibilityLabel(
+                display.isBuiltin
+                    ? "Brightness control mode: System"
+                    : (ddcStatus == true
+                        ? "Brightness control mode: DDC hardware"
+                        : "Brightness control mode: Software emulation")
+            )
             }
 
             HStack(spacing: 8) {

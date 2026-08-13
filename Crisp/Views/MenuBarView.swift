@@ -726,7 +726,7 @@ struct DisplayRowView: View {
                 Label("Copy Display Name", systemImage: "doc.on.doc")
             }
         }
-        .accessibilityLabel("Display: \(display.name)\(display.isMain ? ", main display" : "")\(isExpanded ? ", expanded" : ", collapsed")")
+        .accessibilityLabel(Text(verbatim: "Display: \(display.name)\(display.isMain ? NSLocalizedString(", main display", comment: "") : "")\(isExpanded ? NSLocalizedString(", expanded", comment: "") : NSLocalizedString(", collapsed", comment: ""))"))
         .accessibilityHint("Click to expand the control panel")
         .accessibilityAddTraits(.isButton)
     }
