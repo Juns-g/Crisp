@@ -105,16 +105,16 @@
       }
     },
     "%lld" : {
-
+      "shouldTranslate" : false
     },
     "%lld%%" : {
-
+      "shouldTranslate" : false
     },
     "×" : {
-
+      "shouldTranslate" : false
     },
     "∞" : {
-
+      "shouldTranslate" : false
     },
     "Activate" : {
       "localizations" : {
@@ -579,7 +579,7 @@
       }
     },
     "Crisp v%@" : {
-
+      "shouldTranslate" : false
     },
     "Crisp Virtual" : {
       "localizations" : {
@@ -644,7 +644,7 @@
       }
     },
     "DDC" : {
-
+      "shouldTranslate" : false
     },
     "Deactivate" : {
       "localizations" : {
@@ -1701,7 +1701,14 @@
       }
     },
     "Show Volume Sliders" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示音量滑块"
+          }
+        }
+      }
     },
     "Smooth scaling" : {
       "localizations" : {
@@ -1724,7 +1731,14 @@
       }
     },
     "Speaker volume" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扬声器音量"
+          }
+        }
+      }
     },
     "Support Crisp" : {
       "extractionState" : "stale",
@@ -1881,7 +1895,7 @@
       }
     },
     "v%@" : {
-
+      "shouldTranslate" : false
     },
     "Variable (%@-%@)" : {
       "comment" : "External VRR refresh-rate row, full range",
