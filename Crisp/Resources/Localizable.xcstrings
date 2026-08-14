@@ -4,36 +4,6 @@
     "" : {
 
     },
-    "%@ color" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@"
-          }
-        }
-      }
-    },
-    "%@, collapsed" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@，已折叠"
-          }
-        }
-      }
-    },
-    "%@, disconnected" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@，已断开"
-          }
-        }
-      }
-    },
     ", collapsed" : {
       "localizations" : {
         "zh-Hans" : {
@@ -70,6 +40,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "，已选中"
+          }
+        }
+      }
+    },
+    "%@ color" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@"
+          }
+        }
+      }
+    },
+    "%@, collapsed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，已折叠"
+          }
+        }
+      }
+    },
+    "%@, disconnected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，已断开"
           }
         }
       }
@@ -282,11 +282,7 @@
         }
       }
     },
-    "Brightness control mode: %@" : {
-
-    },
     "Brightness control mode: DDC hardware" : {
-      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -297,7 +293,6 @@
       }
     },
     "Brightness control mode: Software emulation" : {
-      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -760,16 +755,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未找到显示器。"
-          }
-        }
-      }
-    },
-    "Display: %@%@%@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Display: %1$@%2$@%3$@"
           }
         }
       }
