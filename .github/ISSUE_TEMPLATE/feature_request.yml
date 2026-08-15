@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an improvement or new capability for Crisp
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you hitting
+      description: The situation where Crisp falls short, rather than the solution itself.
+      placeholder: "Example: my keyboard has no brightness keys, so I have to open the panel every time I want to dim the monitor."
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: What do you suggest
+      placeholder: "Example: a user-assignable keyboard shortcut for brightness up/down."
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What do you do today
+      description: Any workaround, or another app that already does this.
+    validations:
+      required: false
