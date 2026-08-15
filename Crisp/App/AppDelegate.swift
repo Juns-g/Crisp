@@ -973,7 +973,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         p.hasShadow = false
         p.animationBehavior = .none
         p.isReleasedWhenClosed = false
-        p.collectionBehavior = [.transient, .ignoresCycle]
+        // Must be able to join the Space of a full-screen app: from its revealed
+        // menu bar the click registers (icon highlights) but the panel otherwise
+        // lands invisibly on the desktop Space.
+        p.collectionBehavior = [.transient, .ignoresCycle, .canJoinAllSpaces, .fullScreenAuxiliary]
         p.delegate = self
         p.onCancel = { [weak self] in self?.closePanel() }
         return p
