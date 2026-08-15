@@ -1,0 +1,66 @@
+name: Bug report
+description: Something in Crisp is broken or not working as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please write in English if you can (translation tools are fine).
+        Display bugs are almost impossible to act on without the setup details below, so please fill in every field.
+        Great example reports: [#21](https://github.com/didriksg/Crisp/issues/21), [#12](https://github.com/didriksg/Crisp/issues/12).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, what did you see, and what did you expect instead?
+      placeholder: "Example: I enabled Smooth scaling, entered my password, the screen flashed, but the switch turned itself off again. I expected extra steps on the Resolution slider."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps that make it happen. Start from a clean state.
+      placeholder: |
+        1. Connect the external monitor over HDMI
+        2. Open Crisp and expand the display
+        3. Turn on Smooth scaling and enter the password
+        4. ...
+    validations:
+      required: true
+  - type: input
+    id: crisp-version
+    attributes:
+      label: Crisp version
+      placeholder: "e.g. 1.3.0"
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: "e.g. macOS 15.5"
+    validations:
+      required: true
+  - type: input
+    id: mac-model
+    attributes:
+      label: Mac model and chip
+      placeholder: "e.g. MacBook Pro 14\" M3 Pro, or Intel iMac 2020"
+    validations:
+      required: true
+  - type: input
+    id: monitors
+    attributes:
+      label: Monitor(s) and how they are connected
+      description: Monitor model and the connection, including any dock, hub, or adapter in the chain.
+      placeholder: "e.g. Dell U2723QE over USB-C; LG 27UK850 over HDMI through a Caldigit dock"
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, error messages, or anything unusual about your setup.
+    validations:
+      required: false
