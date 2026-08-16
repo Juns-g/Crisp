@@ -1628,6 +1628,16 @@
         }
       }
     },
+    "Saved. Unplug and replug the monitor cable, or restart your Mac, to apply." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存。请拔掉并重新插入显示器连接线，或重启 Mac，以使更改生效。"
+          }
+        }
+      }
+    },
     "Saving…" : {
       "localizations" : {
         "zh-Hans" : {

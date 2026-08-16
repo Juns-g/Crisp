@@ -24,6 +24,13 @@ final class DisplayModeController: ObservableObject {
     @Published var pendingResolutionID: String?
     @Published var pendingRefreshID: Int32?
     @Published var errorMessage: String?
+    /// Set when a smooth-scaling toggle's soft-reconnect couldn't happen (e.g. this is the
+    /// only active display and macOS refused to blink it, or the re-enable retries all
+    /// failed). The plist write itself still landed on disk; this tells the user how to make
+    /// it take effect instead of the switch just silently snapping back. Unlike errorMessage
+    /// this does NOT auto-clear after a few seconds: "go replug the cable" isn't something to
+    /// blink-and-miss, so it stays put while the section is open.
+    @Published var reconnectHint: String?
     @Published var sliderIndex: Double = 0
     @Published var smoothBusy: Bool = false
     @Published var smoothOn: Bool = false
@@ -407,12 +414,16 @@ final class DisplayModeController: ObservableObject {
 
     /// Flips the dense HiDPI ladder on or off. ON writes the override, OFF removes it; both then
     /// soft-reconnect (screen blanks ~1s) so macOS re-enumerates in software rather than on a
-    /// physical reconnect, and both touch /Library/Displays so both show one admin prompt.
-    /// Optimistic: the knob moves now, a settle re-read adopts whatever actually enumerated.
+    /// physical reconnect, and both touch /Library/Displays so both show one admin prompt. When
+    /// the soft-reconnect itself can't complete (e.g. a re-enable that never lands), the write
+    /// already landed on disk; reconnectHint tells the user how to make it take effect instead
+    /// of the switch just silently snapping back (issue #58). Optimistic: the knob moves now,
+    /// a settle re-read adopts whatever actually enumerated.
     func userToggleSmooth(_ on: Bool) {
         guard !smoothBusy, PanelOpenGuard.allowsActivation else { return }
         smoothOn = on   // optimistic; the re-enumeration below confirms it
         smoothBusy = true
+        reconnectHint = nil   // fresh attempt: any hint from a previous one is now moot
         // Panel-space dims: the override plist is rotation-blind (see panelNativeResolution).
         let (nativeW, nativeH) = display.panelNativeResolution
         // Capture now, while the display is still connected and its UUID resolves; the
@@ -447,11 +458,22 @@ final class DisplayModeController: ObservableObject {
                 defer { PanelOpenGuard.suppressAutoDismiss = false }
                 // Re-read the override change in software (screen blanks ~1s) instead of
                 // asking for a physical reconnect.
-                await PhysicalDisplayToggleService.shared.softReconnect(display)
+                let reconnected = await PhysicalDisplayToggleService.shared.softReconnect(display)
                 HiDPIService.shared.refreshModes(for: display)
                 try? await Task.sleep(nanoseconds: 800_000_000)  // let refreshModes land
                 smoothOn = smoothModesPresent
                 refreshSmoothWouldPrompt()
+                if !reconnected {
+                    // Single-active-display machines refuse the blink (and a normal reconnect
+                    // can still fail outright): the switch above already snapped back to
+                    // ground truth, which would otherwise look like the toggle silently did
+                    // nothing. It didn't: the plist write landed, it just needs a real
+                    // reconnect (or reboot) to be read.
+                    withAnimation {
+                        reconnectHint = String(
+                            localized: "Saved. Unplug and replug the monitor cable, or restart your Mac, to apply.")
+                    }
+                }
                 // The blank/auth prompt can steal key focus, greying the switch; re-key the panel.
                 if let panel = NSApp.windows.first(where: { $0 is MenuPanel }), panel.isVisible {
                     panel.makeKey()
@@ -720,7 +742,8 @@ struct RefreshListBlock: View {
 }
 
 /// Trailing rows of the mode section: the smooth-scaling switch (externals
-/// only), the transient switch-failure message, and the section divider.
+/// only), the transient switch-failure message, the apply-it-yourself reconnect
+/// hint, and the section divider.
 struct ModeTailBlock: View {
     @ObservedObject var controller: DisplayModeController
     private var display: DisplayInfo { controller.display }
@@ -741,6 +764,23 @@ struct ModeTailBlock: View {
                     Text(msg)
                         .font(.caption2)
                         .foregroundColor(.red)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .transition(.opacity)
+            }
+
+            // Informational, not an error (the plist write already succeeded): neutral
+            // styling, and unlike errorMessage it does not auto-clear on a timer.
+            if let hint = controller.reconnectHint {
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Text(hint)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                     Spacer()
                 }
                 .padding(.horizontal, 12)
