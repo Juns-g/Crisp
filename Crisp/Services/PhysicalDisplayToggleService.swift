@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import ColorSync
+import IOKit
 
 /// Disconnects / reconnects REAL (physical) displays on the fly, the way BetterDisplay's
 /// "Disconnect Display" works. This is fundamentally different from VirtualDisplayService:
@@ -219,25 +220,34 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// failure can't strand a black screen. Unlike disconnect() it leaves the `disconnected` set
     /// untouched: this is a re-enumeration blip, not a user-visible disconnect.
     ///
-    /// Unlike disconnect(), this blinks even the sole active display: on a single-display
-    /// machine refusing here just makes the override a silent no-op until the next reboot or
-    /// replug (issue #58), which is worse than a ~1s blank the retry loop below is built to
-    /// recover from. Two safety nets back that up: a dead-man marker in case the app dies
-    /// mid-toggle (recoverStrandedSoftReconnect), and a full disabled-display sweep if every
-    /// re-enable retry fails outright (reenableUnintentionallyDisabled). Refuses (false) only
-    /// on Intel, or if the disable/re-enable itself never lands.
+    /// Unlike disconnect(), this blinks even the sole active display on desktops: on a
+    /// single-display Mac mini refusing here just makes the override a silent no-op until
+    /// the next reboot or replug (issue #58), which is worse than a ~1s blank the retry loop
+    /// below is built to recover from. Two safety nets back that up: a dead-man marker in
+    /// case the app dies mid-toggle (recoverStrandedSoftReconnect), and a full
+    /// disabled-display sweep if every re-enable retry fails outright
+    /// (reenableUnintentionallyDisabled). Refuses (false) on Intel, on a portable whose sole
+    /// active display this is (Clamshell Sleep would fire mid-blink, see below), or if the
+    /// disable/verified re-enable never lands.
     @discardableResult
     func softReconnect(_ display: DisplayInfo) async -> Bool {
         guard isSupported else { return false }
         let blinkUUID = display.displayUUID
+        let startID = display.displayID
+        // A lid-closed portable sleeps the instant its sole active display goes away
+        // (Clamshell Sleep; verified live: the blink's disable triggered it mid-toggle, and
+        // the wake left the display SLS-disabled with a lying re-enable "success"). So the
+        // sole-display blink is desktop-only: on a machine with a battery, refuse and let
+        // the caller show the replug hint instead. Lid-open laptops never hit this (the
+        // built-in keeps the count above one).
+        if wouldLeaveNoActiveDisplay(startID) && Self.hasBattery { return false }
         softReconnectInFlight.insert(blinkUUID)
         defer { softReconnectInFlight.remove(blinkUUID) }
-        let startID = display.displayID
-        // Persist before disabling: if the app dies between here and a successful re-enable
+        // Persist before disabling: if the app dies between here and a verified re-enable
         // below (crash, force-quit), the display would otherwise be stuck SLS-disabled with
         // nothing left to bring it back. recoverStrandedSoftReconnect checks this at the next
-        // launch. Cleared as soon as re-enable succeeds, or immediately below if the disable
-        // itself never happened.
+        // launch. Cleared as soon as the display is verifiably back online, or immediately
+        // below if the disable itself never happened.
         addPendingSoftReconnect(blinkUUID)
         guard case .success = await setEnabled(false, displayID: startID) else {
             removePendingSoftReconnect(blinkUUID)
@@ -248,7 +258,8 @@ final class PhysicalDisplayToggleService: ObservableObject {
         await ReconfigEvents.shared.next(for: startID, matching: .removeFlag, timeout: 0.9)
         for _ in 0..<3 {
             let targetID = allDisplaysIncludingDisabled().first { uuid(for: $0) == blinkUUID } ?? startID
-            if case .success = await setEnabled(true, displayID: targetID) {
+            if case .success = await setEnabled(true, displayID: targetID),
+               await verifyBackOnline(uuid: blinkUUID) {
                 removePendingSoftReconnect(blinkUUID)
                 return true
             }
@@ -315,6 +326,29 @@ final class PhysicalDisplayToggleService: ObservableObject {
         return Set(ids.prefix(Int(count)))
     }
 
+    /// True once the display with this UUID is back in the online list, polling up to ~1s.
+    /// A successful SLSConfigureDisplayEnabled transaction is NOT proof of recovery: around
+    /// sleep transitions it reports success while the display stays disabled (verified live
+    /// in clamshell). Only enumeration counts.
+    private func verifyBackOnline(uuid displayUUID: String) async -> Bool {
+        for _ in 0..<10 {
+            if let id = allDisplaysIncludingDisabled().first(where: { uuid(for: $0) == displayUUID }),
+               onlineDisplayIDs().contains(id) { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
+    }
+
+    /// Portables enforce Clamshell Sleep the moment no display is active; desktops don't.
+    /// Battery presence is the lid-independent laptop test (the built-in panel can vanish
+    /// from the display lists entirely while the lid is closed, so it can't be the signal).
+    private static let hasBattery: Bool = {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
+        guard service != 0 else { return false }
+        IOObjectRelease(service)
+        return true
+    }()
+
     // MARK: - Reconcile / Wake restore
 
     /// Drops records for displays that are back online (e.g. physically re-plugged, or macOS
@@ -371,7 +405,11 @@ final class PhysicalDisplayToggleService: ObservableObject {
             }
             var recovered = false
             for _ in 0..<3 {
-                if case .success = await setEnabled(true, displayID: targetID) {
+                // The API result alone is never trusted (see verifyBackOnline): a lying
+                // "success" here is exactly how a clamshell-sleep interruption erased the
+                // marker while the display stayed disabled.
+                if case .success = await setEnabled(true, displayID: targetID),
+                   await verifyBackOnline(uuid: markedUUID) {
                     recovered = true
                     break
                 }
