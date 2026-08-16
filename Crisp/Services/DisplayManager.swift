@@ -238,8 +238,8 @@ class DisplayManager: ObservableObject {
         PhysicalDisplayToggleService.shared.reconcile()
         // Runs on every refresh, but is a cheap no-op unless a soft reconnect's dead-man
         // marker is set (mid-toggle crash, or a re-enable that failed outright). The service
-        // skips it while a live soft reconnect is mid-blink, so this can't race the toggle's
-        // own retry loop even though the blink's reconfig events land here mid-toggle.
+        // skips any display whose soft reconnect is still mid-blink, so this can't race a
+        // toggle's own retry loop even though the blink's reconfig events land here mid-toggle.
         Task { await PhysicalDisplayToggleService.shared.recoverStrandedSoftReconnect() }
         // A physical unplug bypasses disconnect()'s last-screen guard: internal disabled via
         // Crisp + external cable pulled = zero active displays, all black. Bring one back.

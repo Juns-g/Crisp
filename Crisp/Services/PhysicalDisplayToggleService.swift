@@ -60,14 +60,37 @@ final class PhysicalDisplayToggleService: ObservableObject {
     @Published private(set) var disconnected: [DisconnectedDisplay] = []
 
     private let desiredKey = "crisp.PhysicalDisconnectedUUIDs"
-    /// Dead-man marker: the UUID of a display softReconnect is (or was, if the app died)
-    /// mid-toggle on. See softReconnect / recoverStrandedSoftReconnect.
+    /// Dead-man markers: the UUIDs of displays a softReconnect is (or was, if the app died)
+    /// mid-toggle on. A list, not a single slot: a manual smooth-scaling toggle and the
+    /// auto-HiDPI path (autoEnableHiDPIIfNeeded) can blink two different displays at once,
+    /// and each needs its own marker. See softReconnect / recoverStrandedSoftReconnect.
     private let softReconnectPendingKey = "crisp.PhysicalDisplayToggleService.softReconnectPending"
-    /// True while softReconnect is mid-blink. The marker above is legitimately set for that
-    /// whole window, and the blink's own removeFlag event fires refreshDisplays (and thus
-    /// recoverStrandedSoftReconnect) before the toggle finishes; this keeps the recovery
-    /// path from re-enabling the display out from under the retry loop.
-    private var softReconnectInFlight = false
+    /// UUIDs of displays whose softReconnect is mid-blink right now. Their markers above are
+    /// legitimately set for that whole window, and the blink's own removeFlag event fires
+    /// refreshDisplays (and thus recoverStrandedSoftReconnect) before the toggle finishes;
+    /// this keeps the recovery path and the sweep from re-enabling a display out from under
+    /// its own retry loop. Per-display, so concurrent blinks don't mask each other.
+    private var softReconnectInFlight: Set<String> = []
+
+    private func pendingSoftReconnectUUIDs() -> [String] {
+        UserDefaults.standard.stringArray(forKey: softReconnectPendingKey) ?? []
+    }
+
+    private func addPendingSoftReconnect(_ displayUUID: String) {
+        var pending = pendingSoftReconnectUUIDs()
+        guard !pending.contains(displayUUID) else { return }
+        pending.append(displayUUID)
+        UserDefaults.standard.set(pending, forKey: softReconnectPendingKey)
+    }
+
+    private func removePendingSoftReconnect(_ displayUUID: String) {
+        let pending = pendingSoftReconnectUUIDs().filter { $0 != displayUUID }
+        if pending.isEmpty {
+            UserDefaults.standard.removeObject(forKey: softReconnectPendingKey)
+        } else {
+            UserDefaults.standard.set(pending, forKey: softReconnectPendingKey)
+        }
+    }
 
     // MARK: - Support gate
 
@@ -206,33 +229,37 @@ final class PhysicalDisplayToggleService: ObservableObject {
     @discardableResult
     func softReconnect(_ display: DisplayInfo) async -> Bool {
         guard isSupported else { return false }
-        softReconnectInFlight = true
-        defer { softReconnectInFlight = false }
+        let blinkUUID = display.displayUUID
+        softReconnectInFlight.insert(blinkUUID)
+        defer { softReconnectInFlight.remove(blinkUUID) }
         let startID = display.displayID
         // Persist before disabling: if the app dies between here and a successful re-enable
         // below (crash, force-quit), the display would otherwise be stuck SLS-disabled with
         // nothing left to bring it back. recoverStrandedSoftReconnect checks this at the next
         // launch. Cleared as soon as re-enable succeeds, or immediately below if the disable
         // itself never happened.
-        UserDefaults.standard.set(display.displayUUID, forKey: softReconnectPendingKey)
+        addPendingSoftReconnect(blinkUUID)
         guard case .success = await setEnabled(false, displayID: startID) else {
-            UserDefaults.standard.removeObject(forKey: softReconnectPendingKey)
+            removePendingSoftReconnect(blinkUUID)
             return false
         }
         // Wait for the framebuffer to actually drop (removeFlag) before re-enabling;
         // the 0.9s ceiling matches the old fixed sleep if the event never comes.
         await ReconfigEvents.shared.next(for: startID, matching: .removeFlag, timeout: 0.9)
         for _ in 0..<3 {
-            let targetID = allDisplaysIncludingDisabled().first { uuid(for: $0) == display.displayUUID } ?? startID
+            let targetID = allDisplaysIncludingDisabled().first { uuid(for: $0) == blinkUUID } ?? startID
             if case .success = await setEnabled(true, displayID: targetID) {
-                UserDefaults.standard.removeObject(forKey: softReconnectPendingKey)
+                removePendingSoftReconnect(blinkUUID)
                 return true
             }
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
         // The target never came back after three tries: don't leave any display our own
         // disable may have stranded off. The marker is left in place on purpose, so a
-        // relaunch retries the recovery too.
+        // relaunch retries the recovery too. Drop the in-flight claim first: this blink's
+        // retries are spent, and the sweep skips displays with a live claim, which would
+        // otherwise make it ignore the very display it's here to rescue.
+        softReconnectInFlight.remove(blinkUUID)
         await reenableUnintentionallyDisabled()
         return false
     }
@@ -268,7 +295,12 @@ final class PhysicalDisplayToggleService: ObservableObject {
         let onlineSet = onlineDisplayIDs()
         let intentionalUUIDs = Set(disconnected.map { $0.uuid })
         for id in allDisplaysIncludingDisabled() where !onlineSet.contains(id) {
-            guard !intentionalUUIDs.contains(uuid(for: id)) else { continue }
+            let displayUUID = uuid(for: id)
+            guard !intentionalUUIDs.contains(displayUUID) else { continue }
+            // A display mid-blink in a live softReconnect is off on purpose for ~1s; its own
+            // retry loop owns bringing it back, and racing it here would reintroduce the
+            // recovery-vs-toggle conflict this file just fixed, one display over.
+            guard !softReconnectInFlight.contains(displayUUID) else { continue }
             _ = await setEnabled(true, displayID: id)
         }
     }
@@ -300,45 +332,57 @@ final class PhysicalDisplayToggleService: ObservableObject {
         if disconnected.count != before { saveDesired() }
     }
 
-    /// Recovery for a softReconnect that never finished: if the app died (crash, force-quit)
-    /// between disabling the display and a successful re-enable, the marker softReconnect
-    /// left behind names exactly the stranded display. Called from
-    /// DisplayManager.refreshDisplays; a cheap no-op unless the marker is set, and skipped
-    /// while a live softReconnect is mid-blink (its own reconfig events fire refreshDisplays
-    /// before the toggle finishes, and its retry loop must not be raced). Mirrors
-    /// softReconnect's recovery ladder (3 re-enable tries, then the sweep), and clears the
-    /// marker only once the display is verifiably back online or gone entirely, so a
-    /// transient failure here leaves it set for the next refresh or launch to try again.
-    /// Only ever re-enables the ONE marked display directly, never any other disabled one
+    /// Guards against overlapping recovery runs from reconfiguration-callback bursts, same
+    /// as restoreInFlight below for restoreIfNoActiveDisplay.
+    private var strandedRecoveryInFlight = false
+
+    /// Recovery for softReconnects that never finished: if the app died (crash, force-quit)
+    /// between disabling a display and a successful re-enable, the markers softReconnect
+    /// left behind name exactly the stranded displays. Called from
+    /// DisplayManager.refreshDisplays; a cheap no-op unless a marker is set. Displays whose
+    /// softReconnect is live right now are skipped per-UUID (their reconfig events fire
+    /// refreshDisplays before the toggle finishes, and their retry loops must not be raced).
+    /// Mirrors softReconnect's recovery ladder (3 re-enable tries, then the sweep), and
+    /// clears each marker only once its display is verifiably back online or gone entirely,
+    /// so a transient failure here leaves it set for the next refresh or launch to try
+    /// again. Only ever re-enables marked displays directly, never any other disabled one
     /// (another app may have disabled those on purpose); the sweep it shares with
-    /// softReconnect stays scoped to displays outside the intentional `disconnected` set.
+    /// softReconnect stays scoped to displays outside the intentional `disconnected` set
+    /// and outside any live blink.
     func recoverStrandedSoftReconnect() async {
-        guard isSupported, !softReconnectInFlight,
-              let markedUUID = UserDefaults.standard.string(forKey: softReconnectPendingKey)
+        guard isSupported, !strandedRecoveryInFlight, !pendingSoftReconnectUUIDs().isEmpty
         else { return }
-        guard let targetID = allDisplaysIncludingDisabled().first(where: { uuid(for: $0) == markedUUID }) else {
-            // Display gone entirely (unplugged while stranded): a physical replug brings it
-            // back online by itself, so the marker has nothing left to do.
-            UserDefaults.standard.removeObject(forKey: softReconnectPendingKey)
-            return
-        }
-        if onlineDisplayIDs().contains(targetID) {
-            // Recovered normally (or a previous sweep already brought it back).
-            UserDefaults.standard.removeObject(forKey: softReconnectPendingKey)
-            return
-        }
-        for _ in 0..<3 {
-            if case .success = await setEnabled(true, displayID: targetID) {
-                UserDefaults.standard.removeObject(forKey: softReconnectPendingKey)
-                return
+        strandedRecoveryInFlight = true
+        defer { strandedRecoveryInFlight = false }
+        for markedUUID in pendingSoftReconnectUUIDs() {
+            // Re-checked per iteration: a blink can start for a marked display while an
+            // earlier iteration was awaiting.
+            guard !softReconnectInFlight.contains(markedUUID) else { continue }
+            guard let targetID = allDisplaysIncludingDisabled().first(where: { uuid(for: $0) == markedUUID }) else {
+                // Display gone entirely (unplugged while stranded): a physical replug brings
+                // it back online by itself, so the marker has nothing left to do.
+                removePendingSoftReconnect(markedUUID)
+                continue
             }
-            try? await Task.sleep(nanoseconds: 300_000_000)
-        }
-        await reenableUnintentionallyDisabled()
-        // Clear only if the sweep verifiably landed it; otherwise the marker stays set and
-        // the addFlag/refresh cadence (or the next launch) retries.
-        if onlineDisplayIDs().contains(targetID) {
-            UserDefaults.standard.removeObject(forKey: softReconnectPendingKey)
+            if onlineDisplayIDs().contains(targetID) {
+                // Recovered normally (or a previous sweep already brought it back).
+                removePendingSoftReconnect(markedUUID)
+                continue
+            }
+            var recovered = false
+            for _ in 0..<3 {
+                if case .success = await setEnabled(true, displayID: targetID) {
+                    recovered = true
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+            if !recovered { await reenableUnintentionallyDisabled() }
+            // Clear only if the display verifiably came back; otherwise the marker stays set
+            // and the addFlag/refresh cadence (or the next launch) retries.
+            if recovered || onlineDisplayIDs().contains(targetID) {
+                removePendingSoftReconnect(markedUUID)
+            }
         }
     }
 
