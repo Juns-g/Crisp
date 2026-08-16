@@ -132,6 +132,10 @@ struct DetailTailBlock: View {
             // Disconnect this physical display (Apple Silicon only; hidden for the last screen)
             DisconnectDisplayRow(display: display)
 
+            // Manual volume enable for externals whose DDC volume probe never
+            // succeeded (issue #57); hidden once the probe confirms support.
+            VolumeOverrideView(display: display)
+
             // HDR: explicit per-display HDR mode toggle, shown only for
             // HDR-capable externals (built-in never offers this, matching
             // System Settings). Placed above Extra Brightness: cause before
