@@ -236,9 +236,10 @@ class DisplayManager: ObservableObject {
         // Keep the physical-disconnect list honest: drop any record whose display came back
         // online (re-plugged, or macOS re-enabled it).
         PhysicalDisplayToggleService.shared.reconcile()
-        // Runs on every refresh, but only ever does anything right after launch: a soft
-        // reconnect (smooth-scaling toggle) leaves a marker that only a mid-toggle app
-        // crash/force-quit would still find set, and it clears itself on first check.
+        // Runs on every refresh, but is a cheap no-op unless a soft reconnect's dead-man
+        // marker is set (mid-toggle crash, or a re-enable that failed outright). The service
+        // skips it while a live soft reconnect is mid-blink, so this can't race the toggle's
+        // own retry loop even though the blink's reconfig events land here mid-toggle.
         Task { await PhysicalDisplayToggleService.shared.recoverStrandedSoftReconnect() }
         // A physical unplug bypasses disconnect()'s last-screen guard: internal disabled via
         // Crisp + external cable pulled = zero active displays, all black. Bring one back.

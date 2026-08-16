@@ -463,12 +463,15 @@ final class DisplayModeController: ObservableObject {
                 try? await Task.sleep(nanoseconds: 800_000_000)  // let refreshModes land
                 smoothOn = smoothModesPresent
                 refreshSmoothWouldPrompt()
-                if !reconnected {
-                    // Single-active-display machines refuse the blink (and a normal reconnect
-                    // can still fail outright): the switch above already snapped back to
-                    // ground truth, which would otherwise look like the toggle silently did
-                    // nothing. It didn't: the plist write landed, it just needs a real
-                    // reconnect (or reboot) to be read.
+                if !reconnected && smoothOn != on {
+                    // The blink was refused (Intel) or failed, and the re-read never happened:
+                    // the switch above snapped back to ground truth, which would otherwise look
+                    // like the toggle silently did nothing. It didn't: the plist write landed,
+                    // it just needs a real reconnect (or reboot) to be read. The ground-truth
+                    // check matters: when softReconnect returns false but its retry-exhausted
+                    // sweep completed the blink anyway, the modes DID re-enumerate, a hint
+                    // would be wrong, and that path also rebuilt this controller so a hint set
+                    // here could never render (the rebuilt row reads the fresh controller).
                     withAnimation {
                         reconnectHint = String(
                             localized: "Saved. Unplug and replug the monitor cable, or restart your Mac, to apply.")
