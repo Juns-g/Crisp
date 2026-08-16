@@ -37,16 +37,30 @@ fi
 
 rm -rf "$BUILD"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
+"$ROOT/scripts/fetch-sparkle.sh"
+
 echo "==> Compiling universal binary (arm64 + x86_64)…"
 SRC=$(find Crisp -name '*.swift')
 for a in arm64 x86_64; do
   swiftc -O -parse-as-library -target "$a-apple-macos14.0" \
     -import-objc-header Crisp/Crisp-Bridging-Header.h \
+    -F "$ROOT/vendor/Sparkle" -framework Sparkle \
+    -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
     -Xlinker -U -Xlinker _SLSConfigureDisplayEnabled \
     -Xlinker -U -Xlinker _SLSGetDisplayList \
     $SRC -o "$BUILD/Crisp-$a"
 done
 lipo -create "$BUILD/Crisp-arm64" "$BUILD/Crisp-x86_64" -output "$APP/Contents/MacOS/Crisp"
+
+echo "==> Embedding Sparkle.framework…"
+mkdir -p "$APP/Contents/Frameworks"
+cp -R "$ROOT/vendor/Sparkle/Sparkle.framework" "$APP/Contents/Frameworks/"
+# Crisp is not sandboxed, so Sparkle's XPC services are dead weight; Sparkle's
+# docs recommend deleting them (the dir and the top-level symlink to it, which
+# would otherwise dangle). Stripping breaks the framework's signature seal,
+# which is fine: the signing step below re-signs the framework either way.
+rm -rf "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices" \
+       "$APP/Contents/Frameworks/Sparkle.framework/XPCServices"
 
 echo "==> Building app icon from asset catalog…"
 ICONSET="$BUILD/AppIcon.iconset"; mkdir -p "$ICONSET"
@@ -92,6 +106,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>LSUIElement</key><true/>
 	<key>NSHumanReadableCopyright</key><string>Crisp - Free &amp; Open Source</string>
 	<key>NSAppleEventsUsageDescription</key><string>Crisp uses System Events to switch Dark Mode with the system's animated transition.</string>
+	<key>SUFeedURL</key><string>https://didriksg.github.io/Crisp/appcast.xml</string>
+	<key>SUPublicEDKey</key><string>3UT7wZoXDzrAhwCMVS3DoPt2lcya9H/cvlyXliuPuhM=</string>
+	<key>SUEnableAutomaticChecks</key><true/>
+	<key>SUVerifyUpdateBeforeExtraction</key><true/>
+	<key>SURequireSignedFeed</key><true/>
 	<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
 </dict>
 </plist>
@@ -101,14 +120,25 @@ PLIST
 # else ad-hoc so dry runs and contributor/CI builds still work without a cert. A
 # notarizable build needs the hardened runtime (--options runtime) and a secure
 # timestamp; ad-hoc gets neither and can't be notarized anyway. (b00d.0)
+# Sparkle's nested executables get signed individually, inside-out, then the app
+# WITHOUT --deep: --deep would stamp the app's entitlements onto nested code and
+# Sparkle's docs explicitly warn against it.
 xattr -cr "$APP"
+SPARKLE_FW="$APP/Contents/Frameworks/Sparkle.framework"
+SPARKLE_NESTED=("$SPARKLE_FW/Versions/B/Autoupdate" "$SPARKLE_FW/Versions/B/Updater.app" "$SPARKLE_FW")
 if [ -n "${CRISP_SIGN_ID:-}" ]; then
   echo "==> Signing (Developer ID: $CRISP_SIGN_ID, hardened runtime)…"
-  codesign --force --deep --options runtime --timestamp \
+  for item in "${SPARKLE_NESTED[@]}"; do
+    codesign --force --options runtime --timestamp --sign "$CRISP_SIGN_ID" "$item"
+  done
+  codesign --force --options runtime --timestamp \
     --entitlements Crisp/Crisp.entitlements --sign "$CRISP_SIGN_ID" "$APP"
 else
   echo "==> Signing (ad-hoc — set CRISP_SIGN_ID for a notarizable build)…"
-  codesign --force --deep --sign - --entitlements Crisp/Crisp.entitlements "$APP"
+  for item in "${SPARKLE_NESTED[@]}"; do
+    codesign --force --sign - "$item"
+  done
+  codesign --force --sign - --entitlements Crisp/Crisp.entitlements "$APP"
 fi
 codesign --verify --deep --strict "$APP"
 
@@ -152,6 +182,20 @@ sed -i '' "s/MARKETING_VERSION: \"[^\"]*\"/MARKETING_VERSION: \"${VERSION}\"/" p
 echo "==> Creating GitHub release ${TAG}…"
 gh release create "$TAG" --title "Crisp ${TAG}" --notes-file "$NOTES" "$DMG"
 
+# Sparkle reads docs/appcast.xml via GitHub Pages. generate_appcast signs the
+# DMG with the EdDSA key from the login Keychain (created once with
+# ./vendor/Sparkle/bin/generate_keys) and points the enclosure at the release
+# asset uploaded above.
+# ponytail: single-entry appcast, latest release only; old installs only ever
+# need the newest version. Embed HTML release notes here if ever wanted.
+echo "==> Generating Sparkle appcast…"
+APPCAST_STAGE="$BUILD/appcast"; mkdir -p "$APPCAST_STAGE"
+cp "$DMG" "$APPCAST_STAGE/Crisp.dmg"
+"$ROOT/vendor/Sparkle/bin/generate_appcast" \
+  --download-url-prefix "https://github.com/didriksg/Crisp/releases/download/${TAG}/" \
+  --link "https://github.com/didriksg/Crisp/releases" \
+  -o "$ROOT/docs/appcast.xml" "$APPCAST_STAGE"
+
 echo "==> Bumping Homebrew tap…"
 SHA_FILE=$(gh api "repos/$TAP_REPO/contents/$TAP_CASK" --jq '.sha')
 gh api "repos/$TAP_REPO/contents/$TAP_CASK" --jq '.content' | base64 -d \
@@ -163,3 +207,5 @@ gh api -X PUT "repos/$TAP_REPO/contents/$TAP_CASK" \
   -f sha="$SHA_FILE" --jq '.commit.sha' >/dev/null
 
 echo "==> Released ${TAG} and updated the tap."
+echo "==> ACTION REQUIRED: commit and push docs/appcast.xml (+ project.yml bump)."
+echo "    In-app updates go live only once GitHub Pages serves the new appcast."

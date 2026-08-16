@@ -23,10 +23,14 @@ fi
 VERSION=$(grep -E '^[[:space:]]*MARKETING_VERSION:' project.yml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 BUILD=$(grep -E '^[[:space:]]*CURRENT_PROJECT_VERSION:' project.yml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 
+./scripts/fetch-sparkle.sh
+
 echo "==> Compiling Crisp $VERSION ($BUILD)..."
 swiftc -O -swift-version 5 -strict-concurrency=minimal -parse-as-library \
     -import-objc-header Crisp/Crisp-Bridging-Header.h \
     -framework AppKit -framework SwiftUI -framework IOKit -framework CoreAudio \
+    -F vendor/Sparkle -framework Sparkle \
+    -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
     -Xlinker -undefined -Xlinker dynamic_lookup \
     Crisp/App/*.swift Crisp/Models/*.swift Crisp/Services/*.swift \
     Crisp/Views/*.swift Crisp/Utilities/*.swift \
@@ -36,10 +40,30 @@ echo "==> Swapping into ${APP}..."
 pkill -x Crisp 2>/dev/null || true
 sleep 1
 cp Crisp-bin "$APP/Contents/MacOS/Crisp"
+# The binary links Sparkle at @rpath, so the target bundle needs the framework
+# too (an install from a pre-Sparkle release won't have it). Refresh it on
+# every swap so vendor/ and the bundle can't drift; the re-sign below restores
+# the seal broken by the XPCServices strip.
+rm -rf "$APP/Contents/Frameworks/Sparkle.framework"
+mkdir -p "$APP/Contents/Frameworks"
+cp -R vendor/Sparkle/Sparkle.framework "$APP/Contents/Frameworks/"
+rm -rf "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices" \
+       "$APP/Contents/Frameworks/Sparkle.framework/XPCServices"
 # Keep the installed bundle's reported version in step with project.yml,
 # since the binary swap doesn't regenerate Info.plist.
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$APP/Contents/Info.plist"
+# Sparkle keys, absent when swapping into a pre-Sparkle install: without them
+# the updater logs errors and prompts for check permission on second launch.
+PLIST="$APP/Contents/Info.plist"
+for key in SUFeedURL SUPublicEDKey SUEnableAutomaticChecks SUVerifyUpdateBeforeExtraction SURequireSignedFeed; do
+    /usr/libexec/PlistBuddy -c "Delete :$key" "$PLIST" 2>/dev/null || true
+done
+/usr/libexec/PlistBuddy -c "Add :SUFeedURL string https://didriksg.github.io/Crisp/appcast.xml" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string 3UT7wZoXDzrAhwCMVS3DoPt2lcya9H/cvlyXliuPuhM=" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool true" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :SUVerifyUpdateBeforeExtraction bool true" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :SURequireSignedFeed bool true" "$PLIST"
 xattr -cr "$APP"
 # Sign with a stable self-signed identity when one exists, so macOS keeps the
 # Accessibility grant across rebuilds. Ad-hoc signing changes the code hash every
@@ -53,11 +77,14 @@ SIGN_ID="${CRISP_SIGN_ID:-Crisp Dev}"
 # requirement so TCC keeps the grant across rebuilds).
 if security find-identity -p codesigning 2>/dev/null | grep -qF "$SIGN_ID"; then
     echo "==> Signing with identity: $SIGN_ID"
-    codesign --force -s "$SIGN_ID" --entitlements Crisp/Crisp.entitlements "$APP"
 else
     echo "==> Signing ad hoc ($SIGN_ID not found; Accessibility will reset each build)"
-    codesign --force -s - --entitlements Crisp/Crisp.entitlements "$APP"
+    SIGN_ID="-"
 fi
+# Framework first (its seal broke when XPCServices got stripped), then the app,
+# no --deep. Autoupdate/Updater.app inside keep Sparkle's own valid signatures.
+codesign --force -s "$SIGN_ID" "$APP/Contents/Frameworks/Sparkle.framework"
+codesign --force -s "$SIGN_ID" --entitlements Crisp/Crisp.entitlements "$APP"
 
 echo "==> Launching..."
 open "$APP"

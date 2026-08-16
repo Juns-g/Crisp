@@ -186,7 +186,7 @@ struct UpdateBlockView: View {
 
     var body: some View {
         if updateService.hasUpdate, let ver = updateService.latestVersion {
-            UpdateRow(version: ver) { updateService.openReleasePage() }
+            UpdateRow(version: ver) { updateService.installUpdate() }
         }
     }
 }

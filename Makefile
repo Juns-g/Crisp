@@ -33,10 +33,17 @@ SWIFT_SOURCES := Crisp/App/*.swift Crisp/Models/*.swift Crisp/Services/*.swift \
 SWIFTC_FLAGS := -O -swift-version 5 -strict-concurrency=minimal -parse-as-library \
                 -import-objc-header Crisp/Crisp-Bridging-Header.h \
                 -framework AppKit -framework SwiftUI -framework IOKit -framework CoreAudio \
+                -F vendor/Sparkle -framework Sparkle \
+                -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
                 -Xlinker -undefined -Xlinker dynamic_lookup
 
 .DEFAULT_GOAL := help
-.PHONY: help dev compile test lint loc-check check build dmg release clean
+.PHONY: help dev compile test lint loc-check check build dmg release clean vendor
+
+# Sparkle framework, pinned + cached in vendor/ (needed to compile and to
+# generate the Xcode project's framework reference).
+vendor:
+	@./scripts/fetch-sparkle.sh
 
 help:
 	@echo "Crisp — make targets:"
@@ -52,7 +59,7 @@ help:
 dev:
 	./dev.sh
 
-compile:
+compile: vendor
 	@echo "==> Compiling Crisp $(VERSION) -> ./Crisp-bin"
 	swiftc $(SWIFTC_FLAGS) $(SWIFT_SOURCES) -o Crisp-bin
 	@echo "Done. ./Crisp-bin built (not swapped into the app; use 'make dev' for that)."
@@ -60,7 +67,7 @@ compile:
 # Warnings are errors here (the baseline is zero, issue #47), so a PR that
 # introduces one fails make check and CI. `make compile` stays permissive for
 # mid-iteration builds.
-test:
+test: vendor
 	xcodegen generate
 	xcodebuild -quiet test -project Crisp.xcodeproj -scheme Crisp \
 		-destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO \
@@ -73,7 +80,7 @@ lint:
 
 # Same check as CI's "Check localization keys" step: every key the code uses
 # must exist in the String Catalog (missing keys silently fall back to English).
-loc-check:
+loc-check: vendor
 	xcodegen generate
 	xcodebuild -quiet -exportLocalizations -project Crisp.xcodeproj \
 		-localizationPath build/loc CODE_SIGNING_ALLOWED=NO \
