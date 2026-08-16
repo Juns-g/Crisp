@@ -31,6 +31,29 @@ final class VolumeService: ObservableObject {
         UserDefaults.standard.set(Array(rememberedCapable), forKey: capableKey)
     }
 
+    /// UUIDs the user forced volume-capable (issue #57). Some monitors (LG
+    /// 27UP850N over USB-C) never answer a 0x62 read but do accept 0x62
+    /// writes, so the probe can never prove support. Forced displays run
+    /// write-only with the assumed max of 100 (the pump's default).
+    private let forcedKey = "crisp.volumeForcedDisplays"
+    private lazy var forcedCapable: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: forcedKey) ?? [])
+
+    func isForced(_ display: DisplayInfo) -> Bool {
+        forcedCapable.contains(display.displayUUID)
+    }
+
+    func setForced(_ on: Bool, for display: DisplayInfo) {
+        if on {
+            forcedCapable.insert(display.displayUUID)
+        } else {
+            forcedCapable.remove(display.displayUUID)
+        }
+        UserDefaults.standard.set(Array(forcedCapable), forKey: forcedKey)
+        // Un-forcing keeps the feature only if a real probe ever succeeded.
+        display.volumeSupported = on || rememberedCapable.contains(display.displayUUID)
+    }
+
     /// Drop per-display state for a disconnected display so a reused
     /// displayID cannot inherit it. rememberedCapable stays: it is UUID-keyed
     /// and deliberately permanent.
@@ -48,9 +71,10 @@ final class VolumeService: ObservableObject {
     /// next pass, and DDCService caches reads for 5s.
     func refreshVolume(for display: DisplayInfo) {
         guard !display.isBuiltin else { return }
-        // Seed from memory so a failed probe can't hide the feature; the read
-        // below still adopts the monitor's current level whenever it works.
-        if rememberedCapable.contains(display.displayUUID) {
+        // Seed from memory (or the user's force override) so a failed probe
+        // can't hide the feature; the read below still adopts the monitor's
+        // current level whenever it works.
+        if rememberedCapable.contains(display.displayUUID) || forcedCapable.contains(display.displayUUID) {
             display.volumeSupported = true
         }
         let id = display.displayID

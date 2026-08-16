@@ -881,6 +881,16 @@
         }
       }
     },
+    "Force volume control for a monitor that doesn't report it. Crisp can set the volume but not read the current level." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为不报告音量支持的显示器强制启用音量控制。Crisp 可以设置音量，但无法读取当前音量。"
+          }
+        }
+      }
+    },
     "Gain" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1946,6 +1956,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "虚拟显示器"
+          }
+        }
+      }
+    },
+    "Volume Control" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音量控制"
           }
         }
       }
