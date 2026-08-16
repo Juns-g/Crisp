@@ -233,7 +233,19 @@ final class PhysicalDisplayToggleService: ObservableObject {
     func softReconnect(_ display: DisplayInfo) async -> Bool {
         guard isSupported else { return false }
         let blinkUUID = display.displayUUID
+        // Two callers can race on the same display (manual toggle + auto-HiDPI on a fresh
+        // connect): a second blink mid-blink would double-toggle the framebuffer and try to
+        // create a second sleep guard with the same fixed identity, which WindowServer
+        // rejects (see VirtualDisplayService.create). First one wins; the caller's settle
+        // re-read adopts whatever it produced.
+        guard !softReconnectInFlight.contains(blinkUUID) else { return false }
         let startID = display.displayID
+        // The re-enumeration can come back on macOS's default mode instead of the one the
+        // user was running (refresh-rate reset observed live on a 180Hz panel); capture the
+        // exact mode so a verified re-enable can restore it. Must be captured before the
+        // sleep guard below exists: the guard's arrival alone knocked this panel from 165Hz
+        // to 144Hz (observed live), so capturing after it memorizes the knocked-down mode.
+        let previousMode = CGDisplayCopyDisplayMode(startID)
         // A lid-closed portable sleeps the instant its sole active display goes away
         // (Clamshell Sleep; verified live: the blink's disable triggered it mid-toggle, the
         // wake left the display SLS-disabled behind a lying re-enable "success", and a
@@ -245,15 +257,15 @@ final class PhysicalDisplayToggleService: ObservableObject {
         // guaranteed mid-toggle sleep is how displays get stranded.
         var sleepGuard: CGVirtualDisplay?
         if Self.hasBattery && wouldLeaveNoActiveDisplay(startID) {
-            sleepGuard = await makeBlinkSleepGuard()
+            // Reuse a guard parked by a previous unresolved blink first: the fixed identity
+            // can't exist twice, so creating a fresh one alongside it would just fail.
+            sleepGuard = lingeringSleepGuard
+            lingeringSleepGuard = nil
+            if sleepGuard == nil { sleepGuard = await makeBlinkSleepGuard() }
             if sleepGuard == nil { return false }
         }
         // Held (released) at every exit below; releasing it is what removes the display.
         defer { withExtendedLifetime(sleepGuard) {} }
-        // The re-enumeration can come back on macOS's default mode instead of the one the
-        // user was running (refresh-rate reset observed live on a 180Hz panel); capture the
-        // exact mode now so a verified re-enable can restore it.
-        let previousMode = CGDisplayCopyDisplayMode(startID)
         softReconnectInFlight.insert(blinkUUID)
         defer { softReconnectInFlight.remove(blinkUUID) }
         // Persist before disabling: if the app dies between here and a verified re-enable
@@ -269,31 +281,71 @@ final class PhysicalDisplayToggleService: ObservableObject {
         // Wait for the framebuffer to actually drop (removeFlag) before re-enabling;
         // the 0.9s ceiling matches the old fixed sleep if the event never comes.
         await ReconfigEvents.shared.next(for: startID, matching: .removeFlag, timeout: 0.9)
+        var backOnline = false
         for _ in 0..<3 {
             let targetID = allDisplaysIncludingDisabled().first { uuid(for: $0) == blinkUUID } ?? startID
-            if case .success = await setEnabled(true, displayID: targetID),
-               await verifyBackOnline(uuid: blinkUUID) {
-                removePendingSoftReconnect(blinkUUID)
-                // Best effort: setting a mode whose timing no longer enumerates fails
-                // harmlessly (toggling smooth scaling OFF removes the dense mode the user
-                // may have been running), leaving macOS's fallback, same as pre-fix.
-                if let previousMode,
-                   let backID = allDisplaysIncludingDisabled().first(where: { uuid(for: $0) == blinkUUID }),
-                   CGDisplayCopyDisplayMode(backID)?.ioDisplayModeID != previousMode.ioDisplayModeID {
-                    CGDisplaySetDisplayMode(backID, previousMode, nil)
-                }
-                return true
-            }
+            // Fire the enable without awaiting its result. The result is untrustworthy in
+            // both directions (successes can lie, see verifyBackOnline; failures can mask a
+            // display already coming up), and CGCompleteDisplayConfiguration can block ~10s
+            // past the display's actual return while the link retrains after an override
+            // rebuild (observed live), which would hold the mode restore below hostage
+            // behind a blocked call and turn it into a second visible blink ~10s after the
+            // toggle. Enumeration is the only proof either way.
+            Task { _ = await setEnabled(true, displayID: targetID) }
+            // The verify window must outlast a display link handshake (2-4s): re-issuing
+            // enable while the display is mid-sync restarts the link and blinks it again.
+            if await verifyBackOnline(uuid: blinkUUID, timeout: 4.0) { backOnline = true; break }
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
-        // The target never came back after three tries: don't leave any display our own
-        // disable may have stranded off. The marker is left in place on purpose, so a
-        // relaunch retries the recovery too. Drop the in-flight claim first: this blink's
-        // retries are spent, and the sweep skips displays with a live claim, which would
-        // otherwise make it ignore the very display it's here to rescue.
-        softReconnectInFlight.remove(blinkUUID)
-        await reenableUnintentionallyDisabled()
-        return false
+        if !backOnline {
+            // The target never came back under its own re-enables: don't leave any display
+            // our own disable may have stranded off. Drop the in-flight claim first: the
+            // sweep skips displays with a live claim, which would otherwise make it ignore
+            // the very display it's here to rescue.
+            softReconnectInFlight.remove(blinkUUID)
+            await reenableUnintentionallyDisabled()
+            // One longer last look before declaring failure: slow re-enumeration must land
+            // in the success epilogue below. Treating it as failure skips the mode restore
+            // (refresh-rate reset observed live) and parks the guard, whose later release
+            // reshuffles the windows a second time, seconds after the toggle.
+            backOnline = await verifyBackOnline(uuid: blinkUUID, timeout: 2.0)
+        }
+        guard backOnline else {
+            // Genuinely still down. The marker stays on purpose so refresh/relaunch keeps
+            // retrying, and the sleep guard is parked: releasing it now would hand a
+            // lid-closed portable straight to Clamshell Sleep with the display stranded,
+            // the exact state the guard exists to prevent. Recovery releases it once every
+            // marked display is resolved.
+            if sleepGuard != nil { lingeringSleepGuard = sleepGuard }
+            return false
+        }
+        removePendingSoftReconnect(blinkUUID)
+        if let previousMode,
+           let backID = allDisplaysIncludingDisabled().first(where: { uuid(for: $0) == blinkUUID }) {
+            // The blink re-reads override plists, which rebuilds the mode list and renumbers
+            // every mode ID (observed live: the same timing went 130 -> 683), so the captured
+            // object cannot be applied directly; re-find the equivalent mode in the fresh
+            // list by parameters. No match means the mode no longer enumerates (toggling
+            // smooth OFF removes the dense mode the user may have been running): macOS's
+            // fallback stands, same as pre-fix.
+            let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+            let modes = CGDisplayCopyAllDisplayModes(backID, options) as? [CGDisplayMode] ?? []
+            if let target = modes.first(where: {
+                $0.width == previousMode.width && $0.height == previousMode.height
+                    && $0.pixelWidth == previousMode.pixelWidth
+                    && $0.pixelHeight == previousMode.pixelHeight
+                    && abs($0.refreshRate - previousMode.refreshRate) < 1
+            }) {
+                // A set issued while the link is still retraining can fail silently; verify
+                // it stuck and retry briefly instead of trusting one shot.
+                for _ in 0..<4 {
+                    if CGDisplayCopyDisplayMode(backID)?.ioDisplayModeID == target.ioDisplayModeID { break }
+                    _ = await ResolutionService.applyModeSync(target, on: backID)
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
+        }
+        return true
     }
 
     /// Runs SLSConfigureDisplayEnabled inside a CG configuration transaction.
@@ -347,12 +399,12 @@ final class PhysicalDisplayToggleService: ObservableObject {
         return Set(ids.prefix(Int(count)))
     }
 
-    /// True once the display with this UUID is back in the online list, polling up to ~1s.
-    /// A successful SLSConfigureDisplayEnabled transaction is NOT proof of recovery: around
-    /// sleep transitions it reports success while the display stays disabled (verified live
-    /// in clamshell). Only enumeration counts.
-    private func verifyBackOnline(uuid displayUUID: String) async -> Bool {
-        for _ in 0..<10 {
+    /// True once the display with this UUID is back in the online list, polling up to
+    /// `timeout` seconds. A successful SLSConfigureDisplayEnabled transaction is NOT proof
+    /// of recovery: around sleep transitions it reports success while the display stays
+    /// disabled (verified live in clamshell). Only enumeration counts.
+    private func verifyBackOnline(uuid displayUUID: String, timeout: TimeInterval = 1.0) async -> Bool {
+        for _ in 0..<max(Int(timeout * 10), 1) {
             if let id = allDisplaysIncludingDisabled().first(where: { uuid(for: $0) == displayUUID }),
                onlineDisplayIDs().contains(id) { return true }
             try? await Task.sleep(nanoseconds: 100_000_000)
@@ -428,6 +480,13 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// as restoreInFlight below for restoreIfNoActiveDisplay.
     private var strandedRecoveryInFlight = false
 
+    /// Sleep guard parked by a softReconnect whose display never verifiably returned (see
+    /// its retry-exhausted path): holding it keeps a lid-closed portable awake so the
+    /// marker/recovery cadence can keep retrying instead of the machine sleeping on a
+    /// stranded display. Released by recovery once every marked display is resolved, or
+    /// adopted by the next blink (the fixed identity can't be created twice).
+    private var lingeringSleepGuard: CGVirtualDisplay?
+
     /// Recovery for softReconnects that never finished: if the app died (crash, force-quit)
     /// between disabling a display and a successful re-enable, the markers softReconnect
     /// left behind name exactly the stranded displays. Called from
@@ -442,7 +501,10 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// softReconnect stays scoped to displays outside the intentional `disconnected` set
     /// and outside any live blink.
     func recoverStrandedSoftReconnect() async {
-        guard isSupported, !strandedRecoveryInFlight, !pendingSoftReconnectUUIDs().isEmpty
+        // Also runs while only a parked guard is left (markers resolved by another path,
+        // e.g. a later lid-open blink): the release at the bottom is its only way out.
+        guard isSupported, !strandedRecoveryInFlight,
+              !pendingSoftReconnectUUIDs().isEmpty || lingeringSleepGuard != nil
         else { return }
         strandedRecoveryInFlight = true
         defer { strandedRecoveryInFlight = false }
@@ -479,6 +541,12 @@ final class PhysicalDisplayToggleService: ObservableObject {
             if recovered || onlineDisplayIDs().contains(targetID) {
                 removePendingSoftReconnect(markedUUID)
             }
+        }
+        // A parked sleep guard has served its purpose once no marker remains unresolved:
+        // every marked display is back online or gone. Until then it stays, keeping a
+        // lid-closed portable awake for the next retry.
+        if lingeringSleepGuard != nil, pendingSoftReconnectUUIDs().isEmpty {
+            lingeringSleepGuard = nil
         }
     }
 
