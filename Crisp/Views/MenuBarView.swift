@@ -281,10 +281,6 @@ struct UpdateRow: View {
             Text("v\(version)")
                 .font(.caption)
                 .foregroundColor(.secondary)
-            Image(systemName: "arrow.up.forward")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .accessibilityHidden(true)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 5)

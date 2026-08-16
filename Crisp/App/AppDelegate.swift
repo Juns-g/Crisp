@@ -192,10 +192,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.warmPanel()
         }
 
-        // Launch-time update check (self-throttled to one network call/hour);
-        // showPanel re-checks per open. Lived in MenuBarView's .task before
-        // the split-canvas migration.
-        Task { await UpdateService.shared.checkForUpdates() }
+        // Start Sparkle's background update scheduler; a found update surfaces
+        // as the panel's Update row (see UpdateService).
+        _ = UpdateService.shared
 
     }
 
@@ -870,11 +869,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         PanelOpenGuard.openedAt = Date()
-        // Re-check for updates on open so a long-running instance surfaces a new
-        // release without a restart (the panel view mounts once, so its launch
-        // .task can't). checkForUpdates() self-throttles to one network call per
-        // hour, so opening the menu repeatedly costs nothing.
-        Task { await UpdateService.shared.checkForUpdates() }
 
         // Mirror changes made elsewhere while the panel stays open (the
         // click-time refresh above covered the open itself). Cancelled on
