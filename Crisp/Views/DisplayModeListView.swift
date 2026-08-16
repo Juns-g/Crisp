@@ -464,7 +464,8 @@ final class DisplayModeController: ObservableObject {
                 smoothOn = smoothModesPresent
                 refreshSmoothWouldPrompt()
                 if !reconnected && smoothOn != on {
-                    // The blink was refused (Intel) or failed, and the re-read never happened:
+                    // The blink was refused (Intel, or a portable's sleep guard failed to
+                    // create) or never landed, and the re-read never happened:
                     // the switch above snapped back to ground truth, which would otherwise look
                     // like the toggle silently did nothing. It didn't: the plist write landed,
                     // it just needs a real reconnect (or reboot) to be read. The ground-truth

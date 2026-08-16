@@ -220,27 +220,40 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// failure can't strand a black screen. Unlike disconnect() it leaves the `disconnected` set
     /// untouched: this is a re-enumeration blip, not a user-visible disconnect.
     ///
-    /// Unlike disconnect(), this blinks even the sole active display on desktops: on a
-    /// single-display Mac mini refusing here just makes the override a silent no-op until
-    /// the next reboot or replug (issue #58), which is worse than a ~1s blank the retry loop
-    /// below is built to recover from. Two safety nets back that up: a dead-man marker in
-    /// case the app dies mid-toggle (recoverStrandedSoftReconnect), and a full
-    /// disabled-display sweep if every re-enable retry fails outright
-    /// (reenableUnintentionallyDisabled). Refuses (false) on Intel, on a portable whose sole
-    /// active display this is (Clamshell Sleep would fire mid-blink, see below), or if the
-    /// disable/verified re-enable never lands.
+    /// Unlike disconnect(), this blinks even the sole active display: refusing just makes
+    /// the override a silent no-op until the next reboot or replug (issue #58), which is
+    /// worse than a ~1s blank the retry loop below is built to recover from. On portables a
+    /// throwaway virtual display is held for the blink's duration so Clamshell Sleep never
+    /// fires mid-toggle (see makeBlinkSleepGuard). Two safety nets back the blink up: a
+    /// dead-man marker in case the app dies mid-toggle (recoverStrandedSoftReconnect), and a
+    /// full disabled-display sweep if every re-enable retry fails outright
+    /// (reenableUnintentionallyDisabled). Refuses (false) on Intel, when the portable sleep
+    /// guard can't be created, or if the disable/verified re-enable never lands.
     @discardableResult
     func softReconnect(_ display: DisplayInfo) async -> Bool {
         guard isSupported else { return false }
         let blinkUUID = display.displayUUID
         let startID = display.displayID
         // A lid-closed portable sleeps the instant its sole active display goes away
-        // (Clamshell Sleep; verified live: the blink's disable triggered it mid-toggle, and
-        // the wake left the display SLS-disabled with a lying re-enable "success"). So the
-        // sole-display blink is desktop-only: on a machine with a battery, refuse and let
-        // the caller show the replug hint instead. Lid-open laptops never hit this (the
-        // built-in keeps the count above one).
-        if wouldLeaveNoActiveDisplay(startID) && Self.hasBattery { return false }
+        // (Clamshell Sleep; verified live: the blink's disable triggered it mid-toggle, the
+        // wake left the display SLS-disabled behind a lying re-enable "success", and a
+        // PreventSystemSleep assertion does NOT stop it). A live virtual display keeps the
+        // display count above zero, which verifiably does prevent it (probed on the same
+        // hardware), so hold a throwaway one for the blink's duration. Lid-open laptops
+        // never get here (the built-in keeps the count above one); desktops need no guard
+        // (no clamshell rule). Refuse only if the guard can't be created: blinking into a
+        // guaranteed mid-toggle sleep is how displays get stranded.
+        var sleepGuard: CGVirtualDisplay?
+        if Self.hasBattery && wouldLeaveNoActiveDisplay(startID) {
+            sleepGuard = await makeBlinkSleepGuard()
+            if sleepGuard == nil { return false }
+        }
+        // Held (released) at every exit below; releasing it is what removes the display.
+        defer { withExtendedLifetime(sleepGuard) {} }
+        // The re-enumeration can come back on macOS's default mode instead of the one the
+        // user was running (refresh-rate reset observed live on a 180Hz panel); capture the
+        // exact mode now so a verified re-enable can restore it.
+        let previousMode = CGDisplayCopyDisplayMode(startID)
         softReconnectInFlight.insert(blinkUUID)
         defer { softReconnectInFlight.remove(blinkUUID) }
         // Persist before disabling: if the app dies between here and a verified re-enable
@@ -261,6 +274,14 @@ final class PhysicalDisplayToggleService: ObservableObject {
             if case .success = await setEnabled(true, displayID: targetID),
                await verifyBackOnline(uuid: blinkUUID) {
                 removePendingSoftReconnect(blinkUUID)
+                // Best effort: setting a mode whose timing no longer enumerates fails
+                // harmlessly (toggling smooth scaling OFF removes the dense mode the user
+                // may have been running), leaving macOS's fallback, same as pre-fix.
+                if let previousMode,
+                   let backID = allDisplaysIncludingDisabled().first(where: { uuid(for: $0) == blinkUUID }),
+                   CGDisplayCopyDisplayMode(backID)?.ioDisplayModeID != previousMode.ioDisplayModeID {
+                    CGDisplaySetDisplayMode(backID, previousMode, nil)
+                }
                 return true
             }
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -348,6 +369,43 @@ final class PhysicalDisplayToggleService: ObservableObject {
         IOObjectRelease(service)
         return true
     }()
+
+    /// Throwaway virtual display held while blinking a portable's sole active display, so
+    /// Clamshell Sleep never sees a zero-display moment (see softReconnect). Registered but
+    /// deliberately minimal: 1080p, no HiDPI ladder. Stamped with the shared virtual vendor
+    /// ID so DisplayManager filters it from the UI like any managed virtual display, and
+    /// with a FIXED product/serial so macOS keys its per-display settings (including the
+    /// "what to show" choice) on a stable identity instead of re-prompting every blink.
+    /// Returns nil unless the display verifiably comes online; a registered-but-offline
+    /// guard protects nothing.
+    private func makeBlinkSleepGuard() async -> CGVirtualDisplay? {
+        let w = 1920, h = 1080
+        let ppi = 110.0
+        let descriptor = CGVirtualDisplayDescriptor()
+        descriptor.sizeInMillimeters = CGSize(width: Double(w) / ppi * 25.4,
+                                              height: Double(h) / ppi * 25.4)
+        descriptor.maxPixelsWide = UInt32(w)
+        descriptor.maxPixelsHigh = UInt32(h)
+        descriptor.name = "Crisp Blink Guard"
+        descriptor.vendorID = VirtualDisplayService.crispVirtualVendorID
+        descriptor.productID = 0xB11C
+        descriptor.serialNum = 0xB11C
+        // DO NOT set queue or color primaries (see VirtualDisplayService.create).
+        guard let vd = CGVirtualDisplay(descriptor: descriptor) else { return nil }
+        let settings = CGVirtualDisplaySettings()
+        settings.hiDPI = false
+        let mode: CGVirtualDisplayMode = CGVirtualDisplayMode(width: UInt(w), height: UInt(h), refreshRate: 60.0)
+        settings.modes = [mode]
+        let applied: Bool = await CGHelpers.runWithTimeout(seconds: 10, fallback: false) {
+            vd.apply(settings)
+        }
+        guard applied, vd.displayID != kCGNullDirectDisplay else { return nil }
+        for _ in 0..<20 {
+            if onlineDisplayIDs().contains(vd.displayID) { return vd }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return nil
+    }
 
     // MARK: - Reconcile / Wake restore
 
