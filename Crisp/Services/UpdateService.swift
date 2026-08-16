@@ -31,8 +31,12 @@ final class UpdateService: NSObject, ObservableObject {
     // MARK: - Install
 
     /// Update-row action: a user-initiated check brings up Sparkle's update UI
-    /// in immediate focus and runs the download/install/relaunch flow.
+    /// and runs the download/install/relaunch flow. The panel is a
+    /// non-activating NSPanel, so the app isn't active when the row is
+    /// clicked; without an explicit activate, macOS 14's cooperative
+    /// activation leaves Sparkle's window behind the frontmost app.
     func installUpdate() {
+        NSApp.activate()
         updaterController.checkForUpdates(nil)
     }
 }
