@@ -6,9 +6,8 @@ import QuartzCore
 
 /// Fullscreen invisible EDR overlay per display that multiplies all content
 /// beneath it into the HDR headroom, brightening the whole desktop beyond the
-/// SDR maximum. Lifecycle mirrors NotchOverlayManager: one borderless
-/// click-through window per CGDirectDisplayID, torn down when the screen goes
-/// away. Content is a uniform EDR color (value > 1.0) in a CAMetalLayer with a
+/// SDR maximum. One borderless click-through window per CGDirectDisplayID,
+/// torn down when the screen goes away. Content is a uniform EDR color (value > 1.0) in a CAMetalLayer with a
 /// multiply compositing filter. WindowServer only honors that filter while the
 /// window keeps presenting: about a second after the last present it promotes
 /// the window to direct scanout and drops the filter, so the raw near-white
