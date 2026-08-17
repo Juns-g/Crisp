@@ -30,7 +30,9 @@ final class CoreBrightnessService: ObservableObject {
     @Published var trueToneEnabled = false
     @Published var darkModeEnabled = false
     private(set) var nightShiftAvailable = false
-    private(set) var trueToneAvailable = false
+    // Published because availability changes at runtime: CBTrueToneClient reports
+    // available=false in clamshell, so an app launched lid-closed must un-latch later.
+    @Published private(set) var trueToneAvailable = false
     var darkModeAvailable: Bool { _SLSGetAppearanceTheme != nil && _SLSSetAppearanceTheme != nil }
 
     private var blueLightClient: NSObject?
@@ -84,7 +86,6 @@ final class CoreBrightnessService: ObservableObject {
         // thread, but NSObject is not Sendable; box them across the hop.
         let blueBox = UncheckedSendable(value: blueLightClient)
         let ttBox = UncheckedSendable(value: trueToneClient)
-        let ttAvailable = trueToneAvailable
         DispatchQueue.global(qos: .userInitiated).async {
             var nightShift: Bool?
             if let c = blueBox.value {
@@ -100,12 +101,17 @@ final class CoreBrightnessService: ObservableObject {
                 }
             }
             var trueTone: Bool?
-            if let c = ttBox.value, ttAvailable {
-                trueTone = Self.boolCall(c, "enabled")
+            var ttAvailable = false
+            if let c = ttBox.value {
+                // Re-check every refresh: availability flips with the lid (clamshell
+                // hides True Tone system-wide), and init may have run lid-closed.
+                ttAvailable = Self.boolCall(c, "supported") && Self.boolCall(c, "available")
+                if ttAvailable { trueTone = Self.boolCall(c, "enabled") }
             }
             let dark = _SLSGetAppearanceTheme?()
             DispatchQueue.main.async {
                 if let nightShift { self.nightShiftEnabled = nightShift }
+                if self.trueToneAvailable != ttAvailable { self.trueToneAvailable = ttAvailable }
                 if let trueTone { self.trueToneEnabled = trueTone }
                 // Don't clobber an optimistic toggle: the async theme change
                 // may still be in flight, and a stale read here snaps the
