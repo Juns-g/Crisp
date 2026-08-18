@@ -597,8 +597,8 @@ struct SettingsView: View {
                 BrightnessKeysPermissionNotice()
             }
 
-            // Global HiDPI-toggle shortcut (issue #61).
-            HiDPIShortcutSection(expanded: $showHiDPIShortcut)
+            // Global shortcuts: the curated action list (issue #61).
+            ShortcutsSection(expanded: $showHiDPIShortcut)
 
             // Launch at login
             Toggle(isOn: Binding(
