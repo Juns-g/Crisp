@@ -140,6 +140,9 @@ final class DisplayModeController: ObservableObject {
         // 2x backing onto the panel and looks soft with no size benefit). Hide the HiDPI twin of
         // native when the Default is present.
         let hasNativeDefault = mapped.contains { $0.isDefault }
+        // The widest HiDPI size on offer: native-aspect 1x sizes beyond it are kept below
+        // (they are the only route to those in-between sizes), sizes under it stay clutter.
+        let maxEligibleHiDPIWidth = base.lazy.filter { $0.isHiDPI }.map(\.width).max() ?? 0
 
         return mapped.filter { group in
             // Built-in (notched) panel: macOS only offers scaled sizes at the panel's
@@ -173,6 +176,18 @@ final class DisplayModeController: ObservableObject {
             // and the off-aspect 4:3/5:4/portrait sizes. Keep native, the HiDPI
             // ladder, the "(low resolution)" twins, and whatever is current.
             if group.isHiDPI || group.isDefault || group.isLowResolution { return true }
+            // Non-retina scaled sizes past the HiDPI ladder's reach: WindowServer caps
+            // scaled backings per display, and on a 5K2K ultrawide the sizes between the
+            // ladder top (~3360 wide) and native exist only as 1x modes (4608x1296,
+            // 4096x1152, 3840x1080 on a U4924DW). They are what System Settings offers
+            // there, so keep native-aspect 1x sizes wider than every HiDPI mode; the
+            // off-aspect compat sizes and the sub-ladder clutter above stay dropped.
+            if group.width > maxEligibleHiDPIWidth,
+               DisplayModeGeometry.matchesNativeAspect(
+                   width: group.width, height: group.height,
+                   nativeAspect: Double(nativeW) / Double(nativeH)) {
+                return true
+            }
             return group.modes.contains { $0.id == currentMode?.id }
         }
         .sorted { lhs, rhs in
@@ -340,22 +355,30 @@ final class DisplayModeController: ObservableObject {
             : String(localized: "Adds finer in-between steps for how large everything looks")
     }
 
-    /// Whether the dense smooth-scaling ladder is actually enumerated for this display (≥ half
-    /// its sub-native sizes present among the modes). The real "is it on" signal, independent
-    /// of any stored flag; it is exactly what the slider's density reflects. When true the
-    /// enable row is hidden, there is nothing left to do.
+    /// Whether the dense smooth-scaling ladder is actually enumerated for this display. The
+    /// real "is it on" signal, independent of any stored flag; it is exactly what the slider's
+    /// density reflects. When true the enable row is hidden, there is nothing left to do.
+    ///
+    /// Counted as twinless hits on the injected grid, not as a share of the injected sizes:
+    /// WindowServer silently refuses scaled backings above a per-display cap, so on a 5K2K
+    /// ultrawide only a third of the ladder ever materializes (up to looks-like ~3360 wide)
+    /// and a fixed fraction can never pass. Stock HiDPI sizes always carry a 1x twin while
+    /// the injected in-between steps never do (the denseLadderActive signal), so a handful
+    /// of twinless grid hits means the ladder, or what the hardware allows of it, is live.
     var smoothModesPresent: Bool {
         let (w, h) = display.panelNativeResolution
         let injected = HiDPIService.shared.smoothScaledLogicalSizes(nativeWidth: w, nativeHeight: h)
             .filter { $0.width < w }  // native is a real mode, always present; ignore it
         guard !injected.isEmpty else { return false }
-        let present = Set(display.availableModes.lazy.filter { $0.isHiDPI }.map { "\($0.width)x\($0.height)" })
+        let hidpi = Set(display.availableModes.lazy.filter { $0.isHiDPI }.map { "\($0.width)x\($0.height)" })
+        let lodpi = Set(display.availableModes.lazy.filter { !$0.isHiDPI }.map { "\($0.width)x\($0.height)" })
         // Injected sizes are panel-space; a rotated display enumerates them swapped.
         let rotated = display.isRotated
         let hits = injected.filter {
-            present.contains(rotated ? "\($0.height)x\($0.width)" : "\($0.width)x\($0.height)")
+            let key = rotated ? "\($0.height)x\($0.width)" : "\($0.width)x\($0.height)"
+            return hidpi.contains(key) && !lodpi.contains(key)
         }.count
-        return Double(hits) / Double(injected.count) >= 0.5
+        return hits >= 8
     }
 
     /// Whether enabling smooth scaling would show the admin prompt (override not yet
