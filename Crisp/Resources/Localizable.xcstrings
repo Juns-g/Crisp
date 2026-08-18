@@ -1042,6 +1042,17 @@
         }
       }
     },
+    "HiDPI Shortcut" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HiDPI 快捷键"
+          }
+        }
+      }
+    },
     "Highest" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1557,6 +1568,17 @@
         }
       }
     },
+    "Record Shortcut" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录制快捷键"
+          }
+        }
+      }
+    },
     "red" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1584,6 +1606,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法断开：这会导致没有可用的显示器。"
+          }
+        }
+      }
+    },
+    "Remove Shortcut" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除快捷键"
           }
         }
       }
@@ -1781,6 +1814,16 @@
         }
       }
     },
+    "Switches the display under the pointer between HiDPI and low resolution." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将指针所在显示器在 HiDPI 与低分辨率之间切换。"
+          }
+        }
+      }
+    },
     "Syncing with built-in display brightness" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1850,6 +1893,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "原彩显示"
+          }
+        }
+      }
+    },
+    "Type shortcut… (Esc to cancel)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请按下快捷键…（按 Esc 取消）"
           }
         }
       }

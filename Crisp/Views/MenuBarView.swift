@@ -409,6 +409,7 @@ struct SettingsView: View {
     // other section, or it reopens still expanded.
     @State private var showSupport = false
     @State private var showBrightnessKeys = false
+    @State private var showHiDPIShortcut = false
     // Accessibility trust drives which Brightness Keys UI shows (toggle vs target menu).
     // AXIsProcessTrusted() isn't observable and the panel content mounts once, so re-read
     // it on every open (below) or the section shows a stale state after the user grants or
@@ -596,6 +597,9 @@ struct SettingsView: View {
                 BrightnessKeysPermissionNotice()
             }
 
+            // Global HiDPI-toggle shortcut (issue #61).
+            HiDPIShortcutSection(expanded: $showHiDPIShortcut)
+
             // Launch at login
             Toggle(isOn: Binding(
                 get: { settings.launchAtLogin },
@@ -655,6 +659,7 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             showSupport = false
             showBrightnessKeys = false
+            showHiDPIShortcut = false
         }
     }
 }
