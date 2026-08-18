@@ -25,10 +25,22 @@ final class HotkeyService {
     /// Monotonic id source for EventHotKeyID.id; presses look the id up in
     /// `registrations`, so stale ids from a previous sync simply miss.
     private var nextID: UInt32 = 1
-    /// While true, syncRegistrations() registers nothing, so a recorder can
-    /// capture any combo, including ones currently bound.
-    var suspended = false {
-        didSet { syncRegistrations() }
+    /// Number of recorders currently suspending registration; while nonzero,
+    /// syncRegistrations() registers nothing, so a recorder can capture any
+    /// combo, including ones currently bound. A count, not a Bool: two recorder
+    /// rows can briefly overlap during a takeover, and SwiftUI may deliver one
+    /// row's stop after the other row's start, so a Bool would re-arm every
+    /// hotkey while the second row still records.
+    private var suspensions = 0
+
+    func beginSuspension() {
+        suspensions += 1
+        syncRegistrations()
+    }
+
+    func endSuspension() {
+        suspensions = max(0, suspensions - 1)
+        syncRegistrations()
     }
 
     /// Rebuilds every registration from current state: one hotkey per preset
@@ -37,14 +49,17 @@ final class HotkeyService {
     func syncRegistrations() {
         for reg in registrations.values { UnregisterEventHotKey(reg.ref) }
         registrations = [:]
-        guard !suspended else { return }
+        guard suspensions == 0 else {
+            Self.log.info("synced: suspended (\(self.suspensions) recorder(s)), nothing registered")
+            return
+        }
         for preset in PresetService.shared.presets {
             if let shortcut = preset.shortcut { register(shortcut, for: .preset(preset.id)) }
         }
         if let shortcut = SettingsService.shared.hidpiShortcut {
             register(shortcut, for: .hidpiToggle)
         }
-        Self.log.info("synced: \(self.registrations.count) hotkey(s) registered, suspended=\(self.suspended)")
+        Self.log.info("synced: \(self.registrations.count) hotkey(s) registered")
     }
 
     private func register(_ shortcut: KeyboardShortcut, for target: Target) {
@@ -58,7 +73,7 @@ final class HotkeyService {
         if let ref {
             registrations[id] = (ref, target)
         } else {
-            Self.log.error("RegisterEventHotKey failed (status \(status)) for \(shortcut.display)")
+            Self.log.error("RegisterEventHotKey failed (status \(status)) for \(shortcut.display, privacy: .public)")
         }
     }
 

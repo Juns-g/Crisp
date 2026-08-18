@@ -1,4 +1,8 @@
 import SwiftUI
+import os.log
+
+/// Same category as HotkeyService so one log stream shows the whole chain.
+private let recorderLog = Logger(subsystem: "com.crisp.app", category: "hotkey")
 
 /// One record-in-place shortcut row, shared by the Settings > Shortcuts section
 /// and the preset form (issue #61): action label leading, then the combo glyphs
@@ -15,6 +19,9 @@ struct ShortcutRecorderRow: View {
     @State private var isRecording = false
     @State private var monitor: Any? = nil
     @State private var isHovered = false
+    /// Identity for the takeover notification, so this row can ignore its own
+    /// post (see startRecording).
+    @State private var rowID = UUID()
 
     var body: some View {
         HStack(spacing: 6) {
@@ -59,9 +66,12 @@ struct ShortcutRecorderRow: View {
             // The panel resigns key on close; an in-flight recording can't finish.
             stopRecording()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .crispStopShortcutRecording)) { _ in
-            // The preset form is committing/closing; finish now (see MenuBarView).
-            stopRecording()
+        .onReceive(NotificationCenter.default.publisher(for: .crispStopShortcutRecording)) { note in
+            // The preset form is committing/closing (nil object), or another row
+            // is taking over recording. Skip our own takeover post: SwiftUI can
+            // deliver it back to us after startRecording installed the monitor,
+            // and reacting would stop the recording we just started.
+            if note.object as? UUID != rowID { stopRecording() }
         }
         // The preset form unmounts on Save/Cancel; don't leak the monitor.
         .onDisappear { stopRecording() }
@@ -70,15 +80,17 @@ struct ShortcutRecorderRow: View {
     private func startRecording() {
         guard monitor == nil else { return }
         // Only one recording at a time: the form row and the Settings row can both
-        // be on screen, and whichever other row is mid-recording must stop first,
-        // or its stop would set suspended = false and re-arm every hotkey while
-        // this row still shows "recording". Delivery is synchronous; our own
-        // monitor is still nil here, so the self-notification is a no-op.
-        NotificationCenter.default.post(name: .crispStopShortcutRecording, object: nil)
+        // be on screen, so whichever other row is mid-recording must stop first.
+        // Tagged with our identity because SwiftUI may deliver this back to us
+        // only after this function returns (observed live 2026-08-18, unlike a
+        // bare NSHostingView, where delivery is inline); without the tag the
+        // deferred self-delivery stopped the recording it just started.
+        NotificationCenter.default.post(name: .crispStopShortcutRecording, object: rowID)
         isRecording = true
         // Free every bound combo so any of them can be re-recorded here.
-        HotkeyService.shared.suspended = true
+        HotkeyService.shared.beginSuspension()
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            recorderLog.info("recorder keyDown: code \(event.keyCode)")
             if event.keyCode == 53 {  // kVK_Escape cancels
                 stopRecording()
                 return nil
@@ -94,13 +106,15 @@ struct ShortcutRecorderRow: View {
             }
             return nil
         }
+        recorderLog.info("recording started: \(label, privacy: .public)")
     }
 
     private func stopRecording() {
         guard monitor != nil else { return }
+        recorderLog.info("recording stopped: \(label, privacy: .public)")
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         isRecording = false
-        HotkeyService.shared.suspended = false
+        HotkeyService.shared.endSuspension()
     }
 }
