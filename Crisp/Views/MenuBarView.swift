@@ -85,10 +85,11 @@ extension Notification.Name {
     /// so its .onAppear can't re-fire on later opens.
     static let crispPanelDidOpen = Notification.Name("crisp.panelDidOpen")
 
-    /// Posted by the preset form before it commits and closes, so an in-flight
-    /// shortcut recording stops (and hotkey registration resumes) immediately.
-    /// The recorder's own onDisappear only fires after the close animation, and
-    /// syncRegistrations no-ops while recording keeps hotkeys suspended.
+    /// Posted by the preset form before it commits and closes, and by a recorder
+    /// row starting a recording, so an in-flight recording elsewhere stops (and
+    /// hotkey registration resumes) immediately. The recorder's own onDisappear
+    /// only fires after the close animation, and syncRegistrations no-ops while
+    /// recording keeps hotkeys suspended.
     static let crispStopShortcutRecording = Notification.Name("crisp.stopShortcutRecording")
 }
 

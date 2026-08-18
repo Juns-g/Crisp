@@ -69,6 +69,12 @@ struct ShortcutRecorderRow: View {
 
     private func startRecording() {
         guard monitor == nil else { return }
+        // Only one recording at a time: the form row and the Settings row can both
+        // be on screen, and whichever other row is mid-recording must stop first,
+        // or its stop would set suspended = false and re-arm every hotkey while
+        // this row still shows "recording". Delivery is synchronous; our own
+        // monitor is still nil here, so the self-notification is a no-op.
+        NotificationCenter.default.post(name: .crispStopShortcutRecording, object: nil)
         isRecording = true
         // Free every bound combo so any of them can be re-recorded here.
         HotkeyService.shared.suspended = true
