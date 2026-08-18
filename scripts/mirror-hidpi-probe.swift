@@ -14,10 +14,22 @@
 //   <WxH>       logical ("looks like") size, e.g. 3840x1080 on a 5K2K panel
 //   [displayID] physical display to mirror; default: first external, else main
 //
-// Creating the display pops macOS's "What do you want to show?" picker; ignore
-// it, the probe configures the mirror itself. If the screen goes wrong, Ctrl-C
-// restores it; worst case, quitting the process kills the virtual display.
+// CLI quirk (cost hours, do not reorder): CG keeps a per-process display-info
+// cache that refreshes via runloop-delivered notifications, and those are never
+// delivered to a bare CLI (reconfiguration callbacks do not fire either, even
+// when pumping the runloop). A cache warmed BEFORE the virtual display exists
+// therefore never learns its modes: CGDisplayCopyAllDisplayModes returns nil
+// forever. So the virtual display is created FIRST, before any display query;
+// the first query then builds a cache that contains both displays. The app has
+// a live runloop and reconfig callbacks, so none of this applies there.
+//
+// Creating the display pops macOS's "What do you want to show?" picker (at most
+// once per identity); ignore it, the probe configures the mirror itself. If the
+// screen goes wrong, Ctrl-C restores it; worst case, quitting the process kills
+// the virtual display.
 import AppKit
+
+setvbuf(stdout, nil, _IONBF, 0)   // line output survives even if we die mid-run
 
 func fail(_ msg: String) -> Never { print("FAIL: \(msg)"); exit(1) }
 
@@ -32,23 +44,87 @@ guard sizeParts.count == 2, let logicalW = Int(sizeParts[0]), let logicalH = Int
       logicalW > 0, logicalH > 0 else {
     fail("bad size '\(args[1])', expected e.g. 3840x1080")
 }
+print("Target: looks like \(logicalW)x\(logicalH), backing \(logicalW * 2)x\(logicalH * 2)")
 
-var displayCount: UInt32 = 0
-CGGetOnlineDisplayList(0, nil, &displayCount)
-var onlineIDs = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
-CGGetOnlineDisplayList(displayCount, &onlineIDs, &displayCount)
+// MARK: - CGVirtualDisplay via the ObjC runtime (no bridging header in scripts)
 
-let physical: CGDirectDisplayID
-if args.count >= 3 {
-    guard let want = UInt32(args[2]), onlineIDs.contains(want) else {
-        fail("display \(args[2]) not online (online: \(onlineIDs))")
-    }
-    physical = want
-} else {
-    physical = onlineIDs.first { CGDisplayIsBuiltin($0) == 0 } ?? CGMainDisplayID()
+guard let descCls = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type,
+      let modeCls: AnyClass = NSClassFromString("CGVirtualDisplayMode"),
+      let settingsCls = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type,
+      let displayCls: AnyClass = NSClassFromString("CGVirtualDisplay")
+else { fail("CGVirtualDisplay private API unavailable") }
+
+// Ownership: alloc returns +1 which the init call CONSUMES, so the alloc'd
+// reference must never be claimed by Swift (hence Unmanaged + takeUnretained
+// at the call site); only the init RESULT is claimed, with takeRetained.
+// Claiming both over-releases and crashes in objc_release.
+func alloc(_ cls: AnyClass) -> Unmanaged<AnyObject> {
+    let imp = class_getMethodImplementation(object_getClass(cls), NSSelectorFromString("alloc"))
+    let fn = unsafeBitCast(imp, to: (@convention(c) (AnyClass, Selector) -> Unmanaged<AnyObject>).self)
+    return fn(cls, NSSelectorFromString("alloc"))
 }
 
-// MARK: - Reporting helpers
+func makeMode(_ pixelW: Int, _ pixelH: Int, _ hz: Double) -> AnyObject {
+    let sel = NSSelectorFromString("initWithWidth:height:refreshRate:")
+    let imp = class_getMethodImplementation(modeCls, sel)
+    let fn = unsafeBitCast(imp, to: (@convention(c) (AnyObject, Selector, UInt, UInt, Double) -> Unmanaged<AnyObject>).self)
+    return fn(alloc(modeCls).takeUnretainedValue(), sel, UInt(pixelW), UInt(pixelH), hz).takeRetainedValue()
+}
+
+let desc = descCls.init()
+// Pure math, no CG query allowed yet (see the CLI quirk above): report a size
+// at ~110 PPI like VirtualDisplayService. Only affects PPI cosmetics; the
+// looks-like mode is forced explicitly below.
+let ppi = 110.0
+desc.setValue(NSValue(size: NSSize(width: Double(logicalW * 2) / ppi * 25.4,
+                                   height: Double(logicalH * 2) / ppi * 25.4)),
+              forKey: "sizeInMillimeters")
+desc.setValue(UInt32(logicalW * 2), forKey: "maxPixelsWide")
+desc.setValue(UInt32(logicalH * 2), forKey: "maxPixelsHigh")
+desc.setValue("Crisp Mirror Probe", forKey: "name")
+desc.setValue(UInt32(0xEEEE), forKey: "vendorID")   // Crisp's virtual-display stamp
+desc.setValue(UInt32(0x50524F42), forKey: "productID")  // "PROB"
+desc.setValue(UInt32(1), forKey: "serialNum")
+
+let settings = settingsCls.init()
+settings.setValue(true, forKey: "hiDPI")
+var modeObjs: [AnyObject] = []
+// The looks-like HiDPI mode only materializes when BOTH the 2x backing and the
+// half-size pixel mode are declared (found empirically: backing alone gets 1x
+// modes plus retina twins of the auto-added smaller sizes, never of the max).
+// Fixed rate ladder, since reading the panel's rate pre-creation is forbidden;
+// WindowServer keeps what it supports.
+for hz in [60.0, 75.0, 100.0, 120.0, 144.0, 165.0] {
+    modeObjs.append(makeMode(logicalW * 2, logicalH * 2, hz))  // the 2x backing
+    modeObjs.append(makeMode(logicalW, logicalH, hz))          // half-size pixel mode
+}
+settings.setValue(modeObjs as NSArray, forKey: "modes")
+
+let initSel = NSSelectorFromString("initWithDescriptor:")
+let initImp = class_getMethodImplementation(displayCls, initSel)
+let initFn = unsafeBitCast(initImp, to: (@convention(c) (AnyObject, Selector, AnyObject) -> Unmanaged<AnyObject>?).self)
+// Kept in a global so teardown() can release it; releasing destroys the display.
+var virtualDisplay: AnyObject? = initFn(alloc(displayCls).takeUnretainedValue(), initSel, desc)?.takeRetainedValue()
+guard let vd = virtualDisplay else { fail("CGVirtualDisplay init returned nil") }
+
+let applySel = NSSelectorFromString("applySettings:")
+let applyImp = class_getMethodImplementation(displayCls, applySel)
+let applyFn = unsafeBitCast(applyImp, to: (@convention(c) (AnyObject, Selector, AnyObject) -> Bool).self)
+guard applyFn(vd, applySel, settings) else { fail("applySettings failed") }
+
+guard let vdID = (vd as? NSObject)?.value(forKey: "displayID") as? CGDirectDisplayID,
+      vdID != kCGNullDirectDisplay else { fail("virtual display has no displayID") }
+print("Virtual display created: id \(vdID)")
+
+// MARK: - Now the display queries are safe; pick and report the physical
+
+func onlineDisplays() -> [CGDirectDisplayID] {
+    var n: UInt32 = 0
+    CGGetOnlineDisplayList(0, nil, &n)
+    var ids = [CGDirectDisplayID](repeating: 0, count: Int(n))
+    CGGetOnlineDisplayList(n, &ids, &n)
+    return ids
+}
 
 func modeString(_ m: CGDisplayMode) -> String {
     let kind = m.pixelWidth > m.width ? " HiDPI" : ""
@@ -67,6 +143,18 @@ func report(_ label: String, _ id: CGDirectDisplayID) {
     print("\(label) \(id): \(cur) | \(mirrorStr) | hwMirrorSet=\(CGDisplayIsInHWMirrorSet(id) != 0) primary=\(CGDisplayPrimaryDisplay(id))")
 }
 
+let candidates = onlineDisplays().filter { $0 != vdID }
+let physical: CGDirectDisplayID
+if args.count >= 3 {
+    guard let want = UInt32(args[2]), candidates.contains(want) else {
+        virtualDisplay = nil
+        fail("display \(args[2]) not online (online: \(candidates))")
+    }
+    physical = want
+} else {
+    physical = candidates.first { CGDisplayIsBuiltin($0) == 0 } ?? CGMainDisplayID()
+}
+
 let physName = NSScreen.screens.first {
     $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID == physical
 }?.localizedName ?? "?"
@@ -74,68 +162,6 @@ let physModes = allModes(physical)
 let hidpiTop = physModes.filter { $0.pixelWidth > $0.width }.map(\.width).max() ?? 0
 print("Physical: \(physName) (\(physical)), \(physModes.count) modes, HiDPI ladder top \(hidpiTop)px wide")
 report("  before:", physical)
-print("Target: looks like \(logicalW)x\(logicalH), backing \(logicalW * 2)x\(logicalH * 2)")
-
-// MARK: - CGVirtualDisplay via the ObjC runtime (no bridging header in scripts)
-
-guard let descCls = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type,
-      let modeCls: AnyClass = NSClassFromString("CGVirtualDisplayMode"),
-      let settingsCls = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type,
-      let displayCls: AnyClass = NSClassFromString("CGVirtualDisplay")
-else { fail("CGVirtualDisplay private API unavailable") }
-
-func alloc(_ cls: AnyClass) -> AnyObject {
-    let imp = class_getMethodImplementation(object_getClass(cls), NSSelectorFromString("alloc"))
-    let fn = unsafeBitCast(imp, to: (@convention(c) (AnyClass, Selector) -> Unmanaged<AnyObject>).self)
-    return fn(cls, NSSelectorFromString("alloc")).takeRetainedValue()
-}
-
-func makeMode(_ pixelW: Int, _ pixelH: Int, _ hz: Double) -> AnyObject {
-    let sel = NSSelectorFromString("initWithWidth:height:refreshRate:")
-    let imp = class_getMethodImplementation(modeCls, sel)
-    let fn = unsafeBitCast(imp, to: (@convention(c) (AnyObject, Selector, UInt, UInt, Double) -> Unmanaged<AnyObject>).self)
-    return fn(alloc(modeCls), sel, UInt(pixelW), UInt(pixelH), hz).takeRetainedValue()
-}
-
-let desc = descCls.init()
-// Report the physical panel's own physical size so macOS computes a sane PPI.
-let mm = CGDisplayScreenSize(physical)
-desc.setValue(NSValue(size: NSSize(width: mm.width, height: mm.height)), forKey: "sizeInMillimeters")
-desc.setValue(UInt32(logicalW * 2), forKey: "maxPixelsWide")
-desc.setValue(UInt32(logicalH * 2), forKey: "maxPixelsHigh")
-desc.setValue("Crisp Mirror Probe", forKey: "name")
-desc.setValue(UInt32(0xEEEE), forKey: "vendorID")   // Crisp's virtual-display stamp
-desc.setValue(UInt32(0x50524F42), forKey: "productID")  // "PROB"
-desc.setValue(UInt32(1), forKey: "serialNum")
-
-let physRate = CGDisplayCopyDisplayMode(physical)?.refreshRate ?? 60
-var rates: [Double] = [60]
-if physRate > 0, abs(physRate - 60) >= 1 { rates.append(physRate) }
-
-let settings = settingsCls.init()
-settings.setValue(true, forKey: "hiDPI")
-var modeObjs: [AnyObject] = []
-for hz in rates {
-    modeObjs.append(makeMode(logicalW * 2, logicalH * 2, hz))  // the 2x backing
-    modeObjs.append(makeMode(logicalW, logicalH, hz))          // 1x fallback
-}
-settings.setValue(modeObjs as NSArray, forKey: "modes")
-
-let initSel = NSSelectorFromString("initWithDescriptor:")
-let initImp = class_getMethodImplementation(displayCls, initSel)
-let initFn = unsafeBitCast(initImp, to: (@convention(c) (AnyObject, Selector, AnyObject) -> Unmanaged<AnyObject>?).self)
-// Kept in a global so teardown() can release it; releasing destroys the display.
-var virtualDisplay: AnyObject? = initFn(alloc(displayCls), initSel, desc)?.takeRetainedValue()
-guard let vd = virtualDisplay else { fail("CGVirtualDisplay init returned nil") }
-
-let applySel = NSSelectorFromString("applySettings:")
-let applyImp = class_getMethodImplementation(displayCls, applySel)
-let applyFn = unsafeBitCast(applyImp, to: (@convention(c) (AnyObject, Selector, AnyObject) -> Bool).self)
-guard applyFn(vd, applySel, settings) else { fail("applySettings failed") }
-
-guard let vdID = (vd as? NSObject)?.value(forKey: "displayID") as? CGDirectDisplayID,
-      vdID != kCGNullDirectDisplay else { fail("virtual display has no displayID") }
-print("Virtual display created: id \(vdID)")
 
 // MARK: - Mirror config + teardown
 
@@ -152,14 +178,13 @@ func setMirror(_ display: CGDirectDisplayID, master: CGDirectDisplayID) -> Bool 
 
 func teardown() {
     print("\nTearing down: unmirror -> destroy virtual display")
-    if !setMirror(physical, master: kCGNullDirectDisplay) { print("  unmirror FAILED") }
+    if CGDisplayMirrorsDisplay(physical) != kCGNullDirectDisplay,
+       !setMirror(physical, master: kCGNullDirectDisplay) { print("  unmirror FAILED") }
     virtualDisplay = nil   // last strong reference: WindowServer removes the display
     usleep(1_500_000)
-    var n: UInt32 = 0
-    CGGetOnlineDisplayList(0, nil, &n)
-    var ids = [CGDirectDisplayID](repeating: 0, count: Int(n))
-    CGGetOnlineDisplayList(n, &ids, &n)
-    print(ids.contains(vdID) ? "  virtual display STILL ONLINE (check after exit)" : "  virtual display gone")
+    print(onlineDisplays().contains(vdID)
+          ? "  virtual display STILL ONLINE (stale CLI cache is possible; verify in System Settings)"
+          : "  virtual display gone")
     report("  physical after:", physical)
 }
 
@@ -170,11 +195,10 @@ sigSrc.resume()
 
 // MARK: - Drive the virtual display to the looks-like HiDPI mode
 
-// WindowServer finishes bringing the display up (and picks its own default
-// mode) asynchronously; retry briefly like VirtualDisplayService does.
+// WindowServer finishes bringing the display up asynchronously; retry briefly.
 var hidpiMode: CGDisplayMode?
-for attempt in 0..<10 {
-    if attempt > 0 { usleep(300_000) }
+for attempt in 0..<20 {
+    if attempt > 0 { usleep(500_000) }
     let modes = allModes(vdID)
     if modes.isEmpty { continue }
     if hidpiMode == nil {
