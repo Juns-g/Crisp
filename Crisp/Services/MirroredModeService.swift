@@ -63,7 +63,13 @@ final class MirroredModeService: ObservableObject {
         let physicalID = display.displayID
 
         if let vdID = active[physicalID]?.displayID {
-            return await setLooksLike(width: width, height: height, on: vdID)
+            guard await setLooksLike(width: width, height: height, on: vdID) else { return false }
+            // Re-arm the mirror if something dropped it under us (a wake or a
+            // WindowServer reset can collapse a mirror set without telling us).
+            if CGDisplayMirrorsDisplay(physicalID) != vdID {
+                return await MirrorService.shared.enableMirror(source: vdID, target: physicalID)
+            }
+            return true
         }
 
         guard let virtualDisplay = await createMirrorVirtual(for: display,
@@ -99,6 +105,44 @@ final class MirroredModeService: ObservableObject {
         activePhysicalIDs.remove(physicalID)
         await waitForDisplayOffline(vdID)
         return unmirrored
+    }
+
+    /// Reacts to a display leaving the online list (called from
+    /// DisplayManager.refreshDisplays). Two cases matter: the mirrored physical
+    /// was unplugged (nothing to unmirror anymore, let the orphan virtual die),
+    /// or our virtual died without us (WindowServer collapses the mirror set
+    /// itself when a master disappears; drop the stale entry so the state stays
+    /// truthful and the next slider move takes the normal create path).
+    func handleDisplayRemoval(_ removedID: CGDirectDisplayID) {
+        if active[removedID] != nil {
+            active.removeValue(forKey: removedID)
+            activePhysicalIDs.remove(removedID)
+            return
+        }
+        if let physicalID = active.first(where: { $0.value.displayID == removedID })?.key {
+            active.removeValue(forKey: physicalID)
+            activePhysicalIDs.remove(physicalID)
+        }
+    }
+
+    /// Frees any physical display left mirroring a STRAY Crisp mirror virtual
+    /// (vendor stamp + MIRR serial) that this process does not own, i.e. one a
+    /// crashed session left behind. We hold no object for it so we cannot
+    /// destroy it, but unmirroring gives the panel its desktop back; the ghost
+    /// display stays hidden from the UI by the vendor-stamp filters. Called on
+    /// every refreshDisplays; a cheap no-op when nothing is stray.
+    func recoverStrandedMirrors() {
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(0, nil, &count)
+        guard count > 0 else { return }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetOnlineDisplayList(count, &ids, &count)
+        for id in ids where CGDisplayVendorNumber(id) == VirtualDisplayService.crispVirtualVendorID
+            && CGDisplaySerialNumber(id) == Self.mirrorSerialMarker
+            && !active.values.contains(where: { $0.displayID == id }) {
+            guard let target = MirrorService.shared.mirrorTargets(of: id) else { continue }
+            Task { await MirrorService.shared.disableMirror(displayID: target) }
+        }
     }
 
     /// Quit-path teardown. applicationWillTerminate cannot await, so the
