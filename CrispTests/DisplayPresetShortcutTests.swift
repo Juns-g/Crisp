@@ -8,11 +8,11 @@ final class DisplayPresetShortcutTests: XCTestCase {
     /// Presets saved before the shortcut feature have no "shortcut" key in their
     /// JSON; they must decode with shortcut nil, not fail.
     func testLegacyPresetJSONDecodesWithNilShortcut() throws {
-        let legacy = """
+        let legacy = Data("""
         {"id":"11111111-2222-3333-4444-555555555555","name":"Work","icon":"display",
          "displays":[{"id":"99999999-8888-7777-6666-555555555555",
          "displayUUID":"ABC","width":1920,"height":1080,"isHiDPI":true}]}
-        """.data(using: .utf8)!
+        """.utf8)
         let preset = try JSONDecoder().decode(DisplayPreset.self, from: legacy)
         XCTAssertNil(preset.shortcut)
         XCTAssertEqual(preset.name, "Work")
