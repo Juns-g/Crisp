@@ -59,6 +59,10 @@ struct ShortcutRecorderRow: View {
             // The panel resigns key on close; an in-flight recording can't finish.
             stopRecording()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .crispStopShortcutRecording)) { _ in
+            // The preset form is committing/closing; finish now (see MenuBarView).
+            stopRecording()
+        }
         // The preset form unmounts on Save/Cancel; don't leak the monitor.
         .onDisappear { stopRecording() }
     }

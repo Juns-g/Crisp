@@ -292,7 +292,11 @@ struct SavePresetForm: View {
             // Cancel / Save
             HStack(spacing: 10) {
                 Spacer()
-                Button("Cancel", action: onClose)
+                Button("Cancel") {
+                    // Same close-while-recording gap as Save (see save()).
+                    NotificationCenter.default.post(name: .crispStopShortcutRecording, object: nil)
+                    onClose()
+                }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 if isSaving {
@@ -322,6 +326,10 @@ struct SavePresetForm: View {
     private func save() {
         let name = presetName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty, !nothingSelected else { return }
+
+        // Stop an in-flight recording before committing: commitShortcut re-syncs
+        // hotkey registrations, which no-ops while recording suspends them.
+        NotificationCenter.default.post(name: .crispStopShortcutRecording, object: nil)
 
         isSaving = true
         saveError = nil
