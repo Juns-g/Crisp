@@ -61,6 +61,7 @@ targets:
       - path: Crisp/Models/GammaPersistenceKey.swift
       - path: Crisp/Models/VariableRefreshModes.swift
       - path: Crisp/Models/KeyboardShortcut.swift
+      - path: Crisp/Models/DisplayPreset.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.crisp.tests
