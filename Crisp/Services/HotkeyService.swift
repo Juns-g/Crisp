@@ -100,7 +100,12 @@ final class HotkeyService {
         Self.log.info("hotkey press: id \(id), known=\(self.registrations[id] != nil)")
         switch registrations[id]?.target {
         case .preset(let presetID):
-            guard let preset = PresetService.shared.presets.first(where: { $0.id == presetID })
+            // Same guards as tapping the preset row: no-op while one applies or
+            // when this preset is already the active (checkmarked) one, so a
+            // repeat press doesn't re-apply and jiggle the row.
+            guard let preset = PresetService.shared.presets.first(where: { $0.id == presetID }),
+                  !PresetService.shared.isApplying,
+                  PresetService.shared.activePresetID != presetID
             else { return }
             Task { await PresetService.shared.applyPreset(preset) }
         case .hidpiToggle:

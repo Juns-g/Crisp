@@ -119,9 +119,11 @@ struct PresetRow: View {
     private var rowContent: some View {
         HStack(spacing: 8) {
             if isApplying {
+                // Same footprint as MenuItemIcon (26pt chip), or the swap dips
+                // the row height and the whole panel resizes for a beat.
                 ProgressView()
                     .scaleEffect(0.7)
-                    .frame(width: 20, height: 20)
+                    .frame(width: 26, height: 26)
             } else {
                 MenuItemIcon(systemName: preset.icon, color: preset.chipColor)
             }
@@ -141,12 +143,14 @@ struct PresetRow: View {
                     .foregroundColor(.secondaryReadable)
             }
 
-            if isCurrentMatch {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.accentColor)
-                    .accessibilityLabel("Currently active")
-            }
+            // Slot stays reserved like the ⋯ below, so the shortcut glyphs don't
+            // shift when the checkmark comes and goes (issue #61).
+            Image(systemName: "checkmark")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.accentColor)
+                .opacity(isCurrentMatch ? 1 : 0)
+                .accessibilityHidden(!isCurrentMatch)
+                .accessibilityLabel("Currently active")
 
             // Visible ⋯ menu, revealed on hover. Same actions as the right-click
             // menu below, now discoverable.
