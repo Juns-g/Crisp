@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import os.log
 
 /// Registers all of Crisp's global shortcuts via Carbon RegisterEventHotKey and dispatches presses to their actions (issue #61).
 ///
@@ -10,6 +11,8 @@ import Carbon.HIToolbox
 final class HotkeyService {
     static let shared = HotkeyService()
     private init() {}
+
+    private static let log = Logger(subsystem: "com.crisp.app", category: "hotkey")
 
     /// What a registered hotkey triggers.
     private enum Target {
@@ -41,6 +44,7 @@ final class HotkeyService {
         if let shortcut = SettingsService.shared.hidpiShortcut {
             register(shortcut, for: .hidpiToggle)
         }
+        Self.log.info("synced: \(self.registrations.count) hotkey(s) registered, suspended=\(self.suspended)")
     }
 
     private func register(_ shortcut: KeyboardShortcut, for target: Target) {
@@ -49,9 +53,13 @@ final class HotkeyService {
         nextID &+= 1
         var ref: EventHotKeyRef?
         let hotKeyID = EventHotKeyID(signature: OSType(0x4372_7370), id: id)  // "Crsp"
-        RegisterEventHotKey(shortcut.keyCode, shortcut.carbonModifiers, hotKeyID,
-                            GetEventDispatcherTarget(), 0, &ref)
-        if let ref { registrations[id] = (ref, target) }
+        let status = RegisterEventHotKey(shortcut.keyCode, shortcut.carbonModifiers, hotKeyID,
+                                         GetEventDispatcherTarget(), 0, &ref)
+        if let ref {
+            registrations[id] = (ref, target)
+        } else {
+            Self.log.error("RegisterEventHotKey failed (status \(status)) for \(shortcut.display)")
+        }
     }
 
     /// One process-wide handler; presses carry the EventHotKeyID that fired.
@@ -59,7 +67,7 @@ final class HotkeyService {
         guard handlerRef == nil else { return }
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                       eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetEventDispatcherTarget(), { _, event, _ in
+        let status = InstallEventHandler(GetEventDispatcherTarget(), { _, event, _ in
             // C-function callback, no captures; read which hotkey fired, then
             // hop to the main actor for the action.
             var hotKeyID = EventHotKeyID()
@@ -70,9 +78,11 @@ final class HotkeyService {
             Task { @MainActor in HotkeyService.shared.fire(id: id) }
             return noErr
         }, 1, &eventType, nil, &handlerRef)
+        if status != noErr { Self.log.error("InstallEventHandler failed (status \(status))") }
     }
 
     private func fire(id: UInt32) {
+        Self.log.info("hotkey press: id \(id), known=\(self.registrations[id] != nil)")
         switch registrations[id]?.target {
         case .preset(let presetID):
             guard let preset = PresetService.shared.presets.first(where: { $0.id == presetID })
@@ -101,9 +111,11 @@ final class HotkeyService {
         else {
             // No twin at this size (or the display vanished): audible no-op instead of
             // a shortcut that silently does nothing.
+            Self.log.info("hidpi toggle: no twin under pointer, beeping")
             NSSound.beep()
             return
         }
+        Self.log.info("hidpi toggle: switching display \(displayID) to \(target.width)x\(target.height) hidpi=\(target.isHiDPI)")
         Task { @MainActor in
             _ = await ResolutionService.shared.setDisplayMode(target, for: displayID)
         }
