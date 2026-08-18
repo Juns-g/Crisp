@@ -83,6 +83,10 @@ struct PresetRow: View {
 
     @State private var isHovered = false
     @FocusState private var nameFocused: Bool
+    /// Spinner shown only when applying outlasts a beat: an instant apply (a
+    /// brightness-only preset, or one whose resolution already matches) would
+    /// otherwise flash the spinner for a frame every time its shortcut fires.
+    @State private var showSpinner = false
 
     /// Resolutions this preset will set, joined across displays. Shown as a hover
     /// tooltip (.help) so the row stays compact and menu-like. nil when the preset
@@ -114,11 +118,24 @@ struct PresetRow: View {
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             isEditing = false
         }
+        .onChange(of: isApplying) { _, applying in
+            if applying {
+                Task {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    // Live service state, not the captured row value: a stale
+                    // read here would raise the spinner after a fast apply
+                    // already ended, with nothing left to lower it.
+                    if PresetService.shared.applyingPresetID == preset.id { showSpinner = true }
+                }
+            } else {
+                showSpinner = false
+            }
+        }
     }
 
     private var rowContent: some View {
         HStack(spacing: 8) {
-            if isApplying {
+            if showSpinner {
                 // Same footprint as MenuItemIcon (26pt chip), or the swap dips
                 // the row height and the whole panel resizes for a beat.
                 ProgressView()
