@@ -32,7 +32,7 @@ struct HiDPIShortcutSection: View {
                 if settings.hidpiShortcut != nil && !isRecording {
                     ShortcutActionRow(title: "Remove Shortcut") {
                         settings.hidpiShortcut = nil
-                        HotkeyService.shared.apply(nil)
+                        HotkeyService.shared.syncRegistrations()
                     }
                 }
                 Text("Switches the display under the pointer between HiDPI and low resolution.")
@@ -54,7 +54,7 @@ struct HiDPIShortcutSection: View {
         guard monitor == nil else { return }
         isRecording = true
         // Free the current combo so typing it re-records instead of firing the toggle.
-        HotkeyService.shared.apply(nil)
+        HotkeyService.shared.suspended = true
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.keyCode == 53 {  // kVK_Escape cancels
                 stopRecording()
@@ -76,7 +76,7 @@ struct HiDPIShortcutSection: View {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         isRecording = false
-        HotkeyService.shared.apply(settings.hidpiShortcut)
+        HotkeyService.shared.suspended = false
     }
 }
 
