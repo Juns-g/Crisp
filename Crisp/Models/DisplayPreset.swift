@@ -29,6 +29,9 @@ struct DisplayPreset: Codable, Identifiable {
     var icon: String              // SF Symbol name
     var colorName: String? = nil  // chip color key; nil = default
     var displays: [DisplayPresetEntry]
+    /// Global shortcut that applies this preset; nil when not set. Old presets
+    /// decode as nil (issue #61).
+    var shortcut: KeyboardShortcut? = nil
 
     // Which attributes this preset controls (derived from whether any entry stores one).
     var includesResolution: Bool { displays.contains { $0.width != nil } }

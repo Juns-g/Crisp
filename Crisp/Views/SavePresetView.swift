@@ -80,6 +80,10 @@ struct SavePresetForm: View {
     /// Edit mode only: when on, Save re-captures the current display values
     /// (resolution/brightness/arrangement) instead of keeping the stored ones.
     @State private var recaptureValues: Bool = false
+    /// Global shortcut for this preset, held here until Save like name and icon
+    /// (issue #61). Recording works at creation time because this form is also
+    /// the New Preset form.
+    @State private var recordedShortcut: KeyboardShortcut? = nil
     @State private var showIdentityPicker: Bool = false
     @State private var isSaving: Bool = false
     @State private var saveError: String?
@@ -99,6 +103,7 @@ struct SavePresetForm: View {
         _includeResolution = State(initialValue: editing?.includesResolution ?? true)
         _includeBrightness = State(initialValue: editing?.includesBrightness ?? true)
         _includeArrangement = State(initialValue: editing?.includesArrangement ?? true)
+        _recordedShortcut = State(initialValue: editing?.shortcut)
     }
 
     private var nothingSelected: Bool {
@@ -257,6 +262,9 @@ struct SavePresetForm: View {
                 }
             }
 
+            ShortcutRecorderRow(label: "Shortcut", shortcut: $recordedShortcut)
+                .padding(.horizontal, -12)  // recorder row pads itself; cancel the form's inset
+
             // Edit mode only: let Save refresh the stored values to the current
             // display state. New always captures fresh, so this only shows when editing.
             if editing != nil {
@@ -284,7 +292,11 @@ struct SavePresetForm: View {
             // Cancel / Save
             HStack(spacing: 10) {
                 Spacer()
-                Button("Cancel", action: onClose)
+                Button("Cancel") {
+                    // Same close-while-recording gap as Save (see save()).
+                    NotificationCenter.default.post(name: .crispStopShortcutRecording, object: nil)
+                    onClose()
+                }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 if isSaving {
@@ -315,6 +327,10 @@ struct SavePresetForm: View {
         let name = presetName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty, !nothingSelected else { return }
 
+        // Stop an in-flight recording before committing: commitShortcut re-syncs
+        // hotkey registrations, which no-ops while recording suspends them.
+        NotificationCenter.default.post(name: .crispStopShortcutRecording, object: nil)
+
         isSaving = true
         saveError = nil
 
@@ -331,6 +347,7 @@ struct SavePresetForm: View {
             if recaptureValues {
                 PresetService.shared.updatePreset(id: editing.id)
             }
+            PresetService.shared.commitShortcut(recordedShortcut, forPresetID: editing.id)
         } else {
             var preset = PresetService.shared.captureCurrentState(
                 name: name, icon: selectedIcon,
@@ -340,6 +357,7 @@ struct SavePresetForm: View {
             )
             preset.colorName = selectedColor
             PresetService.shared.addPreset(preset)
+            PresetService.shared.commitShortcut(recordedShortcut, forPresetID: preset.id)
         }
 
         isSaving = false

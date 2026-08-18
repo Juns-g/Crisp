@@ -61,6 +61,7 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
         static let colorPickerHistory     = "crisp.colorPickerHistory"
         static let brightnessKeyTarget    = "crisp.brightnessKeyTarget"
         static let brightnessKeySelected  = "crisp.brightnessKeySelectedDisplays"
+        static let hidpiShortcut          = "crisp.hidpiShortcut"
         // Per-display keys use prefix + displayID
         static let brightnessPrefix       = "crisp.brightness_"
         static let contrastPrefix         = "crisp.contrast_"
@@ -113,6 +114,19 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
     @Published var brightnessKeySelectedDisplayUUIDs: Set<String> = [] {
         didSet {
             defaults.set(Array(brightnessKeySelectedDisplayUUIDs), forKey: Keys.brightnessKeySelected)
+        }
+    }
+
+    /// Global shortcut that toggles the display under the pointer between HiDPI and
+    /// low resolution; nil when not set. Registration is the caller's job
+    /// (HotkeyService.syncRegistrations), matching how LaunchService is driven from the view.
+    @Published var hidpiShortcut: KeyboardShortcut? = nil {
+        didSet {
+            if let hidpiShortcut, let data = try? JSONEncoder().encode(hidpiShortcut) {
+                defaults.set(data, forKey: Keys.hidpiShortcut)
+            } else {
+                defaults.removeObject(forKey: Keys.hidpiShortcut)
+            }
         }
     }
 
@@ -184,5 +198,7 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
         brightnessKeyTarget = defaults.string(forKey: Keys.brightnessKeyTarget)
             .flatMap(BrightnessKeyTarget.init(rawValue:)) ?? .underCursor
         brightnessKeySelectedDisplayUUIDs = Set(defaults.stringArray(forKey: Keys.brightnessKeySelected) ?? [])
+        hidpiShortcut = defaults.data(forKey: Keys.hidpiShortcut)
+            .flatMap { try? JSONDecoder().decode(KeyboardShortcut.self, from: $0) }
     }
 }

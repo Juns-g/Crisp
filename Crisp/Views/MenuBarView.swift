@@ -84,6 +84,14 @@ extension Notification.Name {
     /// (e.g. the system auto-brightness toggle) can re-read it, the view mounts once,
     /// so its .onAppear can't re-fire on later opens.
     static let crispPanelDidOpen = Notification.Name("crisp.panelDidOpen")
+
+    /// Posted by the preset form before it commits and closes (object nil, stops
+    /// every recorder), and by a recorder row starting a recording (object: its
+    /// row identity, which the poster itself ignores), so an in-flight recording
+    /// elsewhere stops. Hotkey registration resumes once no recorder suspends it
+    /// (HotkeyService counts suspensions). The recorder's own onDisappear only
+    /// fires after the close animation, hence the notification.
+    static let crispStopShortcutRecording = Notification.Name("crisp.stopShortcutRecording")
 }
 
 extension Animation {
@@ -409,6 +417,7 @@ struct SettingsView: View {
     // other section, or it reopens still expanded.
     @State private var showSupport = false
     @State private var showBrightnessKeys = false
+    @State private var showHiDPIShortcut = false
     // Accessibility trust drives which Brightness Keys UI shows (toggle vs target menu).
     // AXIsProcessTrusted() isn't observable and the panel content mounts once, so re-read
     // it on every open (below) or the section shows a stale state after the user grants or
@@ -596,6 +605,9 @@ struct SettingsView: View {
                 BrightnessKeysPermissionNotice()
             }
 
+            // Global shortcuts: the curated action list (issue #61).
+            ShortcutsSection(expanded: $showHiDPIShortcut)
+
             // Launch at login
             Toggle(isOn: Binding(
                 get: { settings.launchAtLogin },
@@ -655,6 +667,7 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .crispPanelDidClose)) { _ in
             showSupport = false
             showBrightnessKeys = false
+            showHiDPIShortcut = false
         }
     }
 }
