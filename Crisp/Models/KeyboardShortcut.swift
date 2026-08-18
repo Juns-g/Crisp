@@ -50,6 +50,11 @@ struct KeyboardShortcut: Equatable, Codable {
         return glyphs + keyLabel
     }
 
+    /// Same physical combo regardless of the captured label (layouts differ).
+    func sameKeys(as other: KeyboardShortcut) -> Bool {
+        keyCode == other.keyCode && carbonModifiers == other.carbonModifiers
+    }
+
     /// Label for a pressed key: named glyphs for keys that don't type a printable
     /// character, else the typed character uppercased. `characters` is the event's
     /// charactersIgnoringModifiers.

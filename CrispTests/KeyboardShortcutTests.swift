@@ -94,4 +94,14 @@ final class KeyboardShortcutTests: XCTestCase {
         let decoded = try JSONDecoder().decode(KeyboardShortcut.self, from: data)
         XCTAssertEqual(decoded, original)
     }
+
+    /// Steal-on-record compares by key code + modifiers only; the captured label
+    /// may differ across keyboard layouts for the same physical combo.
+    func testSameKeysIgnoresLabel() throws {
+        let a = try XCTUnwrap(KeyboardShortcut(keyCode: 4, nsModifierFlags: command, keyLabel: "H"))
+        let b = try XCTUnwrap(KeyboardShortcut(keyCode: 4, nsModifierFlags: command, keyLabel: "И"))
+        let c = try XCTUnwrap(KeyboardShortcut(keyCode: 4, nsModifierFlags: option, keyLabel: "H"))
+        XCTAssertTrue(a.sameKeys(as: b))
+        XCTAssertFalse(a.sameKeys(as: c))
+    }
 }

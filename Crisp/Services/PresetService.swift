@@ -34,6 +34,8 @@ final class PresetService: ObservableObject, @unchecked Sendable {
 
     func savePresets() {
         SettingsService.shared.save(presets, filename: filename)
+        // Shortcuts live on presets, so any preset change may add/remove/steal one.
+        HotkeyService.shared.syncRegistrations()
     }
 
     // MARK: - CRUD
@@ -48,6 +50,40 @@ final class PresetService: ObservableObject, @unchecked Sendable {
         presets.remove(at: index)
         if activePresetID == id { activePresetID = nil }
         savePresets()
+    }
+
+    // MARK: - Shortcuts (issue #61)
+
+    /// Sets a preset's shortcut, stealing the combo from every other holder
+    /// (other presets and the static Toggle HiDPI action): last save wins.
+    func commitShortcut(_ shortcut: KeyboardShortcut?, forPresetID id: UUID) {
+        guard let index = presets.firstIndex(where: { $0.id == id }) else { return }
+        if let shortcut {
+            for i in presets.indices where presets[i].id != id
+                && presets[i].shortcut?.sameKeys(as: shortcut) == true {
+                presets[i].shortcut = nil
+            }
+            if SettingsService.shared.hidpiShortcut?.sameKeys(as: shortcut) == true {
+                SettingsService.shared.hidpiShortcut = nil
+            }
+        }
+        presets[index].shortcut = shortcut
+        savePresets()
+    }
+
+    /// The static Toggle HiDPI action recorded a combo: steal it from any preset
+    /// holding it, then re-register. Call after storing the new static combo.
+    func stealShortcutFromPresets(_ shortcut: KeyboardShortcut) {
+        var changed = false
+        for i in presets.indices where presets[i].shortcut?.sameKeys(as: shortcut) == true {
+            presets[i].shortcut = nil
+            changed = true
+        }
+        if changed {
+            savePresets()  // persists and syncs
+        } else {
+            HotkeyService.shared.syncRegistrations()  // still need the new static hotkey
+        }
     }
 
     /// Overwrites a user preset with the current display state (name, icon, and

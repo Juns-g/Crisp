@@ -119,7 +119,7 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
 
     /// Global shortcut that toggles the display under the pointer between HiDPI and
     /// low resolution; nil when not set. Registration is the caller's job
-    /// (HotkeyService.apply), matching how LaunchService is driven from the view.
+    /// (HotkeyService.syncRegistrations), matching how LaunchService is driven from the view.
     @Published var hidpiShortcut: KeyboardShortcut? = nil {
         didSet {
             if let hidpiShortcut, let data = try? JSONEncoder().encode(hidpiShortcut) {
