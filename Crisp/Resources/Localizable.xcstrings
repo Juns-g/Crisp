@@ -1123,6 +1123,17 @@
         }
       }
     },
+    "Keyboard Shortcuts" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "键盘快捷键"
+          }
+        }
+      }
+    },
     "Larger Text" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1721,17 +1732,6 @@
       }
     },
     "Shortcut" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "快捷键"
-          }
-        }
-      }
-    },
-    "Shortcuts" : {
       "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {

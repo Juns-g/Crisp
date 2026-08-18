@@ -15,8 +15,10 @@ struct ShortcutsSection: View {
             ExpandableRow(
                 icon: "command",
                 iconActive: settings.hidpiShortcut != nil,
-                label: "Shortcuts",
-                subtitle: settings.hidpiShortcut?.display,
+                label: "Keyboard Shortcuts",
+                // Collapsed only: expanded, the Toggle HiDPI row right below
+                // shows the same combo, and the duplicate reads as two bindings.
+                subtitle: expanded ? nil : settings.hidpiShortcut?.display,
                 isExpanded: $expanded
             )
             if expanded {
