@@ -133,6 +133,14 @@ struct PresetRow: View {
 
             Spacer()
 
+            // Assigned global shortcut, right-aligned like a native menu key
+            // equivalent (issue #61).
+            if let combo = preset.shortcut?.display {
+                Text(verbatim: combo)
+                    .font(.callout)
+                    .foregroundColor(.secondaryReadable)
+            }
+
             if isCurrentMatch {
                 Image(systemName: "checkmark")
                     .font(.system(size: 12, weight: .semibold))
