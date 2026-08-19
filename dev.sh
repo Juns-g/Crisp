@@ -59,7 +59,7 @@ PLIST="$APP/Contents/Info.plist"
 for key in SUFeedURL SUPublicEDKey SUEnableAutomaticChecks SUVerifyUpdateBeforeExtraction SURequireSignedFeed; do
     /usr/libexec/PlistBuddy -c "Delete :$key" "$PLIST" 2>/dev/null || true
 done
-/usr/libexec/PlistBuddy -c "Add :SUFeedURL string https://didriksg.github.io/Crisp/appcast.xml" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :SUFeedURL string https://crispmac.app/appcast.xml" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string 3UT7wZoXDzrAhwCMVS3DoPt2lcya9H/cvlyXliuPuhM=" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool true" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :SUVerifyUpdateBeforeExtraction bool true" "$PLIST"
