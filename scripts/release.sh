@@ -165,6 +165,28 @@ cp -R "$APP" "$STAGE/"; ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
 hdiutil create -volname Crisp -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 
+# Sign, notarize and staple the DMG itself, not just the app inside it. The app
+# is already stapled above, so it runs offline once dragged across, but a
+# downloaded DMG carries the quarantine flag and Gatekeeper assesses the disk
+# image when it is opened. Order matters and all three steps are needed:
+#   - unsigned + ticket  -> "rejected: no usable signature" (a ticket alone is
+#     not enough; spctl has no signature to attach it to)
+#   - signed, no ticket  -> "rejected: Unnotarized Developer ID"
+#   - signed + notarized + stapled -> accepted, and offline, since the ticket
+#     travels in the file instead of needing a lookup with Apple.
+# codesign and stapler each rewrite the DMG, so both must land before the
+# sha256 below: that hash is what the Homebrew cask pins, and a mismatch fails
+# every brew install.
+if [ -n "${CRISP_SIGN_ID:-}" ] && [ -n "${CRISP_NOTARY_PROFILE:-}" ]; then
+  echo "==> Signing the DMG…"
+  codesign --force --timestamp --sign "$CRISP_SIGN_ID" "$DMG"
+  echo "==> Notarizing the DMG…"
+  xcrun notarytool submit "$DMG" --keychain-profile "$CRISP_NOTARY_PROFILE" --wait
+  xcrun stapler staple "$DMG"
+  xcrun stapler validate "$DMG"
+  spctl -a -t open --context context:primary-signature "$DMG"
+fi
+
 SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
 echo "==> Built $DMG"
 echo "    version $(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist"), archs $(lipo -archs "$APP/Contents/MacOS/Crisp"), sha256 $SHA"

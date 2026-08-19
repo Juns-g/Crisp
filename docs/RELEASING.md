@@ -11,6 +11,35 @@ the `project.yml` version bump. In-app updates go live only when GitHub Pages
 serves the new appcast; until then installed apps simply keep waiting (they
 never break, they just see no update).
 
+## Signing and notarization
+
+`release.sh` signs, notarizes and staples two separate artifacts: the app,
+and the DMG around it. Both are needed, and a stapled ticket on its own is
+not enough. Measured on a quarantined DMG with `spctl -a -t open --context
+context:primary-signature`:
+
+| DMG state | verdict |
+| --- | --- |
+| unsigned, no ticket | `rejected: no usable signature` |
+| unsigned, ticket stapled | `rejected: no usable signature` |
+| signed, no ticket | `rejected: Unnotarized Developer ID` |
+| signed, notarized, stapled | `accepted: Notarized Developer ID` |
+
+The second row is the trap: `stapler validate` reports "The validate action
+worked!" while Gatekeeper still refuses the disk image, because there is no
+signature for the ticket to attach to. Trust `spctl`, not `stapler`.
+
+Two submissions are unavoidable. Apple issues tickets per artifact hash, so
+one submission cannot staple both the app and the DMG. Stapling only the DMG
+would also work for most people, but the app dragged out of it would then
+need an online check with Apple on first launch.
+
+Both `codesign` and `stapler staple` rewrite the DMG, so they run before the
+`sha256` the Homebrew cask pins. Hashing first would publish a checksum that
+fails every `brew install`. The `spctl` call at the end of that block is a
+gate rather than a log: under `set -e`, a DMG Gatekeeper would reject aborts
+the release instead of shipping.
+
 ## First Sparkle release only (delete this section afterwards)
 
 Add `auto_updates true` to `Casks/crisp.rb` in `didriksg/homebrew-tap`. The
