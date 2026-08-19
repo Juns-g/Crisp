@@ -18,7 +18,7 @@ struct MainDisplayView: View {
                     Spacer()
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 7)
+                .padding(.vertical, 3)
             } else {
                 HStack {
                     MenuItemIcon(systemName: "m.circle.fill", color: .blue, active: false)
@@ -27,7 +27,7 @@ struct MainDisplayView: View {
                     Spacer()
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 7)
+                .padding(.vertical, 3)
                 .menuRowHover(isHovered)
                 .onHover { isHovered = $0 }
                 .contentShape(Rectangle())

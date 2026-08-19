@@ -47,7 +47,7 @@ struct HDRToggleView: View {
                     }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.vertical, 3)
             .menuRowHover(isHovered)
             .onHover { isHovered = $0 }
             .onAppear { resyncFromLiveState() }

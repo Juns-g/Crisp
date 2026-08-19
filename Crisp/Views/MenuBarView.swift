@@ -11,6 +11,10 @@ struct MenuItemIcon: View {
     let systemName: String
     var color: Color = .blue
     var active: Bool = true
+    /// Optical size compensation. Sparse glyphs (a bare `plus`) read smaller than
+    /// dense ones (`gearshape.fill`) at the same point size, so a few call sites
+    /// nudge theirs up to match the rest of the column. Leave it alone otherwise.
+    var glyphSize: CGFloat = 12
 
     var body: some View {
         // One view, not two branches, so active<->inactive cross-fades the glyph
@@ -18,7 +22,7 @@ struct MenuItemIcon: View {
         // with a faint gray fill (Wi-Fi non-selected style); active fills with the
         // accent. Color still marks state, the change just animates.
         Image(systemName: systemName)
-            .font(.system(size: 12, weight: .medium))
+            .font(.system(size: glyphSize, weight: .medium))
             // Inactive glyph at full label strength (not .secondary) so it stays legible
             // on the faint chip; the lack of color, not a dimmer glyph, marks it inactive.
             .foregroundColor(active ? .white : .primary)
@@ -252,7 +256,7 @@ struct ExpandableRow: View {
                 .accessibilityHidden(true)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 5)
+        .padding(.vertical, 3)
         // Highlight on hover only. The native Wi-Fi "Other Networks" header
         // stays flat when expanded (just the chevron rotates), so we do too.
         .menuRowHover(isHovered)
@@ -291,7 +295,7 @@ struct UpdateRow: View {
                 .foregroundColor(.secondary)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 5)
+        .padding(.vertical, 3)
         .menuRowHover(isHovered)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -392,7 +396,7 @@ private struct SupportLinkRow: View {
                 .accessibilityHidden(true)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 5)
+        .padding(.vertical, 3)
         .menuRowHover(isHovered)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -528,7 +532,7 @@ struct SettingsView: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 5)
+                .padding(.vertical, 3)
             }
 
             // Show volume sliders (issue #23). Hidden while no connected monitor
@@ -550,7 +554,7 @@ struct SettingsView: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 5)
+                .padding(.vertical, 3)
             }
 
             // Which displays the hardware brightness keys adjust. Once Accessibility is granted,
@@ -631,7 +635,7 @@ struct SettingsView: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .padding(.horizontal, 12)
-            .padding(.vertical, 5)
+            .padding(.vertical, 3)
 
             SectionDivider()
 
@@ -706,7 +710,7 @@ struct DisplayRowView: View {
                 .accessibilityHidden(true)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
         // Tap AFTER the padding so the clickable shape is the full padded row,
         // identical to the hover highlight; before it, the padding was a dead
         // border (clicks on the visibly highlighted edge did nothing).

@@ -35,7 +35,7 @@ struct SavePresetView: View {
                     }
                 }) {
                     HStack {
-                        MenuItemIcon(systemName: "plus", color: .blue)
+                        MenuItemIcon(systemName: "plus", color: .blue, glyphSize: 14)
                         Text("New Preset")
                             .font(.body)
                         Spacer()
@@ -43,7 +43,7 @@ struct SavePresetView: View {
                     // Padding inside the button label so the tappable area
                     // matches the hover highlight (no dead padded margin).
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
+                    .padding(.vertical, 3)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

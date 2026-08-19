@@ -98,7 +98,7 @@ struct VirtualDisplayView: View {
                         Spacer()
                     }
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 3)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -252,7 +252,7 @@ struct VirtualDisplayRow: View {
             .accessibilityLabel("Virtual display options")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        .padding(.vertical, 3)
         .menuRowHover(isHovered)
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }

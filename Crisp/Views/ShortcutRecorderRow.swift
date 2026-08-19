@@ -53,7 +53,7 @@ struct ShortcutRecorderRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.leading, leadingInset)
-        .padding(.vertical, 5)
+        .padding(.vertical, 3)
         .menuRowHover(isHovered)
         .contentShape(Rectangle())
         .onTapGesture {

@@ -851,7 +851,7 @@ struct ModeTailBlock: View {
         .toggleStyle(.switch)
         .controlSize(.small)
         .padding(.horizontal, 12)
-        .padding(.vertical, 5)
+        .padding(.vertical, 3)
         .onAppear {
             controller.smoothOn = controller.smoothModesPresent
             controller.refreshSmoothWouldPrompt()
@@ -897,7 +897,7 @@ struct CheckmarkRow: View {
         }
         .padding(.leading, 24)
         .padding(.trailing, 12)
-        .padding(.vertical, 5)
+        .padding(.vertical, 3)
         .menuRowHover(isHovered)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -936,7 +936,7 @@ private struct DisclosureSubRow: View {
         }
         .padding(.leading, 24)
         .padding(.trailing, 12)
-        .padding(.vertical, 5)
+        .padding(.vertical, 3)
         .menuRowHover(isHovered)
         .contentShape(Rectangle())
         .onTapGesture {
