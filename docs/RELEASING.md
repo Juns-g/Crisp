@@ -40,13 +40,12 @@ fails every `brew install`. The `spctl` call at the end of that block is a
 gate rather than a log: under `set -e`, a DMG Gatekeeper would reject aborts
 the release instead of shipping.
 
-## First Sparkle release only (delete this section afterwards)
+## Homebrew tap
 
-Add `auto_updates true` to `Casks/crisp.rb` in `didriksg/homebrew-tap`. The
-release script only bumps `version` and `sha256`; the stanza is a one-time
-manual edit. It tells `brew upgrade` the app updates itself, and since
-Homebrew 6 brew reconciles against the on-disk version instead of
-reinstalling.
+`release.sh` bumps `version` and `sha256` in `didriksg/homebrew-tap`
+automatically. `auto_updates true` is already in the cask as of 1.5.0, so
+`brew upgrade` reconciles against the on-disk version instead of
+reinstalling over an app that updated itself. Nothing to do per release.
 
 ## The signing key
 
