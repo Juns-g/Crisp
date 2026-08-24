@@ -33,7 +33,8 @@ swiftc -O -swift-version 5 -strict-concurrency=minimal -parse-as-library \
     -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
     -Xlinker -undefined -Xlinker dynamic_lookup \
     Crisp/App/*.swift Crisp/Models/*.swift Crisp/Services/*.swift \
-    Crisp/Views/*.swift Crisp/Utilities/*.swift \
+    Crisp/Views/*.swift Crisp/Utilities/*.swift Crisp/Automation/*.swift \
+    Sources/CrispControlCore/*.swift \
     -o Crisp-bin
 
 echo "==> Swapping into ${APP}..."

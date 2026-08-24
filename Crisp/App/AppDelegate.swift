@@ -4,6 +4,9 @@ import CoreGraphics
 import ApplicationServices
 import Combine
 import os.log
+#if canImport(CrispControlCore)
+import CrispControlCore
+#endif
 
 /// Borderless key-capable panel for the menu bar UI.
 /// Owning the panel (instead of MenuBarExtra's window) removes the WindowServer
@@ -53,6 +56,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// cancelled by closePanel: nothing polls while the panel is hidden;
     /// showPanel's click-time refresh covers state that drifted while closed.
     private var externalStatePollTask: Task<Void, Never>?
+    private let brightnessHeartbeatController = BrightnessHeartbeatController()
+    private var controlHost: CrispControlHost?
 
     /// Called after wake-from-sleep; wired in setupStartupBehavior.
     var onWake: (() -> Void)?
@@ -133,6 +138,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setupStartupBehavior()
         setupStatusItem()
 
+        let host = CrispControlHost(displayManager: displayManager)
+        do {
+            try host.start()
+            controlHost = host
+        } catch {
+            NSLog("Crisp control host failed to start: %@", String(describing: error))
+        }
+
         // Re-anchor the open panel when screens change: switching the main
         // display re-origins global coordinates, which would otherwise leave
         // the panel floating at a stale position.
@@ -207,30 +220,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// monitor's own buttons or another app). All reads run off the main
     /// thread; called at the click in showPanel.
     private func refreshExternalState() {
-        CoreBrightnessService.shared.refresh()
-        for display in displayManager.displays {
-            Task { await BrightnessService.shared.refreshBrightness(for: display) }
+        brightnessHeartbeatController.schedule(
+            displays: displayManager.displays,
+            panelVisible: true,
+            autoBrightnessEnabled: false,
+            lastManualAdjustment: nil,
+            isBuiltin: { $0.isBuiltin },
+            prepare: { CoreBrightnessService.shared.refresh() }
+        ) { display in
+            await BrightnessService.shared.refreshBrightness(for: display)
         }
     }
 
     private func pollExternalState() {
         // The panel is never ordered out (hidden = alpha 0), so isVisible
         // alone is always true; alpha is the actual shown state.
-        guard isPanelShown, let p = panel, p.alphaValue > 0 else { return }
-        // Don't fight the user's own adjustments (or busy the DDC bus mid-drag).
-        if let last = BrightnessService.shared.lastManualAdjustDate,
-           Date().timeIntervalSince(last) < 3 { return }
-        CoreBrightnessService.shared.refresh()
+        let panelVisible = isPanelShown && (panel?.alphaValue ?? 0) > 0
+        let displays = visibleDisplays()
         let autoBrightnessOn = AutoBrightnessService.shared.isEnabled
-        for display in visibleDisplays() {
-            // Skip any display something else is actively driving (see the
-            // original note in MenuBarView history, issue #12 follow-up).
-            if display.isBuiltin || autoBrightnessOn { continue }
-            Task { await BrightnessService.shared.refreshBrightness(for: display) }
+        let lastManualAdjustment = BrightnessService.shared.lastManualAdjustDate
+        brightnessHeartbeatController.schedule(
+            displays: displays,
+            panelVisible: panelVisible,
+            autoBrightnessEnabled: autoBrightnessOn,
+            lastManualAdjustment: lastManualAdjustment,
+            isBuiltin: { $0.isBuiltin },
+            prepare: { CoreBrightnessService.shared.refresh() }
+        ) { display in
+            await BrightnessService.shared.refreshBrightness(for: display)
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        controlHost?.stop()
         if let obs = wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
         }
@@ -929,6 +951,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         canvas.parkSpring()
         externalStatePollTask?.cancel()
         externalStatePollTask = nil
+        brightnessHeartbeatController.cancel()
         // Hide with a quick fade, like native menus; never order out (see
         // isPanelShown comment). Click-through is immediate.
         p.ignoresMouseEvents = true

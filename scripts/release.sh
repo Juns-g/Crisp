@@ -40,7 +40,7 @@ rm -rf "$BUILD"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 "$ROOT/scripts/fetch-sparkle.sh"
 
 echo "==> Compiling universal binary (arm64 + x86_64)…"
-SRC=$(find Crisp -name '*.swift')
+SRC=$(find Crisp Sources/CrispControlCore -name '*.swift')
 for a in arm64 x86_64; do
   swiftc -O -parse-as-library -target "$a-apple-macos14.0" \
     -import-objc-header Crisp/Crisp-Bridging-Header.h \

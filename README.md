@@ -81,6 +81,13 @@ Thank you to the people chipping in toward keeping Crisp signed and notarized:
 - **Administrator password** (one time, per monitor): needed only when you turn on smooth scaling, which installs a display override file into `/Library/Displays/Contents/Resources/Overrides` that macOS protects. Regular HiDPI scaling and everything else are password-free.
 - **Accessibility** (System Settings > Privacy & Security > Accessibility): needed only if you turn on Brightness Keys, which routes the keyboard brightness keys to other displays (follow the pointer, all connected, or a chosen subset). Without it, everything else still works; the keys just control the built-in display as usual.
 
+## Automation
+
+The `crispctl` target provides a versioned JSON interface for display discovery,
+capabilities, and brightness through the running Crisp app. See
+[docs/crispctl.md](docs/crispctl.md) for commands, response schema, security,
+and headless verification.
+
 ## Building
 
 ```sh

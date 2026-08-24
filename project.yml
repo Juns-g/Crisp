@@ -10,6 +10,42 @@ options:
     - Base
 
 targets:
+  CrispControlCore:
+    type: library.static
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/CrispControlCore
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+
+  CrispControlCLI:
+    type: library.static
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/CrispControlCLI
+    dependencies:
+      - target: CrispControlCore
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+
+  crispctl:
+    type: tool
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/crispctl
+    dependencies:
+      - target: CrispControlCore
+      - target: CrispControlCLI
+    settings:
+      base:
+        PRODUCT_NAME: crispctl
+        SWIFT_VERSION: "6.0"
+
   Crisp:
     type: application
     platform: macOS
@@ -19,6 +55,7 @@ targets:
         excludes:
           - "**/*.md"
     dependencies:
+      - target: CrispControlCore
       # Prebuilt Sparkle, fetched by scripts/fetch-sparkle.sh (make vendor).
       - framework: vendor/Sparkle/Sparkle.framework
         embed: true
@@ -79,3 +116,7 @@ schemes:
     test:
       targets:
         - CrispTests
+  crispctl:
+    build:
+      targets:
+        crispctl: all

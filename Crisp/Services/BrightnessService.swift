@@ -4,6 +4,9 @@ import IOKit.graphics
 import CoreGraphics
 // For CGDisplayCreateUUIDFromDisplayID (ApplicationServices, not CoreGraphics).
 import AppKit
+#if canImport(CrispControlCore)
+import CrispControlCore
+#endif
 
 @_silgen_name("CGDisplayIOServicePort")
 private func CGDisplayIOServicePort(_ display: CGDirectDisplayID) -> io_service_t
@@ -158,6 +161,29 @@ final class BrightnessService: @unchecked Sendable {
     private init() {}
 
     private let queue = DispatchQueue(label: "com.crisp.brightness", qos: .userInitiated)
+
+    var hasDisplayServicesControl: Bool { _DSGetBrightness != nil && _DSSetBrightness != nil }
+
+    @MainActor
+    func controlBackend(for display: DisplayInfo) -> BrightnessBackend {
+        if display.isBuiltin { return hasDisplayServicesControl ? .displayServices : .ioKit }
+        let usesSoftware = ddcAvailableLock.withLock {
+            ddcAvailable[display.displayID] != true || hdrDimmedDisplays.contains(display.displayID)
+        }
+        return usesSoftware ? .software : .ddc
+    }
+
+    @MainActor
+    func controlReadbackQuality(for display: DisplayInfo) -> ReadbackQuality {
+        switch controlBackend(for: display) {
+        case .displayServices, .ioKit: .authoritative
+        case .ddc:
+            ddcAvailableLock.withLock {
+                ddcMaxBrightness[display.displayID] == nil ? .unavailable : .approximate
+            }
+        case .software, .unavailable: .unavailable
+        }
+    }
 
     // MARK: - Per-display Animators (main thread only)
 
@@ -379,13 +405,7 @@ final class BrightnessService: @unchecked Sendable {
         }
 
         // Record manual adjust time so auto-brightness can honour the cooldown period.
-        if !isAutoAdjust {
-            manualAdjustLock.withLock {
-                lastManualAdjustDate = Date()
-            }
-            PresetService.shared.noteManualChange()
-            noteManualBrightnessChange(displayID: displayID, isBuiltin: isBuiltin, value: clamped)
-        }
+        if !isAutoAdjust { recordManualAdjustment(displayID: displayID, isBuiltin: isBuiltin, value: clamped) }
 
         if isBuiltin {
             let value = Float(hardware / 100.0)
@@ -429,6 +449,92 @@ final class BrightnessService: @unchecked Sendable {
                 object: nil,
                 userInfo: ["displayID": displayID, "value": value]
             )
+        }
+    }
+
+    @MainActor
+    private func recordManualAdjustment(displayID: CGDirectDisplayID, isBuiltin: Bool, value: Double) {
+        manualAdjustLock.withLock { lastManualAdjustDate = Date() }
+        PresetService.shared.noteManualChange()
+        noteManualBrightnessChange(displayID: displayID, isBuiltin: isBuiltin, value: value)
+    }
+
+    /// Automation uses the same backend state as the panel. Reads are awaited so
+    /// the command dispatcher can enforce write-after-read-back before reporting success.
+    @MainActor
+    func readBrightnessForControl(for display: DisplayInfo) async -> Double? {
+        if display.isBuiltin {
+            let value = await withCheckedContinuation { continuation in
+                queue.async { [weak self] in continuation.resume(returning: self?.getInternalBrightness()) }
+            }
+            if let value { display.brightness = value }
+            return value
+        }
+        guard controlBackend(for: display) == .ddc else { return display.brightness }
+        let result = await withCheckedContinuation { continuation in
+            DDCService.shared.readAsync(displayID: display.displayID, command: DDCService.brightnessVCP) {
+                continuation.resume(returning: $0)
+            }
+        }
+        guard let result, result.max > 0 else { return nil }
+        ddcAvailableLock.withLock {
+            ddcMaxBrightness[display.displayID] = result.max
+            ddcAvailable[display.displayID] = true
+        }
+        let percent = Double(result.current) / Double(result.max) * 100
+        display.brightness = percent
+        return percent
+    }
+
+    /// Performs one bounded backend write for crispctl. The dispatcher owns range
+    /// validation and the subsequent independent read-back check.
+    @MainActor
+    func writeBrightnessForControl(_ percent: Double, for display: DisplayInfo) async throws -> Double {
+        let applied = max(0, min(100, percent))
+        cancelAnimation(for: display.displayID)
+
+        return try await BrightnessWriteCommit.perform {
+            if display.isBuiltin {
+                let succeeded = await withCheckedContinuation { continuation in
+                    queue.async { [weak self] in
+                        continuation.resume(returning: self?.setInternalBrightness(Float(applied / 100)) == true)
+                    }
+                }
+                guard succeeded else {
+                    throw ControlServiceError.writeFailed("built-in brightness backend rejected the write")
+                }
+            } else if controlBackend(for: display) == .ddc {
+                let maximum = ddcAvailableLock.withLock { ddcMaxBrightness[display.displayID] ?? 100 }
+                let value = UInt16((applied / 100 * Double(maximum)).rounded())
+                let succeeded = await withCheckedContinuation { continuation in
+                    DDCService.shared.writeAsync(
+                        displayID: display.displayID,
+                        command: DDCService.brightnessVCP,
+                        value: value
+                    ) { continuation.resume(returning: $0) }
+                }
+                guard succeeded else {
+                    throw ControlServiceError.writeFailed("DDC brightness backend rejected the write")
+                }
+                await withCheckedContinuation { continuation in
+                    queue.async { [weak self] in
+                        self?.applyDDCGammaBlend(percent: applied, displayID: display.displayID)
+                        continuation.resume()
+                    }
+                }
+            } else {
+                await withCheckedContinuation { continuation in
+                    queue.async { [weak self] in
+                        self?.setSoftwareBrightness(applied, for: display.displayID)
+                        continuation.resume()
+                    }
+                }
+            }
+            return applied
+        } commit: { applied in
+            recordManualAdjustment(displayID: display.displayID, isBuiltin: display.isBuiltin, value: applied)
+            display.brightness = applied
+            BrightnessBoostService.shared.syncOverlay(for: display)
         }
     }
 
@@ -490,21 +596,15 @@ final class BrightnessService: @unchecked Sendable {
         ddcPumpLock.unlock()
         if !alreadyPumping { pumpDDCWrite(for: displayID) }
 
-        queue.async { [weak self] in
-            guard let self else { return }
-            if percent < self.gammaBlendThreshold {
-                self.setSoftwareBrightness(percent / self.gammaBlendThreshold * 100.0, for: displayID)
-            } else if let f = self.currentSoftwareBrightness(for: displayID), f < 1.0 {
-                // Only clear a software dim once DDC has actually succeeded on
-                // this display. While it is still unproven (nil), a display
-                // whose writes all fail (Dell without a DDC channel) would
-                // otherwise flash to full on every attempt, fighting the gamma
-                // fallback that is actually doing the dimming.
-                let proven = self.ddcAvailableLock.withLock { self.ddcAvailable[displayID] == true }
-                if proven {
-                    self.setSoftwareBrightness(100.0, for: displayID)
-                }
-            }
+        queue.async { [weak self] in self?.applyDDCGammaBlend(percent: percent, displayID: displayID) }
+    }
+
+    private func applyDDCGammaBlend(percent: Double, displayID: CGDirectDisplayID) {
+        if percent < gammaBlendThreshold {
+            setSoftwareBrightness(percent / gammaBlendThreshold * 100, for: displayID)
+        } else if let factor = currentSoftwareBrightness(for: displayID), factor < 1,
+                  ddcAvailableLock.withLock({ ddcAvailable[displayID] == true }) {
+            setSoftwareBrightness(100, for: displayID)
         }
     }
 
@@ -875,11 +975,12 @@ final class BrightnessService: @unchecked Sendable {
         return nil
     }
 
-    private func setInternalBrightness(_ value: Float) {
+    @discardableResult
+    private func setInternalBrightness(_ value: Float) -> Bool {
         // Primary: DisplayServices (works on Apple Silicon, where IODisplayConnect is gone)
         if let set = _DSSetBrightness, let id = builtinDisplayID() {
             if set(id, value) == 0 {
-                return
+                return true
             }
         }
 
@@ -888,7 +989,7 @@ final class BrightnessService: @unchecked Sendable {
             if IODisplaySetFloatParameter(
                 servicePort, 0, Self.ioDisplayBrightnessKey, value
             ) == KERN_SUCCESS {
-                return
+                return true
             }
         }
 
@@ -915,7 +1016,7 @@ final class BrightnessService: @unchecked Sendable {
             IOServiceMatching("IODisplayConnect"),
             &iter
         ) == KERN_SUCCESS else {
-            return
+            return false
         }
         defer { IOObjectRelease(iter) }
 
@@ -926,8 +1027,9 @@ final class BrightnessService: @unchecked Sendable {
             if IODisplaySetFloatParameter(
                 service, 0, Self.ioDisplayBrightnessKey, value
             ) == KERN_SUCCESS {
-                return
+                return true
             }
         }
+        return false
     }
 }
