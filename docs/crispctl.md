@@ -5,6 +5,41 @@ talks to display APIs itself: it sends one request over a local Unix-domain
 socket to the running Crisp app, which reuses `DisplayManager` and
 `BrightnessService`.
 
+## Installation and agent discovery
+
+Public installs gain `crispctl` only with the first Crisp release that contains
+this distribution change. Crisp 1.5.0 does not contain the bundled CLI. Source
+checkout users can build it. In a release that includes it, the Homebrew cask
+exposes `crispctl` on `PATH`:
+
+```sh
+brew install --cask didriksg/tap/crisp
+crispctl version --json
+```
+
+A manual DMG install can invoke the embedded executable without changing
+`PATH`:
+
+```sh
+/Applications/Crisp.app/Contents/MacOS/crispctl version --json
+```
+
+Users who prefer a short command may create a symlink in a user-owned directory
+such as `~/.local/bin`; `sudo` is not required and the app-internal path remains
+the deterministic fallback.
+
+The standard AI-agent Skill is
+[../skills/crispctl/SKILL.md](../skills/crispctl/SKILL.md). Install it globally
+for all agent types supported by the conventional installer:
+
+```sh
+npx skills add didriksg/Crisp --skill crispctl -g --agent '*' -y
+```
+
+The quotes around `'*'` prevent shell expansion. Skill discovery is evaluated
+at startup in many agents, so a fresh agent session may be required;
+installation does not promise hot-loading into the current session.
+
 ## Commands
 
 ```sh

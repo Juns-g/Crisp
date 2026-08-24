@@ -42,10 +42,33 @@ the release instead of shipping.
 
 ## Homebrew tap
 
-`release.sh` bumps `version` and `sha256` in `didriksg/homebrew-tap`
-automatically. `auto_updates true` is already in the cask as of 1.5.0, so
-`brew upgrade` reconciles against the on-disk version instead of
-reinstalling over an app that updated itself. Nothing to do per release.
+`release.sh` fetches the existing cask from `didriksg/homebrew-tap`, then
+`scripts/update-homebrew-cask.py` updates `version` and `sha256` and maintains
+this artifact stanza exactly once:
+
+```ruby
+binary "#{appdir}/Crisp.app/Contents/MacOS/crispctl"
+```
+
+This is Homebrew's documented syntax for linking a binary contained in an app
+bundle. The transformer is idempotent and preserves unrelated cask content; it
+refuses an unrecognized Crisp CLI stanza instead of guessing. The source-tree
+tests use local fixtures and never contact GitHub.
+
+On `--publish`, the script fetches and transforms the cask immediately after
+the final DMG hash and release-notes validation, before changing `project.yml`
+or creating the release. The later tap PUT reuses those exact prepared bytes
+and the SHA retained from that single read-only fetch; a cask preflight failure
+therefore leaves all publish-side state untouched.
+
+After a release containing this change is published, Homebrew cask installs expose `crispctl` on `PATH`.
+Manual DMG installs can instead execute
+`/Applications/Crisp.app/Contents/MacOS/crispctl` directly or create a symlink
+in a user-owned `PATH` directory; `sudo` is not required as the only route.
+
+`auto_updates true` is already in the cask as of 1.5.0, so `brew upgrade`
+reconciles against the on-disk version instead of reinstalling over an app that
+updated itself. No additional cask edit is needed per release.
 
 ## The signing key
 

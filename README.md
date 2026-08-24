@@ -35,6 +35,13 @@ brew install --cask didriksg/tap/crisp
 
 Or download [`Crisp.dmg`](https://github.com/didriksg/Crisp/releases/latest/download/Crisp.dmg) and drag Crisp to Applications. Every release is signed and notarized by Apple, so it opens with a normal double-click.
 
+Public installs gain `crispctl` only with the first Crisp release that contains
+this distribution change. Crisp 1.5.0 does not contain the bundled CLI. Source
+checkout users can build it. In a release that includes it, Homebrew cask
+installs expose `crispctl` on `PATH`; a manual DMG install can run the same
+bundled executable directly at `/Applications/Crisp.app/Contents/MacOS/crispctl`
+without a privileged symlink.
+
 ## Features
 
 - **Sharp, Retina-quality scaling on any display**: HiDPI scaled resolutions that make external monitors crisp instead of blurry or undersized, set up automatically for 1440p and larger displays, and always at the panel's full refresh rate (no more 1080p stuck at 50Hz on a 144Hz monitor)
@@ -86,7 +93,9 @@ Thank you to the people chipping in toward keeping Crisp signed and notarized:
 The `crispctl` target provides a versioned JSON interface for display discovery,
 capabilities, and brightness through the running Crisp app. See
 [docs/crispctl.md](docs/crispctl.md) for commands, response schema, security,
-and headless verification.
+and headless verification. AI agents can install the repository's standard
+Skill from [skills/crispctl/SKILL.md](skills/crispctl/SKILL.md) after reviewing
+its capability-before-write and indeterminate-write safeguards.
 
 ## Building
 

@@ -24,6 +24,8 @@ cd "$ROOT"
 BUILD="$ROOT/build"
 APP="$BUILD/Crisp.app"
 DMG="$ROOT/Crisp.dmg"
+CRISPCTL_SCRATCH="$BUILD/crispctl-swiftpm"
+CRISPCTL_APP_BINARY="$APP/Contents/MacOS/crispctl"
 TAP_REPO="didriksg/homebrew-tap"
 TAP_CASK="Casks/crisp.rb"
 
@@ -128,19 +130,24 @@ SPARKLE_FW="$APP/Contents/Frameworks/Sparkle.framework"
 SPARKLE_NESTED=("$SPARKLE_FW/Versions/B/Autoupdate" "$SPARKLE_FW/Versions/B/Updater.app" "$SPARKLE_FW")
 if [ -n "${CRISP_SIGN_ID:-}" ]; then
   echo "==> Signing (Developer ID: $CRISP_SIGN_ID, hardened runtime)…"
+else
+  echo "==> Signing (ad-hoc — set CRISP_SIGN_ID for a notarizable build)…"
+fi
+echo "==> Compiling and embedding universal crispctl (arm64 + x86_64)…"
+"$ROOT/scripts/build-embed-sign-crispctl.sh" "$ROOT" "$APP" "$CRISPCTL_SCRATCH" "${CRISP_SIGN_ID:-}"
+if [ -n "${CRISP_SIGN_ID:-}" ]; then
   for item in "${SPARKLE_NESTED[@]}"; do
     codesign --force --options runtime --timestamp --sign "$CRISP_SIGN_ID" "$item"
   done
   codesign --force --options runtime --timestamp \
     --entitlements Crisp/Crisp.entitlements --sign "$CRISP_SIGN_ID" "$APP"
 else
-  echo "==> Signing (ad-hoc — set CRISP_SIGN_ID for a notarizable build)…"
   for item in "${SPARKLE_NESTED[@]}"; do
     codesign --force --sign - "$item"
   done
   codesign --force --sign - --entitlements Crisp/Crisp.entitlements "$APP"
 fi
-codesign --verify --deep --strict "$APP"
+"$ROOT/scripts/verify-release-app.sh" "$APP"
 
 # Notarize the app and staple the ticket BEFORE packaging, so the app validates
 # offline once dragged out of the DMG and the DMG's sha256 (computed below) is the
@@ -190,6 +197,7 @@ fi
 SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
 echo "==> Built $DMG"
 echo "    version $(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist"), archs $(lipo -archs "$APP/Contents/MacOS/Crisp"), sha256 $SHA"
+echo "    crispctl archs $(lipo -archs "$CRISPCTL_APP_BINARY")"
 
 if [ "$PUBLISH" != true ]; then
   echo "==> Dry run. Pass --publish to create the release and bump the tap."
@@ -197,6 +205,39 @@ if [ "$PUBLISH" != true ]; then
 fi
 
 [ -n "$NOTES" ] && [ -f "$NOTES" ] || { echo "ERROR: --publish needs a notes file: ./scripts/release.sh $TAG notes.md --publish"; exit 1; }
+
+# Preflight the Homebrew cask before any publish-side mutation.
+echo "==> Preparing Homebrew tap update…"
+TAP_CASK_RESPONSE="$BUILD/homebrew-cask-response.json"
+PREPARED_TAP_CASK="$BUILD/crisp.rb"
+gh api "repos/$TAP_REPO/contents/$TAP_CASK" > "$TAP_CASK_RESPONSE"
+TAP_CASK_SHA="$(
+python3 - "$TAP_CASK_RESPONSE" "$PREPARED_TAP_CASK" <<'PY'
+import base64
+import binascii
+import json
+import sys
+from pathlib import Path
+
+response = Path(sys.argv[1])
+prepared = Path(sys.argv[2])
+try:
+    payload = json.loads(response.read_text(encoding="utf-8"))
+    sha = payload["sha"]
+    encoded = payload["content"]
+    if not isinstance(sha, str) or not sha:
+        raise ValueError("missing cask sha")
+    if not isinstance(encoded, str):
+        raise ValueError("missing cask content")
+    compact = "".join(encoded.split())
+    prepared.write_bytes(base64.b64decode(compact, validate=True))
+except (OSError, UnicodeError, json.JSONDecodeError, KeyError, ValueError, binascii.Error) as error:
+    raise SystemExit(f"ERROR: invalid Homebrew cask response: {error}")
+print(sha)
+PY
+)"
+python3 "$ROOT/scripts/update-homebrew-cask.py" "$PREPARED_TAP_CASK" \
+  --version "$VERSION" --sha256 "$SHA"
 
 # Keep project.yml (the Xcode build path) in sync with the version we shipped.
 sed -i '' "s/MARKETING_VERSION: \"[^\"]*\"/MARKETING_VERSION: \"${VERSION}\"/" project.yml
@@ -219,14 +260,10 @@ cp "$DMG" "$APPCAST_STAGE/Crisp.dmg"
   -o "$ROOT/docs/appcast.xml" "$APPCAST_STAGE"
 
 echo "==> Bumping Homebrew tap…"
-SHA_FILE=$(gh api "repos/$TAP_REPO/contents/$TAP_CASK" --jq '.sha')
-gh api "repos/$TAP_REPO/contents/$TAP_CASK" --jq '.content' | base64 -d \
-  | sed -e "s/version \"[^\"]*\"/version \"${VERSION}\"/" \
-        -e "s/sha256 \"[^\"]*\"/sha256 \"${SHA}\"/" > "$BUILD/crisp.rb"
 gh api -X PUT "repos/$TAP_REPO/contents/$TAP_CASK" \
   -f message="crisp ${VERSION}" \
-  -f content="$(base64 -i "$BUILD/crisp.rb")" \
-  -f sha="$SHA_FILE" --jq '.commit.sha' >/dev/null
+  -f content="$(base64 -i "$PREPARED_TAP_CASK")" \
+  -f sha="$TAP_CASK_SHA" --jq '.commit.sha' >/dev/null
 
 echo "==> Released ${TAG} and updated the tap."
 echo "==> ACTION REQUIRED: commit and push docs/appcast.xml (+ project.yml bump)."
