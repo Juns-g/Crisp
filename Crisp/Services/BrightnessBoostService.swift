@@ -474,6 +474,30 @@ final class BrightnessBoostService {
         }
     }
 
+    /// Automation needs more truth than the GUI's legacy Boolean completion:
+    /// a disable can be accepted and persisted while a same-display collapse
+    /// is still observable. Unknown identity or terminal-factor outcomes stay
+    /// indeterminate, and cancellation continues to throw.
+    func setEnabledForControl(
+        _ enabled: Bool,
+        for display: DisplayInfo
+    ) async throws -> ExtraBrightnessControlMutationOutcome {
+        if enabled {
+            return try await setEnabled(true, for: display)
+                ? .accepted : .rejectedBeforeAcceptance
+        }
+        let operationCompleted = try await setEnabled(enabled, for: display)
+        return ExtraBrightnessControlMutationOutcome.classify(
+            mutationAccepted: true,
+            operationCompleted: operationCompleted,
+            identityMatches: currentDisplayMatches(display),
+            persistedEnabled: isEnabled(for: display),
+            liveEnabled: display.maxBrightness > 100,
+            maxBrightness: display.maxBrightness,
+            cleanupInProgress: collapsingDisplays.contains(display.displayID)
+        )
+    }
+
     /// Single combined collapse: brightness and maxBrightness glide back to
     /// 100 together, driven by one progress animator, instead of fading
     /// brightness to 100 first and only then collapsing maxBrightness. That

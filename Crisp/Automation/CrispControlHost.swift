@@ -110,8 +110,14 @@ private final class CrispControlAppService: ControlCommandService, @unchecked Se
         guard eligible || cleanupNeeded else {
             throw ControlServiceError.unsupported("Extra Brightness is not eligible for this display")
         }
-        guard try await boost.setEnabled(enabled, for: display) else {
-            throw ControlServiceError.writeFailed("Extra Brightness request was rejected by the live app service")
+        let mutationOutcome = try await boost.setEnabledForControl(enabled, for: display)
+        if let resolvedResult = try mutationOutcome.resolvedControlResult(
+            capability: extraBrightnessCapability(
+                for: display,
+                isVirtual: VirtualDisplayService.shared.isVirtualDisplay(display.displayID)
+            )
+        ) {
+            return resolvedResult
         }
 
         for _ in 0..<10 {

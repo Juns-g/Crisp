@@ -7,6 +7,61 @@ public enum BoostTransitionPhase: String, Equatable, Sendable {
     case disabled
 }
 
+/// App-control outcome at the boundary where a legacy Boolean completion is
+/// reconciled with fresh same-display state. Cancellation is intentionally not
+/// represented here: it continues to throw so the dispatcher reports an
+/// indeterminate write.
+public enum ExtraBrightnessControlMutationOutcome: Equatable, Sendable {
+    case rejectedBeforeAcceptance
+    case accepted
+    case settling
+    case indeterminate
+
+    public static func classify(
+        mutationAccepted: Bool,
+        operationCompleted: Bool,
+        identityMatches: Bool,
+        persistedEnabled: Bool,
+        liveEnabled: Bool,
+        maxBrightness: Double,
+        cleanupInProgress: Bool
+    ) -> Self {
+        guard mutationAccepted else { return .rejectedBeforeAcceptance }
+        guard identityMatches else { return .indeterminate }
+        if operationCompleted { return .accepted }
+        guard !persistedEnabled else { return .indeterminate }
+        guard cleanupInProgress else { return .indeterminate }
+        return .settling
+    }
+
+    public func resolvedControlResult(
+        capability: @autoclosure () -> ExtraBrightnessCapability
+    ) throws -> ExtraBrightnessSetResult? {
+        switch self {
+        case .rejectedBeforeAcceptance:
+            throw ControlServiceError.writeFailed(
+                "Extra Brightness request was rejected by the live app service"
+            )
+        case .indeterminate:
+            throw ControlServiceError.writeIndeterminate(
+                "Extra Brightness was accepted but terminal app state is unknown; "
+                    + "read back before another write"
+            )
+        case .settling:
+            return ExtraBrightnessSetResult(
+                capability: capability(),
+                verification: .settling,
+                warnings: [
+                    "Extra Brightness disable was accepted and persisted off, "
+                        + "but terminal app/overlay cleanup is still settling"
+                ]
+            )
+        case .accepted:
+            return nil
+        }
+    }
+}
+
 public struct BoostTransitionToken: Equatable, Sendable {
     public let uuid: String
     public let identity: String

@@ -2,6 +2,87 @@ import XCTest
 @testable import CrispControlCore
 
 final class BoostTransitionCoordinatorTests: XCTestCase {
+    func testControlDisableOutcomeSeparatesRejectionSettlingAndUnknown() {
+        XCTAssertEqual(
+            ExtraBrightnessControlMutationOutcome.classify(
+                mutationAccepted: false,
+                operationCompleted: false,
+                identityMatches: true,
+                persistedEnabled: false,
+                liveEnabled: false,
+                maxBrightness: 100,
+                cleanupInProgress: false
+            ),
+            .rejectedBeforeAcceptance
+        )
+        XCTAssertEqual(
+            ExtraBrightnessControlMutationOutcome.classify(
+                mutationAccepted: true,
+                operationCompleted: false,
+                identityMatches: true,
+                persistedEnabled: false,
+                liveEnabled: true,
+                maxBrightness: 150,
+                cleanupInProgress: true
+            ),
+            .settling
+        )
+        XCTAssertEqual(
+            ExtraBrightnessControlMutationOutcome.classify(
+                mutationAccepted: true,
+                operationCompleted: false,
+                identityMatches: false,
+                persistedEnabled: false,
+                liveEnabled: true,
+                maxBrightness: 150,
+                cleanupInProgress: true
+            ),
+            .indeterminate
+        )
+    }
+
+    func testControlDisableOutcomeRequiresTerminalCompletionForAcceptedResult() {
+        XCTAssertEqual(
+            ExtraBrightnessControlMutationOutcome.classify(
+                mutationAccepted: true,
+                operationCompleted: true,
+                identityMatches: true,
+                persistedEnabled: false,
+                liveEnabled: false,
+                maxBrightness: 100,
+                cleanupInProgress: false
+            ),
+            .accepted
+        )
+        XCTAssertEqual(
+            ExtraBrightnessControlMutationOutcome.classify(
+                mutationAccepted: true,
+                operationCompleted: false,
+                identityMatches: true,
+                persistedEnabled: false,
+                liveEnabled: false,
+                maxBrightness: 100,
+                cleanupInProgress: false
+            ),
+            .indeterminate
+        )
+    }
+
+    func testIncompleteDisableWithoutCleanupOwnershipIsIndeterminate() {
+        XCTAssertEqual(
+            ExtraBrightnessControlMutationOutcome.classify(
+                mutationAccepted: true,
+                operationCompleted: false,
+                identityMatches: true,
+                persistedEnabled: false,
+                liveEnabled: true,
+                maxBrightness: 150,
+                cleanupInProgress: false
+            ),
+            .indeterminate
+        )
+    }
+
     func testDisableDoesNotCompleteBeforeCollapseReachesIdentity() {
         var coordinator = BoostTransitionCoordinator()
         let token = coordinator.begin(uuid: "uuid-a", identity: "object-a", enabled: false)

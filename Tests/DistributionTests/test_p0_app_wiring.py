@@ -31,6 +31,16 @@ class P0AppWiringTests(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
+    def test_extra_brightness_control_does_not_overload_boolean_disable_outcome(self):
+        host = HOST.read_text()
+        boost = BOOST.read_text()
+        setter = host[host.index("func setExtraBrightness"):host.index("func setHDR")]
+        self.assertIn("boost.setEnabledForControl", setter)
+        self.assertIn("mutationOutcome.resolvedControlResult", setter)
+        self.assertNotIn("guard try await boost.setEnabled", setter)
+        self.assertIn("func setEnabledForControl", boost)
+        self.assertIn("ExtraBrightnessControlMutationOutcome.classify", boost)
+
     def test_control_brightness_above_100_uses_gui_path_and_preserves_logical_state(self):
         text = BRIGHTNESS.read_text()
         control_write = text[text.index("func writeBrightnessForControl"):]

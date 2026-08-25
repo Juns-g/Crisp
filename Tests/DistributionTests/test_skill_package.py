@@ -237,6 +237,20 @@ class DistributionDocumentationTests(unittest.TestCase):
                 ):
                     self.assertIn(required.lower(), normalized)
 
+    def test_extra_brightness_disable_documents_settling_and_indeterminate_outcomes(self):
+        for path in (SKILL, CRISPCTL_DOCS):
+            with self.subTest(path=path):
+                text = " ".join(path.read_text().split()).lower()
+                for required in (
+                    "accepted and persisted off",
+                    "verification: settling",
+                    "terminal cleanup",
+                    "read back",
+                    "write_outcome_indeterminate",
+                    "no automatic retry",
+                ):
+                    self.assertIn(required, text)
+
     def test_comparison_pages_distinguish_source_p0_from_public_availability(self):
         en = COMPARE_EN.read_text()
         zh = COMPARE_ZH.read_text()

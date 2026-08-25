@@ -147,6 +147,10 @@ Use only `--json` responses for automation. Follow this procedure:
   and batch mutations. The cleanup-only exception does not change
   `write_outcome_indeterminate`, `retrySafe: false`, separate read-back, fresh
   user decision, or no automatic retry rules.
+- If Extra Brightness disable returns `ok: true` with
+  `verification: settling`, it was accepted and persisted off, but terminal
+  cleanup is still in progress. Treat the returned state and warning as
+  transitional, read back before another write, and make no automatic retry.
 - A `batch_partial_failure` contains applied, failed, and possibly indeterminate
   UUIDs. This is a partial failure: do not retry the whole batch or any
   successful/indeterminate member.

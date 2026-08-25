@@ -677,9 +677,19 @@ final class CommandDispatcherTests: XCTestCase {
     }
 
     func testBatchDeadlineIsOverallNotRestartedForEachDisplay() async throws {
-        let service = CumulativeDelayBatchControlService(displays: [.physicalC, .physicalB, .physicalA])
+        let clock = ManualMonotonicClock(now: 900)
+        let service = AdvancingClockBatchControlService(
+            displays: [.physicalC, .physicalB, .physicalA],
+            clock: clock,
+            inventoryAdvance: 0,
+            snapshotAdvance: 0,
+            writeAdvance: 3
+        )
         let response = await ControlCommandDispatcher(
-            service: service, appVersion: "1.5.0", batchExecutionTimeout: 0.1
+            service: service,
+            appVersion: "1.5.0",
+            batchExecutionTimeout: 5,
+            batchMonotonicNow: clock.now
         ).handle(ControlRequest(
             requestID: "overall-deadline", command: "brightness.set-all",
             arguments: ["percent": .number(50)]
@@ -803,26 +813,6 @@ private actor DelayedBatchControlService: ControlCommandService {
                     continuation.resume()
                 }
             }
-        }
-        values[displayUUID] = percent
-        return percent
-    }
-}
-
-private actor CumulativeDelayBatchControlService: ControlCommandService {
-    let inventory: [ControlDisplay]
-    var values: [String: Double]
-
-    init(displays: [ControlDisplay]) {
-        inventory = displays
-        values = Dictionary(uniqueKeysWithValues: displays.map { ($0.uuid, $0.brightnessPercent ?? 42) })
-    }
-
-    func displays() async throws -> [ControlDisplay] { inventory }
-    func readBrightness(displayUUID: String) async throws -> Double? { values[displayUUID] }
-    func writeBrightness(displayUUID: String, percent: Double) async throws -> Double {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.07) { continuation.resume() }
         }
         values[displayUUID] = percent
         return percent

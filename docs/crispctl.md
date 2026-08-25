@@ -90,13 +90,19 @@ EDR verification. An unavailable independent EDR read-back is stated in
 
 `extra-brightness get/set` reports `state`, live `enabled`,
 `persistedEnabled`, `maxBrightness`, relative `headroom`, reasons, and
-remediation. Disable awaits its generation-guarded terminal state: logical
-brightness is at most 100, the ceiling and boost factor are at identity, and
-the overlay is removed. An accepted enable can return `settling` while its
-animated ceiling grows. `hdr get/set` is distinct and writable only for an
-external display where Crisp's GUI exposes the explicit HDR toggle. A built-in
-display returns `unsupported_capability` with remediation to use Extra
-Brightness when eligible. HDR set is verified only after bounded live read-back.
+remediation. A verified disable has reached its generation-guarded terminal
+state: logical brightness is at most 100, the ceiling and boost factor are at
+identity, and the overlay is removed. If disable was accepted and persisted off
+but fresh same-UUID state still positively shows terminal cleanup in progress,
+the command is non-failing with `verification: settling` and a warning. That is
+transitional app state, not terminal verification; read back before another
+write and do not retry automatically. Identity loss or another unknown
+post-mutation result remains `write_outcome_indeterminate`, with no automatic
+retry. An accepted enable can also return `settling` while its animated ceiling
+grows. `hdr get/set` is distinct and writable only for an external display
+where Crisp's GUI exposes the explicit HDR toggle. A built-in display returns
+`unsupported_capability` with remediation to use Extra Brightness when
+eligible. HDR set is verified only after bounded live read-back.
 
 Normally every write requires a fresh discovery response with `state: writable`
 and the exact same UUID. The sole exception is
