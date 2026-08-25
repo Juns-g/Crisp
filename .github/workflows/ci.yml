@@ -44,6 +44,15 @@ jobs:
       # survived to a release.
       - name: Test
         run: make test
+      # The distribution Python tests exercise packaging/script contracts that
+      # Xcode's unit-test target does not load. The actual round trip is fully
+      # headless: it uses the fixture control host and --no-start.
+      - name: Test crispctl distribution and headless round trip
+        run: |
+          python3 -m unittest discover -s Tests/DistributionTests -p 'test_*.py'
+          SCRATCH="$(mktemp -d /tmp/crispctl-roundtrip-ci.XXXXXX)"
+          trap 'rm -rf "$SCRATCH"' EXIT
+          ./scripts/test-crispctl-roundtrip.sh "$SCRATCH"
       # Every localization key the code uses must exist in the String Catalog.
       # SwiftUI coalesces interpolated text into "%@"-style lookup keys, and a
       # key missing from the catalog silently falls back to English at runtime
