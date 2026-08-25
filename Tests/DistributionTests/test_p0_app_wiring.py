@@ -1,3 +1,6 @@
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -241,6 +244,83 @@ class P0AppWiringTests(unittest.TestCase):
             self.assertIn(wiring, fixture)
         self.assertNotIn("DisplayServicesSetBrightness", fixture)
         self.assertNotIn("DDCService", fixture)
+
+    def test_headless_roundtrip_uses_swiftpm_reported_bin_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tools = root / "tools"
+            bin_path = root / "scratch" / "build" / "arm64-apple-macosx" / "debug"
+            tools.mkdir()
+            swift_log = root / "swift.log"
+            cli_log = root / "cli.log"
+
+            def write_executable(name, source):
+                path = tools / name
+                path.write_text(source)
+                path.chmod(0o755)
+
+            write_executable(
+                "swift",
+                "#!/bin/bash\n"
+                "set -eu\n"
+                'printf \'%s\\n\' "$*" >> "$SWIFT_LOG"\n'
+                'if [[ " $* " == *" --show-bin-path "* ]]; then\n'
+                '  printf \'%s\\n\' "$FAKE_BIN_PATH"\n'
+                "  exit 0\n"
+                "fi\n"
+                'mkdir -p "$FAKE_BIN_PATH"\n'
+                'cat > "$FAKE_BIN_PATH/crisp-control-test-host" <<\'HOST\'\n'
+                "#!/bin/bash\n"
+                "exec python3 - \"$1\" <<'PY'\n"
+                "import socket\n"
+                "import signal\n"
+                "import sys\n"
+                "import time\n"
+                "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+                "sock = socket.socket(socket.AF_UNIX)\n"
+                "sock.bind(sys.argv[1])\n"
+                "sock.listen()\n"
+                "time.sleep(30)\n"
+                "PY\n"
+                "HOST\n"
+                'cat > "$FAKE_BIN_PATH/crispctl" <<\'CLI\'\n'
+                "#!/bin/sh\n"
+                'printf \'%s\\n\' "$*" >> "$CLI_LOG"\n'
+                "printf '{}\\n'\n"
+                "CLI\n"
+                'chmod 755 "$FAKE_BIN_PATH/crisp-control-test-host" "$FAKE_BIN_PATH/crispctl"\n',
+            )
+            write_executable("jq", "#!/bin/sh\nexit 0\n")
+            write_executable("stat", "#!/bin/sh\nprintf '600\\n'\n")
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{tools}:{environment['PATH']}",
+                    "FAKE_BIN_PATH": str(bin_path),
+                    "SWIFT_LOG": str(swift_log),
+                    "CLI_LOG": str(cli_log),
+                }
+            )
+
+            result = subprocess.run(
+                ["/bin/bash", str(ROUNDTRIP), str(root / "scratch")],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                timeout=45,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("CRISPCTL_HEADLESS_ROUNDTRIP_OK", result.stdout)
+            self.assertEqual(
+                swift_log.read_text().splitlines(),
+                [
+                    f"build --disable-sandbox --scratch-path {root / 'scratch'}",
+                    f"build --disable-sandbox --scratch-path {root / 'scratch'} --show-bin-path",
+                ],
+            )
+            self.assertGreaterEqual(len(cli_log.read_text().splitlines()), 10)
 
 
 if __name__ == "__main__":

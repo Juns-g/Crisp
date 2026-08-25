@@ -5,8 +5,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRATCH="${1:-/tmp/crispctl-roundtrip-build}"
 SOCKET_DIR="$(mktemp -d /tmp/crispctl-roundtrip.XXXXXX)"
 SOCKET="$SOCKET_DIR/control.sock"
-HOST="$SCRATCH/out/Products/Debug/crisp-control-test-host"
-CLI="$SCRATCH/out/Products/Debug/crispctl"
 HOST_PID=""
 
 cleanup() {
@@ -20,9 +18,17 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$ROOT"
+BUILD_ARGS=(swift build --disable-sandbox --scratch-path "$SCRATCH")
 SWIFTPM_MODULECACHE_OVERRIDE=/tmp/crisp-spm-module-cache \
 CLANG_MODULE_CACHE_PATH=/tmp/crisp-clang-module-cache \
-swift build --disable-sandbox --scratch-path "$SCRATCH"
+"${BUILD_ARGS[@]}"
+BIN_PATH="$(
+    SWIFTPM_MODULECACHE_OVERRIDE=/tmp/crisp-spm-module-cache \
+    CLANG_MODULE_CACHE_PATH=/tmp/crisp-clang-module-cache \
+    "${BUILD_ARGS[@]}" --show-bin-path
+)"
+HOST="$BIN_PATH/crisp-control-test-host"
+CLI="$BIN_PATH/crispctl"
 
 "$HOST" "$SOCKET" &
 HOST_PID=$!
