@@ -41,15 +41,28 @@ done
 
 STATUS="$("$CLI" status --json --no-start --socket "$SOCKET")"
 LIST="$("$CLI" displays list --json --no-start --socket "$SOCKET")"
+EXTERNAL_UUID="$(jq -er '
+    [.result.displays[] | select(.isBuiltin == false and .isVirtual == false)]
+    | if length == 1 then .[0].uuid
+      else error("expected exactly one non-builtin physical display")
+      end
+' <<<"$LIST")"
 SET="$("$CLI" brightness set builtin 55 --json --no-start --socket "$SOCKET")"
 GET="$("$CLI" brightness get fixture-built-in --json --no-start --socket "$SOCKET")"
 EXTRA_GET="$("$CLI" extra-brightness get fixture-built-in --json --no-start --socket "$SOCKET")"
 EXTRA_SET="$("$CLI" extra-brightness set fixture-built-in on --json --no-start --socket "$SOCKET")"
 BOOSTED_SET="$("$CLI" brightness set fixture-built-in 125 --json --no-start --socket "$SOCKET")"
-HDR_GET="$("$CLI" hdr get fixture-external --json --no-start --socket "$SOCKET")"
-HDR_SET="$("$CLI" hdr set fixture-external off --json --no-start --socket "$SOCKET")"
+HDR_GET="$("$CLI" hdr get AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA --json --no-start --socket "$SOCKET")"
+HDR_SET="$("$CLI" hdr set AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA off --json --no-start --socket "$SOCKET")"
 GET_ALL="$("$CLI" brightness get-all --json --no-start --socket "$SOCKET")"
 SET_ALL="$("$CLI" brightness set-all 60 --json --no-start --socket "$SOCKET")"
+DISCONNECTED_BEFORE="$("$CLI" displays disconnected --json --no-start --socket "$SOCKET")"
+DISCONNECT="$("$CLI" displays disconnect "$EXTERNAL_UUID" --json --no-start --socket "$SOCKET")"
+DISCONNECTED_AFTER="$("$CLI" displays disconnected --json --no-start --socket "$SOCKET")"
+DISCONNECTED_UUID="$(jq -r '.result.displays[0].uuid' <<<"$DISCONNECTED_AFTER")"
+[ "$DISCONNECTED_UUID" = "$EXTERNAL_UUID" ]
+RECONNECT="$("$CLI" displays reconnect "$DISCONNECTED_UUID" --json --no-start --socket "$SOCKET")"
+DISCONNECTED_FINAL="$("$CLI" displays disconnected --json --no-start --socket "$SOCKET")"
 
 jq -e '.ok and .result.running' <<<"$STATUS" >/dev/null
 jq -e '.ok and .result.displays[0].uuid == "fixture-built-in"' <<<"$LIST" >/dev/null
@@ -60,8 +73,13 @@ jq -e '.ok and .result.enabled and .result.verification == "app_state_verified" 
 jq -e '.ok and .result.logicalPercent == 125 and .result.hardwareReadbackPercent == 100 and .result.verification == "app_state_verified"' <<<"$BOOSTED_SET" >/dev/null
 jq -e '.ok and .result.enabled' <<<"$HDR_GET" >/dev/null
 jq -e '.ok and (.result.enabled | not) and .result.verification == "verified"' <<<"$HDR_SET" >/dev/null
-jq -e '.ok and .result.displays[0].displayUUID == "fixture-built-in" and .result.displays[1].displayUUID == "fixture-external"' <<<"$GET_ALL" >/dev/null
-jq -e '.ok and .result.appliedUUIDs == ["fixture-built-in", "fixture-external"] and (.result.outcomes | length) == 2' <<<"$SET_ALL" >/dev/null
+jq -e '.ok and .result.displays[0].displayUUID == "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" and .result.displays[1].displayUUID == "fixture-built-in"' <<<"$GET_ALL" >/dev/null
+jq -e '.ok and .result.appliedUUIDs == ["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", "fixture-built-in"] and (.result.outcomes | length) == 2' <<<"$SET_ALL" >/dev/null
+jq -e '.ok and .result.displays == []' <<<"$DISCONNECTED_BEFORE" >/dev/null
+jq -e '.ok and .result.displayUUID == "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" and .result.requestedConnectionState == "disconnected" and .result.observedConnectionState == "disconnected" and .result.verification == "same_uuid_enumeration"' <<<"$DISCONNECT" >/dev/null
+jq -e '.ok and (.result.displays | length) == 1 and .result.displays[0].uuid == "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" and (.result.displays[0].connection.connected | not) and .result.displays[0].connection.reconnectAllowed' <<<"$DISCONNECTED_AFTER" >/dev/null
+jq -e '.ok and .result.displayUUID == "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" and .result.requestedConnectionState == "connected" and .result.observedConnectionState == "connected" and .result.verification == "same_uuid_enumeration"' <<<"$RECONNECT" >/dev/null
+jq -e '.ok and .result.displays == []' <<<"$DISCONNECTED_FINAL" >/dev/null
 [ "$(stat -f '%Lp' "$SOCKET")" = "600" ]
 
 kill "$HOST_PID"

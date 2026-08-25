@@ -2,6 +2,14 @@ import Foundation
 import CoreGraphics
 import ColorSync
 import IOKit
+#if canImport(CrispControlCore)
+import CrispControlCore
+#endif
+
+@_silgen_name("CGDisplayIOServicePort")
+private func CGDisplayIOServicePortForPhysicalProof(
+    _ display: CGDirectDisplayID
+) -> io_service_t
 
 /// Disconnects / reconnects REAL (physical) displays on the fly, the way BetterDisplay's
 /// "Disconnect Display" works. This is fundamentally different from VirtualDisplayService:
@@ -17,7 +25,7 @@ import IOKit
 /// display is also gone from DisplayManager's list, this service keeps its own snapshot
 /// (`disconnected`) of what we turned off so the UI can still offer a Reconnect action.
 @MainActor
-final class PhysicalDisplayToggleService: ObservableObject {
+final class PhysicalDisplayToggleService: ObservableObject, DisplayConnectionMutationAdapter {
     static let shared = PhysicalDisplayToggleService()
     private init() {
         loadDesired()
@@ -27,7 +35,7 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// appears in DisplayManager.displays, so we need its metadata to render a Reconnect row.
     struct DisconnectedDisplay: Identifiable, Codable, Sendable, Equatable {
         let uuid: String            // stable identity across CGDirectDisplayID reassignment
-        var displayID: CGDirectDisplayID  // last-known ID (used to reconnect)
+        var displayID: CGDirectDisplayID  // last-known ID (all-black emergency recovery only)
         var name: String
         var width: Int
         var height: Int
@@ -38,7 +46,9 @@ final class PhysicalDisplayToggleService: ObservableObject {
         case unsupportedPlatform
         case wouldLeaveNoActiveDisplay
         case configurationFailed(CGError)
+        case outcomeIndeterminate
         case displayNotFound
+        case hardwareBackingUnproven
 
         var description: String {
             switch self {
@@ -48,10 +58,29 @@ final class PhysicalDisplayToggleService: ObservableObject {
                 return String(localized: "Refusing to disconnect: it would leave no active display.")
             case .configurationFailed(let err):
                 return String(localized: "Display configuration failed (CGError \(String(err.rawValue))).")
+            case .outcomeIndeterminate:
+                return String(localized: "Display configuration may still complete; refresh before deciding again.")
             case .displayNotFound:
                 return String(localized: "Display not found.")
+            case .hardwareBackingUnproven:
+                return String(localized: "Display cannot be proven to be hardware-backed physical.")
             }
         }
+    }
+
+    private enum ConfigurationTransactionOutcome: Sendable {
+        case completed
+        case rejectedBeforeDispatch(CGError)
+        case failedAfterDispatch(CGError)
+        case timedOut
+        case cancelled
+    }
+
+    private enum ControlEnumerationError: Error {
+        case fullListFailed(CGError)
+        case onlineListFailed(CGError)
+        case activeListFailed(CGError)
+        case persistenceFailed
     }
 
     // MARK: - State
@@ -61,6 +90,12 @@ final class PhysicalDisplayToggleService: ObservableObject {
     @Published private(set) var disconnected: [DisconnectedDisplay] = []
 
     private let desiredKey = "crisp.PhysicalDisconnectedUUIDs"
+    /// UUIDs whose automation disconnect was prepared but has not yet been proved offline.
+    /// The marker is persisted before dispatch. A timed-out WindowServer call may continue,
+    /// so normal reconciliation and wake handling must preserve the recovery record until
+    /// fresh enumeration proves that exact UUID is offline.
+    private let controlPendingDisconnectUUIDsKey =
+        "crisp.PhysicalDisplayToggleService.controlPendingDisconnectUUIDs"
     /// Dead-man markers: the UUIDs of displays a softReconnect is (or was, if the app died)
     /// mid-toggle on. A list, not a single slot: a manual smooth-scaling toggle and the
     /// auto-HiDPI path (autoEnableHiDPIIfNeeded) can blink two different displays at once,
@@ -72,6 +107,39 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// this keeps the recovery path and the sweep from re-enabling a display out from under
     /// its own retry loop. Per-display, so concurrent blinks don't mask each other.
     private var softReconnectInFlight: Set<String> = []
+    /// Guards against overlapping recovery runs from reconfiguration-callback bursts.
+    private var strandedRecoveryInFlight = false
+    /// Sleep guard parked by a soft reconnect that has not verifiably recovered.
+    private var lingeringSleepGuard: CGVirtualDisplay?
+    /// Guards against overlapping all-screens-black recovery attempts.
+    private var restoreInFlight = false
+
+    /// Portables enforce Clamshell Sleep the moment no display is active; desktops don't.
+    /// Battery presence is the lid-independent laptop test.
+    private static let hasBattery: Bool = {
+        let service = IOServiceGetMatchingService(
+            kIOMainPortDefault,
+            IOServiceMatching("AppleSmartBattery")
+        )
+        guard service != 0 else { return false }
+        IOObjectRelease(service)
+        return true
+    }()
+
+    private func pendingControlDisconnectUUIDs() -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: controlPendingDisconnectUUIDsKey) ?? [])
+    }
+
+    private func persistPendingControlDisconnectUUIDs(_ pending: Set<String>) throws {
+        if pending.isEmpty {
+            UserDefaults.standard.removeObject(forKey: controlPendingDisconnectUUIDsKey)
+        } else {
+            UserDefaults.standard.set(pending.sorted(), forKey: controlPendingDisconnectUUIDsKey)
+        }
+        guard pendingControlDisconnectUUIDs() == pending else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+    }
 
     private func pendingSoftReconnectUUIDs() -> [String] {
         UserDefaults.standard.stringArray(forKey: softReconnectPendingKey) ?? []
@@ -98,7 +166,8 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// True only on Apple Silicon. The disconnect API is a no-op / misbehaves on Intel.
     let isSupported: Bool = {
         #if arch(arm64)
-        return true
+        if #available(macOS 13.0, *) { return true }
+        return false
         #else
         return false
         #endif
@@ -115,7 +184,10 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// Virtual displays are excluded from the count on purpose: they are headless,
     /// so leaving only a virtual display still blacks out the physical machine.
     func wouldLeaveNoActiveDisplay(_ displayID: CGDirectDisplayID) -> Bool {
-        CGDisplayIsActive(displayID) != 0 && physicalActiveDisplayCount() <= 1
+        PhysicalDisplaySafetyPolicy.shouldRefuseDisconnect(
+            targetIsActive: CGDisplayIsActive(displayID) != 0,
+            activePhysicalDisplayCount: physicalActiveDisplayCount()
+        )
     }
 
     /// All display IDs known to the window server, INCLUDING ones disabled via
@@ -128,85 +200,572 @@ final class PhysicalDisplayToggleService: ObservableObject {
         return Array(ids.prefix(Int(count)))
     }
 
-    /// Count of active displays that are real physical screens, excluding virtual
-    /// displays managed by VirtualDisplayService (a virtual display is active in
-    /// CGGetActiveDisplayList but is not a viewable screen).
-    private func physicalActiveDisplayCount() -> Int {
+    /// Count only active displays with positive hardware-backed physical proof.
+    private func physicalActiveDisplayCount() -> Int? {
         var count: UInt32 = 0
-        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return 0 }
+        guard CGGetActiveDisplayList(0, nil, &count) == .success else { return nil }
+        guard count > 0 else { return 0 }
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return 0 }
-        let virtual = VirtualDisplayService.shared
-        return ids.prefix(Int(count)).filter { id in
-            guard !virtual.isVirtualDisplay(id) else { return false }
-            // Once the last real display is gone macOS spawns a placeholder
-            // display (vendor 'unkn' 0x756E6B6E, model 'virt' 0x76697274,
-            // fingerprinted live on macOS 26). It is not a viewable screen, and
-            // counting it kept restoreIfNoActiveDisplay from ever firing in the
-            // all-screens-black state it exists to fix.
-            let isPlaceholder = CGDisplayVendorNumber(id) == 0x756E6B6E
-                && CGDisplayModelNumber(id) == 0x76697274
-            return !isPlaceholder
-        }.count
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return nil }
+        return ids.prefix(Int(count)).filter(isHardwareBackedPhysicalDisplay).count
+    }
+
+    private func hardwareBackingEvidence(
+        for displayID: CGDirectDisplayID
+    ) -> HardwareBackedPhysicalDisplayEvidence {
+        let servicePort = CGDisplayIOServicePortForPhysicalProof(displayID)
+        let hasIOServicePort = servicePort != 0 && servicePort != MACH_PORT_NULL
+        let conformsToDisplayConnect = hasIOServicePort
+            && IOObjectConformsTo(servicePort, "IODisplayConnect") != 0
+        return HardwareBackedPhysicalDisplayEvidence(
+            isBuiltin: CGDisplayIsBuiltin(displayID) != 0,
+            isKnownVirtual: VirtualDisplayService.shared.isVirtualDisplay(displayID),
+            hasIOServicePort: hasIOServicePort,
+            ioServiceConformsToDisplayConnect: conformsToDisplayConnect
+        )
+    }
+
+    func isHardwareBackedPhysicalDisplay(_ displayID: CGDirectDisplayID) -> Bool {
+        HardwareBackedPhysicalDisplayClassifier.isHardwareBacked(
+            hardwareBackingEvidence(for: displayID)
+        )
     }
 
     private func uuid(for displayID: CGDirectDisplayID) -> String {
-        if let cf = CGDisplayCreateUUIDFromDisplayID(displayID),
-           let s = CFUUIDCreateString(nil, cf.takeRetainedValue()) {
-            return s as String
-        }
-        return "id-\(displayID)"
+        stableUUID(for: displayID) ?? "id-\(displayID)"
     }
 
-    // MARK: - Disconnect / Reconnect
+    private func stableUUID(for displayID: CGDirectDisplayID) -> String? {
+        guard let cf = CGDisplayCreateUUIDFromDisplayID(displayID),
+              let value = CFUUIDCreateString(nil, cf.takeRetainedValue()) else { return nil }
+        let uuid = value as String
+        return isExactControlUUID(uuid) ? uuid : nil
+    }
 
+    private func isExactControlUUID(_ value: String) -> Bool {
+        ControlRequest.isExactDisplayUUID(value)
+    }
+
+}
+
+// MARK: - Automation control adapter
+
+extension PhysicalDisplayToggleService {
+    func connectionCapabilityForControl(
+        _ display: DisplayInfo
+    ) -> DisplayConnectionCapability {
+        guard isSupported else {
+            return .unsupported(
+                connected: true,
+                reason: "physical display disconnect requires Apple Silicon and macOS 13 or later",
+                remediation: "use a supported Apple Silicon Mac or leave connection changes to the GUI"
+            )
+        }
+        guard isExactControlUUID(display.displayUUID) else {
+            return .unsupported(
+                connected: true,
+                platformSupported: true,
+                reason: "a stable display UUID is unavailable",
+                remediation: "refresh displays after reconnecting the physical cable"
+            )
+        }
+        if let unsupported = HardwareBackedPhysicalDisplayClassifier
+            .unsupportedConnectionCapability(
+                for: hardwareBackingEvidence(for: display.displayID),
+                connected: true
+            ) {
+            return unsupported
+        }
+        guard !pendingControlDisconnectUUIDs().contains(display.displayUUID) else {
+            return .unsupported(
+                connected: true,
+                platformSupported: true,
+                reason: "the disconnect outcome is indeterminate and may still change",
+                remediation: "refresh the disconnected inventory; never retry the write automatically"
+            )
+        }
+        do {
+            let observation = try connectionObservation()
+            guard observation.allUUIDs.contains(display.displayUUID),
+                  observation.onlineUUIDs.contains(display.displayUUID) else {
+                return .unsupported(
+                    connected: false,
+                    platformSupported: true,
+                    reason: "the exact UUID is absent from the fresh online inventory",
+                    remediation: "run displays list again and make a fresh decision"
+                )
+            }
+            guard observation.activePhysicalViewableUUIDs.contains(display.displayUUID),
+                  observation.activePhysicalViewableUUIDs.count > 1 else {
+                return .unsupported(
+                    connected: true,
+                    platformSupported: true,
+                    reason: "disconnect would leave no active physical viewable display",
+                    remediation: "connect another physical display before disconnecting this one"
+                )
+            }
+            return DisplayConnectionCapability(
+                state: .writable,
+                connected: true,
+                disconnectAllowed: true,
+                reconnectAllowed: false,
+                platformSupported: true,
+                reason: "another active physical viewable display remains"
+            )
+        } catch {
+            return .unsupported(
+                connected: true,
+                platformSupported: true,
+                reason: "fresh WindowServer enumeration is unavailable",
+                remediation: "refresh displays and retry only after capability becomes writable"
+            )
+        }
+    }
+
+    func disconnectedDisplaysForControl() throws -> [ControlDisconnectedDisplay] {
+        let fresh = try connectionObservation()
+        let initiallyPending = pendingControlDisconnectUUIDs()
+        for record in disconnected
+        where fresh.onlineUUIDs.contains(record.uuid) && !initiallyPending.contains(record.uuid) {
+            try removeDisconnectedRecord(uuid: record.uuid)
+        }
+        for record in disconnected
+        where initiallyPending.contains(record.uuid)
+            && fresh.allUUIDs.contains(record.uuid)
+            && !fresh.onlineUUIDs.contains(record.uuid) {
+            try confirmDisconnectedRecord(uuid: record.uuid)
+        }
+        let observation = try connectionObservation()
+
+        let pending = pendingControlDisconnectUUIDs()
+        return disconnected.compactMap { record in
+            guard isExactControlUUID(record.uuid) else { return nil }
+            let capability: DisplayConnectionCapability
+            if pending.contains(record.uuid) {
+                capability = .unsupported(
+                    connected: observation.onlineUUIDs.contains(record.uuid),
+                    platformSupported: isSupported,
+                    reason: "the disconnect outcome is indeterminate and may still change",
+                    remediation: "refresh this inventory; never retry the write automatically"
+                )
+            } else if !isSupported {
+                capability = .unsupported(
+                    connected: observation.onlineUUIDs.contains(record.uuid),
+                    reason: "physical display reconnect requires Apple Silicon and macOS 13 or later",
+                    remediation: "use a supported Apple Silicon Mac"
+                )
+            } else if observation.onlineUUIDs.contains(record.uuid) {
+                capability = .unsupported(
+                    connected: true,
+                    platformSupported: true,
+                    reason: "the record is stale because the exact UUID is already online",
+                    remediation: "refresh the disconnected inventory"
+                )
+            } else if !observation.allUUIDs.contains(record.uuid) {
+                capability = .unsupported(
+                    connected: false,
+                    platformSupported: true,
+                    reason: "the exact UUID cannot be resolved in the full display list",
+                    remediation: "check the cable or wake state, then request a fresh inventory"
+                )
+            } else if observation.virtualUUIDs.contains(record.uuid) {
+                capability = .unsupported(
+                    connected: false,
+                    platformSupported: true,
+                    reason: "virtual displays cannot use physical reconnect",
+                    remediation: "manage this display through Crisp's virtual display controls"
+                )
+            } else {
+                capability = DisplayConnectionCapability(
+                    state: .writable,
+                    connected: false,
+                    disconnectAllowed: false,
+                    reconnectAllowed: true,
+                    platformSupported: true,
+                    reason: "exact UUID is present in the full list and intentionally disconnected"
+                )
+            }
+            return ControlDisconnectedDisplay(
+                uuid: record.uuid,
+                name: record.name,
+                width: record.width,
+                height: record.height,
+                connection: capability
+            )
+        }.sorted { $0.uuid < $1.uuid }
+    }
+
+    func disconnectForControl(_ display: DisplayInfo) async throws
+        -> DisplayConnectionSetResult {
+        let target = DisplayConnectionTarget(
+            uuid: display.displayUUID,
+            name: display.name,
+            width: display.pixelWidth,
+            height: display.pixelHeight,
+            isHardwareBackedPhysical: isHardwareBackedPhysicalDisplay(display.displayID)
+        )
+        return try await DisplayConnectionMutationCoordinator(adapter: self).disconnect(target)
+    }
+
+    func reconnectForControl(uuid: String) async throws -> DisplayConnectionSetResult {
+        try await DisplayConnectionMutationCoordinator(adapter: self).reconnect(uuid: uuid)
+    }
+
+    func connectionObservation() throws -> DisplayConnectionObservation {
+        let all = try controlAllDisplayIDs()
+        let online = try controlOnlineDisplayIDs()
+        let active = try controlActiveDisplayIDs()
+        let allUUIDs = Set(all.compactMap(stableUUID(for:)))
+        let onlineUUIDs = Set(online.compactMap(stableUUID(for:)))
+        let hardwareBackedUUIDs = hardwareBackedPhysicalUUIDs(in: all)
+        let unsafePhysicalMutationUUIDs = allUUIDs.subtracting(hardwareBackedUUIDs)
+        let activePhysicalViewableUUIDs = Set(active.compactMap { id -> String? in
+            guard isHardwareBackedPhysicalDisplay(id),
+                  let uuid = stableUUID(for: id),
+                  hardwareBackedUUIDs.contains(uuid) else { return nil }
+            return uuid
+        })
+        let intentional = Set(disconnected.compactMap { record in
+            isExactControlUUID(record.uuid) ? record.uuid : nil
+        })
+        return DisplayConnectionObservation(
+            platformSupported: isSupported,
+            allUUIDs: allUUIDs,
+            onlineUUIDs: onlineUUIDs,
+            intentionalDisconnectedUUIDs: intentional,
+            virtualUUIDs: unsafePhysicalMutationUUIDs,
+            activePhysicalViewableUUIDs: activePhysicalViewableUUIDs
+        )
+    }
+
+    private func hardwareBackedPhysicalUUIDs(
+        in displayIDs: [CGDirectDisplayID]
+    ) -> Set<String> {
+        let identified = displayIDs.compactMap { displayID -> (uuid: String, id: CGDirectDisplayID)? in
+            guard let uuid = stableUUID(for: displayID) else { return nil }
+            return (uuid, displayID)
+        }
+        let grouped = Dictionary(grouping: identified, by: \.uuid)
+        return Set(grouped.compactMap { uuid, candidates in
+            guard candidates.count == 1,
+                  let candidate = candidates.first,
+                  isHardwareBackedPhysicalDisplay(candidate.id) else { return nil }
+            return uuid
+        })
+    }
+
+    func retainDisconnectedRecord(_ target: DisplayConnectionTarget) throws {
+        let matches = try resolveControlDisplayIDs(uuid: target.uuid)
+        guard matches.count == 1, let displayID = matches.first else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        let previousRecords = disconnected
+        let previousPending = pendingControlDisconnectUUIDs()
+        var nextPending = previousPending
+        nextPending.insert(target.uuid)
+        try persistPendingControlDisconnectUUIDs(nextPending)
+        disconnected.removeAll { $0.uuid == target.uuid }
+        disconnected.append(DisconnectedDisplay(
+            uuid: target.uuid,
+            displayID: displayID,
+            name: target.name,
+            width: target.width,
+            height: target.height
+        ))
+        do {
+            try persistDisconnectedForControl()
+        } catch {
+            disconnected = previousRecords
+            try? persistDisconnectedForControl()
+            try? persistPendingControlDisconnectUUIDs(previousPending)
+            throw error
+        }
+    }
+
+    func confirmDisconnectedRecord(uuid: String) throws {
+        var pending = pendingControlDisconnectUUIDs()
+        guard pending.remove(uuid) != nil else { return }
+        try persistPendingControlDisconnectUUIDs(pending)
+    }
+
+    func removeDisconnectedRecord(uuid: String) throws {
+        let previousRecords = disconnected
+        let previousPending = pendingControlDisconnectUUIDs()
+        disconnected.removeAll { $0.uuid == uuid }
+        var nextPending = previousPending
+        nextPending.remove(uuid)
+        do {
+            try persistDisconnectedForControl()
+            try persistPendingControlDisconnectUUIDs(nextPending)
+        } catch {
+            disconnected = previousRecords
+            try? persistDisconnectedForControl()
+            try? persistPendingControlDisconnectUUIDs(previousPending)
+            throw error
+        }
+    }
+
+    func dispatchConnectionChange(
+        uuid: String,
+        requestedState: DisplayConnectionState
+    ) async -> DisplayConnectionDispatchOutcome {
+        guard isSupported, isExactControlUUID(uuid) else {
+            return .rejectedBeforeDispatch("platform support or stable UUID preflight failed")
+        }
+        let observation: DisplayConnectionObservation
+        do {
+            observation = try connectionObservation()
+        } catch {
+            return .rejectedBeforeDispatch("fresh full-list re-resolution failed before mutation")
+        }
+        if let rejection = connectionPreflightRejection(
+            uuid: uuid,
+            requestedState: requestedState,
+            observation: observation
+        ) {
+            return .rejectedBeforeDispatch(rejection)
+        }
+
+        let finalMatches: [CGDirectDisplayID]
+        do {
+            finalMatches = try resolveControlDisplayIDs(uuid: uuid)
+        } catch {
+            return .rejectedBeforeDispatch("final exact-UUID re-resolution failed before mutation")
+        }
+        guard finalMatches.count == 1, let targetID = finalMatches.first else {
+            return .rejectedBeforeDispatch("exact UUID did not resolve to one display before mutation")
+        }
+        guard !Task.isCancelled else {
+            return .rejectedBeforeDispatch("display connection request was cancelled before dispatch")
+        }
+        switch await setEnabledOutcome(requestedState == .connected, displayID: targetID) {
+        case .completed:
+            return .completed
+        case let .rejectedBeforeDispatch(error):
+            return .rejectedBeforeDispatch("display configuration was rejected before dispatch (CGError \(error.rawValue))")
+        case let .failedAfterDispatch(error):
+            return .failedAfterDispatch("display configuration failed after dispatch (CGError \(error.rawValue))")
+        case .timedOut:
+            return .timedOut
+        case .cancelled:
+            return .cancelled
+        }
+    }
+
+    private func connectionPreflightRejection(
+        uuid: String,
+        requestedState: DisplayConnectionState,
+        observation: DisplayConnectionObservation
+    ) -> String? {
+        switch requestedState {
+        case .disconnected:
+            guard observation.onlineUUIDs.contains(uuid) else {
+                return "exact UUID disappeared from the online list"
+            }
+            guard !observation.virtualUUIDs.contains(uuid) else {
+                return "virtual displays cannot be physically disconnected"
+            }
+            guard observation.intentionalDisconnectedUUIDs.contains(uuid) else {
+                return "UUID-scoped recovery state was not retained"
+            }
+            guard observation.activePhysicalViewableUUIDs.contains(uuid),
+                  observation.activePhysicalViewableUUIDs.count > 1 else {
+                return "disconnect would leave no physical viewable display"
+            }
+        case .connected:
+            guard observation.intentionalDisconnectedUUIDs.contains(uuid) else {
+                return "UUID is absent from intentional-disconnected records"
+            }
+            guard !observation.onlineUUIDs.contains(uuid) else {
+                return "exact UUID is already online"
+            }
+            guard !observation.virtualUUIDs.contains(uuid) else {
+                return "virtual displays cannot use physical reconnect"
+            }
+        }
+        return nil
+    }
+
+    private func resolveControlDisplayIDs(uuid: String) throws -> [CGDirectDisplayID] {
+        try controlAllDisplayIDs().filter { stableUUID(for: $0) == uuid }
+    }
+
+    private func controlAllDisplayIDs() throws -> [CGDirectDisplayID] {
+        var count: UInt32 = 0
+        let countError = SLSGetDisplayList(0, nil, &count)
+        guard countError == .success else { throw ControlEnumerationError.fullListFailed(countError) }
+        guard count > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        let listError = SLSGetDisplayList(count, &ids, &count)
+        guard listError == .success else { throw ControlEnumerationError.fullListFailed(listError) }
+        return Array(ids.prefix(Int(count)))
+    }
+
+    private func controlOnlineDisplayIDs() throws -> [CGDirectDisplayID] {
+        var count: UInt32 = 0
+        let countError = CGGetOnlineDisplayList(0, nil, &count)
+        guard countError == .success else { throw ControlEnumerationError.onlineListFailed(countError) }
+        guard count > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        let listError = CGGetOnlineDisplayList(count, &ids, &count)
+        guard listError == .success else { throw ControlEnumerationError.onlineListFailed(listError) }
+        return Array(ids.prefix(Int(count)))
+    }
+
+    private func controlActiveDisplayIDs() throws -> [CGDirectDisplayID] {
+        var count: UInt32 = 0
+        let countError = CGGetActiveDisplayList(0, nil, &count)
+        guard countError == .success else { throw ControlEnumerationError.activeListFailed(countError) }
+        guard count > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        let listError = CGGetActiveDisplayList(count, &ids, &count)
+        guard listError == .success else { throw ControlEnumerationError.activeListFailed(listError) }
+        return Array(ids.prefix(Int(count)))
+    }
+
+    private func persistDisconnectedForControl() throws {
+        let data = try JSONEncoder().encode(disconnected)
+        UserDefaults.standard.set(data, forKey: desiredKey)
+        guard let stored = UserDefaults.standard.data(forKey: desiredKey),
+              let decoded = try? JSONDecoder().decode([DisconnectedDisplay].self, from: stored),
+              decoded == disconnected else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+    }
+
+}
+
+// MARK: - Disconnect / Reconnect
+
+extension PhysicalDisplayToggleService {
     /// Disconnects a physical display and records a snapshot for later reconnect. Refuses if it
     /// would leave zero active displays, so the user can never black out their only screen.
     @discardableResult
     func disconnect(_ display: DisplayInfo) async -> Result<Void, ToggleError> {
         guard isSupported else { return .failure(.unsupportedPlatform) }
-        let displayID = display.displayID
-        if wouldLeaveNoActiveDisplay(displayID) { return .failure(.wouldLeaveNoActiveDisplay) }
+        guard let exactUUID = stableUUID(for: display.displayID) else {
+            return .failure(.displayNotFound)
+        }
+        guard let initialDisplayID = resolveUniqueCurrentID(uuid: exactUUID),
+              initialDisplayID == display.displayID else {
+            return .failure(.displayNotFound)
+        }
+        guard isHardwareBackedPhysicalDisplay(initialDisplayID) else {
+            return .failure(.hardwareBackingUnproven)
+        }
+        if wouldLeaveNoActiveDisplay(initialDisplayID) {
+            return .failure(.wouldLeaveNoActiveDisplay)
+        }
 
         // Snapshot BEFORE disabling, afterwards the display is gone from the normal APIs.
         let snapshot = DisconnectedDisplay(
-            uuid: display.displayUUID,
-            displayID: displayID,
+            uuid: exactUUID,
+            displayID: initialDisplayID,
             name: display.name,
             width: display.pixelWidth,
             height: display.pixelHeight
         )
 
-        let result = await setEnabled(false, displayID: displayID)
-        if case .success = result {
+        let previousRecords = disconnected
+        let previousPending = pendingControlDisconnectUUIDs()
+        var preparedPending = previousPending
+        preparedPending.insert(snapshot.uuid)
+        do {
+            try persistPendingControlDisconnectUUIDs(preparedPending)
             disconnected.removeAll { $0.uuid == snapshot.uuid }
             disconnected.append(snapshot)
-            saveDesired()
+            try persistDisconnectedForControl()
+        } catch {
+            restorePreparedDisconnect(records: previousRecords, pending: previousPending)
+            return .failure(.configurationFailed(.failure))
         }
-        return result
+        guard !Task.isCancelled else {
+            restorePreparedDisconnect(records: previousRecords, pending: previousPending)
+            return .failure(.configurationFailed(.failure))
+        }
+        guard let finalDisplayID = resolveUniqueCurrentID(uuid: exactUUID),
+              finalDisplayID == display.displayID else {
+            restorePreparedDisconnect(records: previousRecords, pending: previousPending)
+            return .failure(.displayNotFound)
+        }
+        guard isHardwareBackedPhysicalDisplay(finalDisplayID) else {
+            restorePreparedDisconnect(records: previousRecords, pending: previousPending)
+            return .failure(.hardwareBackingUnproven)
+        }
+        guard !wouldLeaveNoActiveDisplay(finalDisplayID) else {
+            restorePreparedDisconnect(records: previousRecords, pending: previousPending)
+            return .failure(.wouldLeaveNoActiveDisplay)
+        }
+
+        switch await setEnabledOutcome(false, displayID: finalDisplayID) {
+        case .completed:
+            guard await verifyDisconnected(uuid: snapshot.uuid) else {
+                return .failure(.outcomeIndeterminate)
+            }
+            do {
+                try confirmDisconnectedRecord(uuid: snapshot.uuid)
+                return .success(())
+            } catch {
+                return .failure(.outcomeIndeterminate)
+            }
+        case let .rejectedBeforeDispatch(error):
+            restorePreparedDisconnect(records: previousRecords, pending: previousPending)
+            return .failure(.configurationFailed(error))
+        case .failedAfterDispatch, .timedOut, .cancelled:
+            return .failure(.outcomeIndeterminate)
+        }
+    }
+
+    private func restorePreparedDisconnect(
+        records: [DisconnectedDisplay],
+        pending: Set<String>
+    ) {
+        disconnected = records
+        try? persistDisconnectedForControl()
+        try? persistPendingControlDisconnectUUIDs(pending)
     }
 
     /// Reconnects a previously disconnected display and drops it from the disconnected set.
     @discardableResult
     func reconnect(uuid: String) async -> Result<Void, ToggleError> {
         guard isSupported else { return .failure(.unsupportedPlatform) }
+        guard isExactControlUUID(uuid) else {
+            return .failure(.displayNotFound)
+        }
         guard let record = disconnected.first(where: { $0.uuid == uuid }) else {
             return .failure(.displayNotFound)
         }
         // The CGDirectDisplayID can be reassigned; re-resolve by UUID against the full list.
-        let targetID = resolveCurrentID(for: record) ?? record.displayID
+        guard let targetID = resolveUniqueCurrentID(for: record) else {
+            return .failure(.displayNotFound)
+        }
+        guard isHardwareBackedPhysicalDisplay(targetID) else {
+            return .failure(.hardwareBackingUnproven)
+        }
         let result = await setEnabled(true, displayID: targetID)
-        if case .success = result {
-            disconnected.removeAll { $0.uuid == uuid }
-            saveDesired()
+        guard case .success = result else { return result }
+        guard await verifyBackOnline(uuid: uuid) else {
+            return .failure(.configurationFailed(.failure))
+        }
+        do {
+            try removeDisconnectedRecord(uuid: uuid)
+        } catch {
+            return .failure(.configurationFailed(.failure))
         }
         return result
     }
 
     /// Finds the current CGDirectDisplayID for a disconnected record by matching its UUID
     /// across the full (incl. disabled) display list.
-    private func resolveCurrentID(for record: DisconnectedDisplay) -> CGDirectDisplayID? {
-        allDisplaysIncludingDisabled().first { uuid(for: $0) == record.uuid }
+    private func resolveUniqueCurrentID(for record: DisconnectedDisplay) -> CGDirectDisplayID? {
+        resolveUniqueCurrentID(uuid: record.uuid)
+    }
+
+    private func resolveUniqueCurrentID(uuid: String) -> CGDirectDisplayID? {
+        guard isExactControlUUID(uuid) else { return nil }
+        let matches = allDisplaysIncludingDisabled().filter { stableUUID(for: $0) == uuid }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
     }
 
     /// Soft-reconnects a display (disable then re-enable its framebuffer) to force macOS to
@@ -352,22 +911,49 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// `.permanently` is the flag the proven implementations (Lunar BlackOut, screen_tune,
     /// BetterDisplay) use, it commits the change so the disconnect actually takes effect.
     private func setEnabled(_ enabled: Bool, displayID: CGDirectDisplayID) async -> Result<Void, ToggleError> {
-        await CGHelpers.runWithTimeout(seconds: 10, fallback: .failure(.configurationFailed(.failure))) {
+        switch await setEnabledOutcome(enabled, displayID: displayID) {
+        case .completed:
+            return .success(())
+        case let .rejectedBeforeDispatch(error):
+            return .failure(.configurationFailed(error))
+        case .failedAfterDispatch, .timedOut, .cancelled:
+            return .failure(.outcomeIndeterminate)
+        }
+    }
+
+    /// Returns transaction phase truth for automation. Once SLSConfigureDisplayEnabled has
+    /// been invoked, every non-success (including a language-level timeout/cancellation) is
+    /// potentially in flight and must not be represented as a definite safe failure.
+    private func setEnabledOutcome(
+        _ enabled: Bool,
+        displayID: CGDirectDisplayID
+    ) async -> ConfigurationTransactionOutcome {
+        let outcome = await CGHelpers.runWithTimeoutOutcome(
+            seconds: ControlTimeoutPolicy.displayConfigurationTimeout
+        ) {
             var config: CGDisplayConfigRef?
             guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
-                return .failure(.configurationFailed(.failure))
+                return ConfigurationTransactionOutcome.rejectedBeforeDispatch(.failure)
             }
             let setErr = SLSConfigureDisplayEnabled(cfg, displayID, enabled)
             guard setErr == .success else {
                 CGCancelDisplayConfiguration(cfg)
-                return .failure(.configurationFailed(setErr))
+                return ConfigurationTransactionOutcome.failedAfterDispatch(setErr)
             }
             let complete = CGCompleteDisplayConfiguration(cfg, .permanently)
             guard complete == .success else {
                 CGCancelDisplayConfiguration(cfg)
-                return .failure(.configurationFailed(complete))
+                return ConfigurationTransactionOutcome.failedAfterDispatch(complete)
             }
-            return .success(())
+            return ConfigurationTransactionOutcome.completed
+        }
+        switch outcome {
+        case let .completed(transaction):
+            return transaction
+        case .timedOut:
+            return .timedOut
+        case .cancelled:
+            return .cancelled
         }
     }
 
@@ -412,15 +998,23 @@ final class PhysicalDisplayToggleService: ObservableObject {
         return false
     }
 
-    /// Portables enforce Clamshell Sleep the moment no display is active; desktops don't.
-    /// Battery presence is the lid-independent laptop test (the built-in panel can vanish
-    /// from the display lists entirely while the lid is closed, so it can't be the signal).
-    private static let hasBattery: Bool = {
-        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
-        guard service != 0 else { return false }
-        IOObjectRelease(service)
-        return true
-    }()
+    /// Transaction completion is not proof of a disconnect. Require the same UUID to remain
+    /// in the full list while disappearing from the online list within a bounded window.
+    private func verifyDisconnected(uuid displayUUID: String, timeout: TimeInterval = 1.0) async -> Bool {
+        for _ in 0..<max(Int(timeout * 10), 1) {
+            let matches = allDisplaysIncludingDisabled().filter { uuid(for: $0) == displayUUID }
+            if matches.count == 1, let displayID = matches.first,
+               !onlineDisplayIDs().contains(displayID) {
+                return true
+            }
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                return false
+            }
+        }
+        return false
+    }
 
     /// Throwaway virtual display held while blinking a portable's sole active display, so
     /// Clamshell Sleep never sees a zero-display moment (see softReconnect). Registered but
@@ -470,23 +1064,18 @@ final class PhysicalDisplayToggleService: ObservableObject {
         var onlineIDs = [CGDirectDisplayID](repeating: 0, count: Int(onlineCount))
         CGGetOnlineDisplayList(onlineCount, &onlineIDs, &onlineCount)
         let onlineUUIDs = Set(onlineIDs.prefix(Int(onlineCount)).map { uuid(for: $0) })
+        let pending = pendingControlDisconnectUUIDs()
 
         let before = disconnected.count
-        disconnected.removeAll { onlineUUIDs.contains($0.uuid) }
+        disconnected.removeAll { onlineUUIDs.contains($0.uuid) && !pending.contains($0.uuid) }
         if disconnected.count != before { saveDesired() }
     }
-
-    /// Guards against overlapping recovery runs from reconfiguration-callback bursts, same
-    /// as restoreInFlight below for restoreIfNoActiveDisplay.
-    private var strandedRecoveryInFlight = false
 
     /// Sleep guard parked by a softReconnect whose display never verifiably returned (see
     /// its retry-exhausted path): holding it keeps a lid-closed portable awake so the
     /// marker/recovery cadence can keep retrying instead of the machine sleeping on a
     /// stranded display. Released by recovery once every marked display is resolved, or
     /// adopted by the next blink (the fixed identity can't be created twice).
-    private var lingeringSleepGuard: CGVirtualDisplay?
-
     /// Recovery for softReconnects that never finished: if the app died (crash, force-quit)
     /// between disabling a display and a successful re-enable, the markers softReconnect
     /// left behind name exactly the stranded displays. Called from
@@ -550,9 +1139,6 @@ final class PhysicalDisplayToggleService: ObservableObject {
         }
     }
 
-    /// Guards against overlapping restore attempts from reconfiguration-callback bursts.
-    private var restoreInFlight = false
-
     /// Called on every display-list refresh. The guard in disconnect() can't stop a physical
     /// unplug: with the internal disabled via Crisp and the external cable pulled, zero active
     /// displays remain and macOS does NOT re-enable the disabled one, every screen stays black.
@@ -561,46 +1147,114 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// wake/replug storms, so a monitor that comes right back keeps the disconnect intact.
     func restoreIfNoActiveDisplay() {
         guard isSupported, !disconnected.isEmpty, !restoreInFlight else { return }
-        guard physicalActiveDisplayCount() == 0 else { return }
+        guard PhysicalDisplaySafetyPolicy.authorizesEmergencyRecovery(
+            activePhysicalDisplayCount: physicalActiveDisplayCount()
+        ) else { return }
         restoreInFlight = true
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard let self else { return }
             defer { self.restoreInFlight = false }
-            guard self.physicalActiveDisplayCount() == 0 else { return }
-            // In the placeholder-display state SLSGetDisplayList shrinks to just
-            // the placeholder (verified live), so records that fail to resolve
-            // must fall back to their last-known ID rather than being dropped:
-            // SLSConfigureDisplayEnabled still honors a stale ID for attached
-            // hardware, while detached hardware fails at
-            // CGCompleteDisplayConfiguration (error 1001) and the loop moves on.
-            // Prefer the built-in panel when the ID still classifies; stale IDs
-            // answer CGDisplayIsBuiltin with garbage, which sorts as non-builtin.
-            let candidates = self.disconnected
-                .map { record in (record, self.resolveCurrentID(for: record) ?? record.displayID) }
-                .sorted { CGDisplayIsBuiltin($0.1) == 1 && CGDisplayIsBuiltin($1.1) != 1 }
-            for (record, _) in candidates {
-                if case .success = await self.reconnect(uuid: record.uuid) { return }
-            }
+            guard PhysicalDisplaySafetyPolicy.authorizesEmergencyRecovery(
+                activePhysicalDisplayCount: self.physicalActiveDisplayCount()
+            ) else { return }
+            await self.recoverAnyViewableDisplayEmergencyOnly()
         }
+    }
+
+    /// Last-known display IDs are permitted only after the settled zero-viewable-screen guard.
+    /// Enabling an ID proves only that some screen may be viewable; it does not prove record
+    /// identity. UUID-scoped records are removed only after fresh same-UUID online truth.
+    private func recoverAnyViewableDisplayEmergencyOnly() async {
+        guard PhysicalDisplaySafetyPolicy.authorizesEmergencyRecovery(
+            activePhysicalDisplayCount: physicalActiveDisplayCount()
+        ) else { return }
+        // In the placeholder-display state SLSGetDisplayList can shrink to just the
+        // placeholder. SLS may still honor the last-known ID of attached hardware.
+        let candidates = disconnected
+            .map { record in (record, resolveUniqueCurrentID(for: record) ?? record.displayID) }
+            .sorted { lhs, rhs in
+                let lhsIsBuiltin = CGDisplayIsBuiltin(lhs.1) == 1
+                let rhsIsBuiltin = CGDisplayIsBuiltin(rhs.1) == 1
+                return lhsIsBuiltin == rhsIsBuiltin ? lhs.0.uuid < rhs.0.uuid : lhsIsBuiltin
+            }
+        guard let (record, targetID) = candidates.first else { return }
+        guard PhysicalDisplaySafetyPolicy.authorizesEmergencyRecovery(
+            activePhysicalDisplayCount: physicalActiveDisplayCount()
+        ) else { return }
+        let result = await setEnabled(true, displayID: targetID)
+        guard case .success = result else { return }
+        guard await verifyBackOnline(uuid: record.uuid) else { return }
+        try? removeDisconnectedRecord(uuid: record.uuid)
+    }
+
+    private func uniqueOnlineDisplayIDsByUUID() -> [String: CGDirectDisplayID]? {
+        var onlineCount: UInt32 = 0
+        guard CGGetOnlineDisplayList(0, nil, &onlineCount) == .success else { return nil }
+        guard onlineCount > 0 else { return [:] }
+        var onlineIDs = [CGDirectDisplayID](repeating: 0, count: Int(onlineCount))
+        guard CGGetOnlineDisplayList(onlineCount, &onlineIDs, &onlineCount) == .success else {
+            return nil
+        }
+        let candidates = onlineIDs.prefix(Int(onlineCount)).map {
+            (uuid: stableUUID(for: $0), displayID: $0)
+        }
+        return PhysicalDisplaySafetyPolicy.uniqueExactUUIDDisplayIDs(candidates)
+    }
+
+    private func revalidatedWakeTarget(
+        uuid: String,
+        initialDisplayID: CGDirectDisplayID
+    ) -> CGDirectDisplayID? {
+        guard let freshOnlineByUUID = uniqueOnlineDisplayIDsByUUID(),
+              let freshLiveID = freshOnlineByUUID[uuid] else { return nil }
+        guard initialDisplayID == freshLiveID else { return nil }
+        guard !wouldLeaveNoActiveDisplay(freshLiveID) else { return nil }
+        guard isHardwareBackedPhysicalDisplay(freshLiveID) else { return nil }
+        return freshLiveID
     }
 
     /// Re-applies disconnect for displays macOS re-enabled after wake-from-sleep. Called from
     /// AppDelegate.onWake after WindowServer settles.
     func reapplyOnWake() async {
         guard isSupported, !disconnected.isEmpty else { return }
-        var onlineCount: UInt32 = 0
-        CGGetOnlineDisplayList(0, nil, &onlineCount)
-        var onlineIDs = [CGDirectDisplayID](repeating: 0, count: Int(onlineCount))
-        CGGetOnlineDisplayList(onlineCount, &onlineIDs, &onlineCount)
-        let onlineByUUID = Dictionary(uniqueKeysWithValues:
-            onlineIDs.prefix(Int(onlineCount)).map { (uuid(for: $0), $0) })
+        guard let onlineByUUID = uniqueOnlineDisplayIDsByUUID() else { return }
+        let pending = pendingControlDisconnectUUIDs()
 
-        for record in disconnected {
+        for record in disconnected where !pending.contains(record.uuid) {
             // Only re-disconnect ones macOS brought back online, and never the last screen.
-            guard let liveID = onlineByUUID[record.uuid] else { continue }
-            guard !wouldLeaveNoActiveDisplay(liveID) else { continue }
-            _ = await setEnabled(false, displayID: liveID)
+            guard let initialLiveID = onlineByUUID[record.uuid] else { continue }
+            guard isHardwareBackedPhysicalDisplay(initialLiveID) else { continue }
+            guard !wouldLeaveNoActiveDisplay(initialLiveID) else { continue }
+            var preparedPending = pendingControlDisconnectUUIDs()
+            preparedPending.insert(record.uuid)
+            do {
+                try persistPendingControlDisconnectUUIDs(preparedPending)
+            } catch {
+                continue
+            }
+            guard !Task.isCancelled else {
+                try? confirmDisconnectedRecord(uuid: record.uuid)
+                return
+            }
+            guard let freshLiveID = revalidatedWakeTarget(
+                uuid: record.uuid,
+                initialDisplayID: initialLiveID
+            ) else {
+                try? confirmDisconnectedRecord(uuid: record.uuid)
+                continue
+            }
+            switch await setEnabledOutcome(false, displayID: freshLiveID) {
+            case .completed:
+                if await verifyDisconnected(uuid: record.uuid) {
+                    try? confirmDisconnectedRecord(uuid: record.uuid)
+                }
+            case .rejectedBeforeDispatch:
+                try? confirmDisconnectedRecord(uuid: record.uuid)
+            case .failedAfterDispatch, .timedOut, .cancelled:
+                // Keep the marker: no wake retry or reconciliation may erase recovery state.
+                break
+            }
         }
     }
 

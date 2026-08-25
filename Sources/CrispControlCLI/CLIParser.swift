@@ -82,7 +82,17 @@ public struct CLIParser: Sendable {
     }
 
     private func parseDisplayCommand(_ positional: [String]) -> ParsedCommand? {
+        if positional == ["displays", "disconnected"] {
+            return ParsedCommand(command: "displays.disconnected")
+        }
         guard positional.count == 3, positional[0] == "displays" else { return nil }
+        if positional[1] == "disconnect" || positional[1] == "reconnect" {
+            guard ControlRequest.isExactDisplayUUID(positional[2]) else { return nil }
+            return ParsedCommand(
+                command: "displays.\(positional[1])",
+                arguments: ["uuid": .string(positional[2])]
+            )
+        }
         guard positional[1] == "get" || positional[1] == "capabilities" else { return nil }
         return ParsedCommand(
             command: "displays.\(positional[1])",
@@ -173,6 +183,9 @@ Usage:
   crispctl displays list --json [--no-start]
   crispctl displays get <uuid|main|builtin|name> --json [--no-start]
   crispctl displays capabilities <selector> --json [--no-start]
+  crispctl displays disconnected --json [--no-start]
+  crispctl displays disconnect <uuid> --json [--no-start]
+  crispctl displays reconnect <uuid> --json [--no-start]
   crispctl brightness get <selector> --json [--no-start]
   crispctl brightness set <selector> <percent> --json [--no-start]
   crispctl brightness get-all --json [--no-start]

@@ -86,12 +86,29 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         case "brightness.set-all": .brightnessBatch
         case "extra-brightness.set": .extraBrightness
         case "hdr.set": .hdr
+        case "displays.disconnect", "displays.reconnect": .displayConnection
         default:
             command.hasSuffix(".set") || command.hasSuffix(".set-all") ? .unknown : nil
         }
     }
 
     public var isMutating: Bool { mutationKind != nil }
+
+    public var exactDisplayConnectionUUID: String? {
+        guard mutationKind == .displayConnection,
+              case let .string(uuid)? = arguments["uuid"],
+              Self.isExactDisplayUUID(uuid) else { return nil }
+        return uuid
+    }
+
+    public static func isExactDisplayUUID(_ value: String) -> Bool {
+        let characters = Array(value)
+        return value.utf8.count == 36
+            && UUID(uuidString: value) != nil
+            && [8, 13, 18, 23].allSatisfy {
+                characters.indices.contains($0) && characters[$0] == "-"
+            }
+    }
 }
 
 public enum ControlMutationKind: String, Codable, Equatable, Sendable {
@@ -99,6 +116,7 @@ public enum ControlMutationKind: String, Codable, Equatable, Sendable {
     case brightnessBatch = "brightness_batch"
     case extraBrightness = "extra_brightness"
     case hdr
+    case displayConnection = "display_connection"
     /// Conservative fallback for a future set-shaped command omitted from the
     /// explicit inventory: timeout safety must fail closed until CI classifies it.
     case unknown
@@ -107,11 +125,13 @@ public enum ControlMutationKind: String, Codable, Equatable, Sendable {
 public enum ControlCommandInventory {
     public static let dispatcherCommands: Set<String> = [
         "version", "status", "displays.list", "displays.get", "displays.capabilities",
+        "displays.disconnected", "displays.disconnect", "displays.reconnect",
         "brightness.get", "brightness.set", "brightness.get-all", "brightness.set-all",
         "extra-brightness.get", "extra-brightness.set", "hdr.get", "hdr.set"
     ]
     public static let mutatingCommands: Set<String> = [
-        "brightness.set", "brightness.set-all", "extra-brightness.set", "hdr.set"
+        "brightness.set", "brightness.set-all", "extra-brightness.set", "hdr.set",
+        "displays.disconnect", "displays.reconnect"
     ]
 }
 
@@ -201,11 +221,33 @@ public struct ControlResponse: Codable, Equatable, Sendable {
         if request.command == "brightness.set-all" {
             details["target"] = .string("all_physical_displays")
         }
+        if request.mutationKind == .displayConnection {
+            guard let uuid = request.exactDisplayConnectionUUID else {
+                return invalidDisplayConnectionRequest(for: request)
+            }
+            let requestedState = request.command == "displays.reconnect" ? "connected" : "disconnected"
+            details["requestedConnectionState"] = .string(requestedState)
+            details["displayUUID"] = .string(uuid)
+        }
         return .failure(
             requestID: request.requestID,
             code: .writeOutcomeIndeterminate,
             message: "control write timed out; one or more displays may still reach the requested state",
             details: .object(details)
+        )
+    }
+
+    public static func invalidDisplayConnectionRequest(for request: ControlRequest) -> Self {
+        .failure(
+            requestID: request.requestID,
+            code: .invalidArguments,
+            message: "\(request.command) requires an exact UUID in the uuid argument",
+            details: .object([
+                "phase": .string("preflight"),
+                "retrySafe": .bool(true),
+                "mutationDispatched": .bool(false),
+                "command": .string(request.command)
+            ])
         )
     }
 }

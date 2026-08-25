@@ -3,7 +3,9 @@
 `crispctl` is Crisp's versioned, JSON-first automation interface. The CLI never
 talks to display APIs itself: it sends one request over a local Unix-domain
 socket to the running Crisp app, which reuses `DisplayManager` and
-`BrightnessService`.
+the existing app services. Physical connection writes specifically reuse
+`PhysicalDisplayToggleService`; neither the CLI nor the protocol layer calls
+SkyLight/CoreGraphics display-write APIs.
 
 ## Installation and agent discovery
 
@@ -48,6 +50,9 @@ crispctl status --json [--no-start]
 crispctl displays list --json [--no-start]
 crispctl displays get <uuid|main|builtin|name> --json [--no-start]
 crispctl displays capabilities <selector> --json [--no-start]
+crispctl displays disconnected --json [--no-start]
+crispctl displays disconnect <uuid> --json [--no-start]
+crispctl displays reconnect <uuid> --json [--no-start]
 crispctl brightness get <selector> --json [--no-start]
 crispctl brightness set <selector> <percent> --json [--no-start]
 crispctl brightness get-all --json [--no-start]
@@ -58,9 +63,63 @@ crispctl hdr get <selector> --json [--no-start]
 crispctl hdr set <selector> on|off --json [--no-start]
 ```
 
-Display UUID is the stable canonical selector. `main` and `builtin` are
-explicit aliases. Names are case-insensitive conveniences; an ambiguous name
-fails with candidate UUIDs instead of selecting one.
+Display UUID is the stable canonical selector. Read commands and unrelated P0
+writes retain the existing `main`, `builtin`, and case-insensitive name
+conveniences; an ambiguous name fails with candidate UUIDs. Physical connection
+writes accept only the exact UUID form documented below.
+
+## Physical display connection state
+
+This additive P1 source slice is not a claim that Crisp 1.5.0 contains
+`crispctl`, and its headless tests do not perform a real display write. On a
+release/source build that contains the slice, each online display includes a
+`connection` capability with `state`, current `connected` truth,
+`disconnectAllowed`, `reconnectAllowed`, `platformSupported`, and optional
+`reason`/`remediation`. `displays capabilities` includes the same connection
+object.
+
+`displays disconnected` returns only stable automation identities that Crisp
+intentionally disconnected, deterministically sorted by UUID. Each item has
+`uuid`, `name`, `width`, `height`, and its connection capability. A last-known
+`CGDirectDisplayID` is retained privately for the existing recovery machinery
+but is never exposed or accepted as an automation identity.
+
+The safe per-write sequence is:
+
+1. Obtain explicit user authorization for the exact connection write.
+2. For disconnect, read fresh `displays list` and `displays capabilities`, copy
+   the exact `uuid` without normalization, then run `displays disconnect <uuid>`.
+   Names, `main`, `builtin`, legacy `selector` arguments, and non-UUID values
+   fail before inventory work or mutation. The app re-resolves that exact UUID
+   immediately before dispatch and never switches targets.
+3. For reconnect, read a fresh `displays disconnected` inventory and copy the
+   exact `uuid` without normalization into `displays reconnect <uuid>`. Names,
+   `main`, `builtin`, missing/collapsed records, stale IDs, and UUIDs absent from
+   that fresh response fail before mutation.
+
+Connection writes fail closed unless the existing platform gate proves Apple
+Silicon and macOS 13 or later and the target has positive hardware-backed
+physical proof: a built-in panel or an external display with an IOKit
+`IODisplayConnect` service. Crisp virtual displays, third-party virtual
+displays, placeholders, and unknown or unprovable targets are excluded and
+cannot count as the other viewable display. Disconnect must leave another
+positively proven active physical viewable display. This does not equate DDC
+support with physicality. A transaction return alone is not proof. Success
+requires bounded same-UUID enumeration:
+disconnect proves the UUID offline while its intentional record remains;
+reconnect proves it online and then proves the intentional record absent.
+Success reports `displayUUID`, `requestedConnectionState`,
+`observedConnectionState`, `verification: same_uuid_enumeration`, and
+`warnings`.
+
+After dispatch, a service/transport timeout, cancellation, configuration
+failure, identity loss, or late/non-settling enumeration returns
+`write_outcome_indeterminate`, exit code 5, and `retrySafe: false`. The
+response includes the exact `displayUUID`, requested connection state, and
+command. WindowServer may still finish. Never automatically retry. Read a
+fresh `displays list` and `displays disconnected`, let same-UUID reconciliation
+finish, explain the observed state, and obtain a fresh user decision before any
+later write.
 
 If Crisp is unavailable, the CLI normally resolves and launches the registered
 `com.crisp.app` bundle, verifies that bundle identity, and polls socket readiness
@@ -167,7 +226,8 @@ display payloads decode with defaults for the new capability fields; existing
 field names, types, and exit categories remain unchanged.
 
 All mutating commands (`brightness set`, `brightness set-all`,
-`extra-brightness set`, and `hdr set`) use this indeterminate contract. Batch
+`extra-brightness set`, `hdr set`, `displays disconnect`, and
+`displays reconnect`) use this indeterminate contract. Batch
 timeouts identify `all_physical_displays`; selector writes include the selector
 and target. Read current state before seeking a new user-authorized decision.
 
@@ -199,11 +259,12 @@ swift build --disable-sandbox --product crispctl
 ```
 
 The round-trip script starts a separate fixture host process, exercises list,
-status, all P0 get/set commands, >100 logical state, batch behavior, and verified
-read-back through the real socket, then
+status, all P0 get/set commands, >100 logical state, batch behavior, plus
+disconnected list -> fixture disconnect -> retained record -> exact-UUID
+reconnect -> empty list through the real socket, then
 removes the process and socket. It contains the only hardcoded display fixture;
 production discovery always comes from Crisp's live `DisplayManager`.
 
-External DDC hardware, real app launch/readiness, and real brightness writes
-require separately authorized host validation and are not exercised by the
-headless suite.
+External DDC hardware, real app launch/readiness, real brightness writes, and
+real physical display disconnect/reconnect require separately authorized host
+validation and are not exercised by the headless suite.

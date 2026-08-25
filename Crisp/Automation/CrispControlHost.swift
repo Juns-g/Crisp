@@ -30,6 +30,9 @@ private final class CrispControlAppService: ControlCommandService, @unchecked Se
         displayManager.displays.map { display in
             let boost = BrightnessBoostService.shared
             let isVirtual = VirtualDisplayService.shared.isVirtualDisplay(display.displayID)
+            let connection = PhysicalDisplayToggleService.shared.connectionCapabilityForControl(
+                display
+            )
             let extraBrightness = extraBrightnessCapability(for: display, isVirtual: isVirtual)
             let hdr = hdrCapability(for: display, isVirtual: isVirtual)
             let logicalMax = boost.isEnabled(for: display) && boost.isEligible(display)
@@ -79,9 +82,30 @@ private final class CrispControlAppService: ControlCommandService, @unchecked Se
                 brightness: capability,
                 brightnessPercent: display.brightness,
                 extraBrightness: extraBrightness,
-                hdr: hdr
+                hdr: hdr,
+                connection: connection
             )
         }.sorted { $0.uuid < $1.uuid }
+    }
+
+    func disconnectedDisplays() async throws -> [ControlDisconnectedDisplay] {
+        try PhysicalDisplayToggleService.shared.disconnectedDisplaysForControl()
+    }
+
+    func disconnectDisplay(displayUUID: String) async throws -> DisplayConnectionSetResult {
+        guard let display = displayManager.displays.first(where: { $0.displayUUID == displayUUID }) else {
+            throw DisplayConnectionMutationError(
+                classification: .preflightRejected,
+                displayUUID: displayUUID,
+                requestedConnectionState: .disconnected,
+                message: "exact UUID disappeared before the app service could re-resolve it"
+            )
+        }
+        return try await PhysicalDisplayToggleService.shared.disconnectForControl(display)
+    }
+
+    func reconnectDisplay(displayUUID: String) async throws -> DisplayConnectionSetResult {
+        try await PhysicalDisplayToggleService.shared.reconnectForControl(uuid: displayUUID)
     }
 
     func readBrightness(displayUUID: String) async throws -> Double? {

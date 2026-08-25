@@ -104,6 +104,63 @@ class CrispctlSkillPackageTests(unittest.TestCase):
         self.assertRegex(lower, r"missing|unsupported")
         self.assertIn("P1/P2", text)
 
+    def test_display_connection_skill_contract_is_fail_closed_and_per_write_authorized(self):
+        documents = (README, CRISPCTL_DOCS, SKILL)
+        for path in documents:
+            with self.subTest(path=path):
+                text = path.read_text()
+                for command in (
+                    "displays disconnected",
+                    "displays disconnect <uuid>",
+                    "displays reconnect <uuid>",
+                ):
+                    self.assertIn(command, text)
+                self.assertNotIn("displays disconnect <selector>", text)
+
+        normalized_skill = " ".join(SKILL.read_text().split()).lower()
+        for required in (
+            "explicit user authorization for each display connection write",
+            "fresh `displays disconnected` inventory",
+            "exact uuid",
+            "disconnect accepts only an exact uuid",
+            "names, `main`, and `builtin` are not accepted for disconnect",
+            "apple silicon",
+            "macos 13",
+            "physical displays only",
+            "positive hardware-backed physical proof",
+            "last active physical viewable display",
+            "write_outcome_indeterminate",
+            "every connection timeout includes the exact `displayuuid`",
+            "read-reconcile-fresh-decision",
+            "no automatic retry",
+        ):
+            self.assertIn(required, normalized_skill)
+
+        docs = CRISPCTL_DOCS.read_text()
+        for field in (
+            "disconnectAllowed",
+            "reconnectAllowed",
+            "platformSupported",
+            "requestedConnectionState",
+            "observedConnectionState",
+            "same_uuid_enumeration",
+        ):
+            self.assertIn(field, docs)
+
+        en = COMPARE_EN.read_text()
+        zh = COMPARE_ZH.read_text()
+        self.assertIn("displays disconnected/disconnect/reconnect", en)
+        self.assertIn("P1 source target", en)
+        self.assertIn("exact-UUID writes and positive hardware-backed physical proof", en)
+        self.assertNotIn(
+            "Resolution, presets, arrangement, disconnect, virtual displays, and other settings",
+            en,
+        )
+        self.assertIn("displays disconnected/disconnect/reconnect", zh)
+        self.assertIn("P1 源码目标", zh)
+        self.assertIn("精确 UUID 写入与正向硬件物理显示器证明", zh)
+        self.assertNotIn("分辨率、预设、排列、断开、虚拟显示器及其他设置", zh)
+
     def test_skill_uses_conventional_cross_agent_installer(self):
         text = SKILL.read_text()
 

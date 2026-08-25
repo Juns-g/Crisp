@@ -208,7 +208,8 @@
           <tr><th>亮度（含 Extra Brightness 实时范围）</th><td><code>brightness get/set</code><br><code>extra-brightness get/set</code></td><td class="c"><span class="yes">✓</span> P0 源码目标</td></tr>
           <tr><th>外接屏 HDR 开关</th><td><code>hdr get/set</code></td><td class="c"><span class="yes">✓</span> P0 源码目标；仅 GUI 本身提供开关时可写，内建屏不伪造 HDR 开关</td></tr>
           <tr><th>全部物理显示器</th><td><code>brightness get-all</code><br><code>brightness set-all</code></td><td class="c"><span class="yes">✓</span> P0 源码目标；每台使用相同逻辑百分比</td></tr>
-          <tr><th>分辨率、预设、排列、断开、虚拟显示器及其他设置</th><td>—</td><td class="c">仍仅限 GUI；P1/P2 尚未实现</td></tr>
+          <tr><th>物理显示器断开 / 重连</th><td><code>displays disconnected/disconnect/reconnect</code></td><td class="c"><span class="yes">✓</span> P1 源码目标；精确 UUID 写入与正向硬件物理显示器证明，本次未做真实硬件验证</td></tr>
+          <tr><th>分辨率、预设、排列、虚拟显示器及其他设置</th><td>—</td><td class="c">仍仅限 GUI；其余 P1/P2 尚未实现</td></tr>
         </tbody>
       </table>
     </div>

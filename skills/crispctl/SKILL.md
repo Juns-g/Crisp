@@ -20,21 +20,25 @@ metadata:
 ## When to Use
 
 Use this Skill to discover displays, inspect Crisp-supported capabilities, or
-perform an explicitly requested P0 brightness, Extra Brightness, or external
-HDR read/write through Crisp's
+perform an explicitly requested P0 brightness, Extra Brightness, external HDR,
+or P1 physical-display connection read/write through Crisp's
 versioned JSON interface. Do not substitute macOS display APIs or another
 display CLI: Crisp must remain the owner of display state.
 
-Only discovery and P0 brightness/Extra Brightness/external-HDR operations are
-supported. Do not emulate modes, arrangement, presets, disconnects, virtual
-displays, or any P1/P2 operation.
-These remain Tier 2/3 operations outside this Skill.
+Discovery, P0 brightness/Extra Brightness/external-HDR, and the fail-closed P1
+physical disconnect/reconnect slice are supported. Do not emulate modes,
+arrangement, presets, virtual displays, or any other P1/P2 operation. These
+remain Tier 2/3 operations outside this Skill.
 The HDR toggle is for eligible external displays only. Built-in HDR is not a
 write surface; use Extra Brightness when its live capability is writable.
 
 ## Prerequisites
 
 - Run on macOS 14 or later with a Crisp release that includes `crispctl`.
+- Physical disconnect/reconnect uses the existing Apple Silicon and macOS 13+
+  service gate. It is for physical displays only and requires positive
+  hardware-backed physical proof; third-party virtual, placeholder, and
+  unknown/unprovable displays must remain read-only/unsupported.
 - Public installs gain `crispctl` only with the first Crisp release that
   contains this distribution change. Crisp 1.5.0 does not contain the bundled
   CLI. Source checkout users can build it.
@@ -128,7 +132,24 @@ Use only `--json` responses for automation. Follow this procedure:
    `"${CRISPCTL}" brightness set-all <percent> --json`. The percent is the same
    logical value per display, not a normalized fraction.
    Batch writes are non-atomic: hardware members cannot be rolled back safely.
-7. If the user forbids launching Crisp, append `--no-start` to the command.
+7. Physical connection discovery uses
+   `"${CRISPCTL}" displays disconnected --json`. Disconnect uses
+   `"${CRISPCTL}" displays disconnect <uuid> --json` only after a fresh
+   `displays list` plus `displays capabilities` response says the connection
+   capability is writable and `disconnectAllowed: true`. Disconnect accepts
+   only an exact UUID copied without normalization from that fresh response.
+   Names, `main`, and `builtin` are not accepted for disconnect. Crisp
+   re-resolves the same UUID immediately before the write and must never switch
+   targets.
+8. Reconnect requires a fresh `displays disconnected` inventory. Copy its exact
+   UUID without normalization into
+   `"${CRISPCTL}" displays reconnect <uuid> --json`. Never use a name, `main`,
+   `builtin`, a stale/collapsed record, or a last-known numeric display ID.
+9. Obtain explicit user authorization for each display connection write. The
+   authorization must identify disconnect/reconnect, the exact UUID resolved
+   from fresh inventory, and the intended connection state. Never infer one
+   authorization from an earlier write or from a read request.
+10. If the user forbids launching Crisp, append `--no-start` to the command.
    Otherwise `crispctl` may use its bounded bundle-ID launch/readiness policy.
 
 ## Pitfalls
@@ -137,6 +158,13 @@ Use only `--json` responses for automation. Follow this procedure:
   guess a display.
 - Treat `unsupported_capability`, `permission_required`, unavailable read-back,
   warnings, and remediation text as real constraints rather than success.
+- Connection capability must prove Apple Silicon/macOS 13+ support, a stable
+  UUID, and positive hardware-backed physical proof. A built-in panel is
+  positive proof; an external requires an IOKit `IODisplayConnect` service.
+  Crisp virtual, third-party virtual, placeholder, and unknown/unprovable
+  displays do not count. Disconnect must also prove that it will not remove the
+  last active physical viewable display. Any failed gate stops before mutation;
+  do not bypass it with another display tool.
 - A `write_outcome_indeterminate` response means an in-flight hardware callback
   may still apply; do not retry it automatically. There is no automatic retry.
   Read back the selected display,
@@ -144,7 +172,14 @@ Use only `--json` responses for automation. Follow this procedure:
   decision before any later write.
 - Apply that same `write_outcome_indeterminate`, `retrySafe:false`, read-back,
   and fresh-user-decision rule to brightness, Extra Brightness, external HDR,
-  and batch mutations. The cleanup-only exception does not change
+  display connection, and batch mutations. For display connection, use the
+  explicit read-reconcile-fresh-decision rule: read both `displays list` and
+  `displays disconnected`, reconcile only same-UUID truth, then seek a fresh
+  authorized decision. Never automatically retry disconnect or reconnect.
+  Every connection timeout includes the exact `displayUUID`, command, requested
+  state, exit code 5, and `retrySafe:false`; a response missing that identity is
+  not safe to reconcile or retry.
+  The cleanup-only exception does not change
   `write_outcome_indeterminate`, `retrySafe: false`, separate read-back, fresh
   user decision, or no automatic retry rules.
 - If Extra Brightness disable returns `ok: true` with
@@ -176,3 +211,10 @@ For a successful brightness write, inspect `verification`, `readbackPercent`,
 hardware-authoritative proof of EDR output. If the outcome is indeterminate, the only
 safe verification is a separate read followed by a fresh user decision; an
 automatic retry is forbidden.
+
+For successful display connection writes, require the exact `displayUUID`, the
+authorized `requestedConnectionState`, matching `observedConnectionState`,
+`verification: same_uuid_enumeration`, and reviewed `warnings`. Transaction
+return alone is not proof. On `write_outcome_indeterminate`, exit code 5, or
+`retrySafe:false`, report that WindowServer may still complete, perform the
+read-reconcile-fresh-decision flow above, and make no automatic retry.

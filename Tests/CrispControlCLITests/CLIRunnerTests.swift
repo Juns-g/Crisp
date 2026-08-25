@@ -90,6 +90,22 @@ final class CLIRunnerTests: XCTestCase {
     func testEveryP0MutationTimeoutIsIndeterminateWithTargetAndNoRetry() {
         let cases: [MutationTimeoutCase] = [
             MutationTimeoutCase(
+                command: "displays.disconnect",
+                arguments: [
+                    "uuid": .string("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")
+                ],
+                targetKey: "requestedConnectionState",
+                targetValue: .string("disconnected")
+            ),
+            MutationTimeoutCase(
+                command: "displays.reconnect",
+                arguments: [
+                    "uuid": .string("BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")
+                ],
+                targetKey: "requestedConnectionState",
+                targetValue: .string("connected")
+            ),
+            MutationTimeoutCase(
                 command: "extra-brightness.set",
                 arguments: ["selector": .string("uuid-a"), "enabled": .bool(true)],
                 targetKey: "targetEnabled",
@@ -129,6 +145,8 @@ final class CLIRunnerTests: XCTestCase {
             )
             if testCase.command == "brightness.set-all" {
                 XCTAssertEqual(result.response.error?.details?["target"], .string("all_physical_displays"))
+            } else if testCase.command.hasPrefix("displays.") {
+                XCTAssertNotNil(result.response.error?.details?["displayUUID"])
             } else {
                 XCTAssertNotNil(result.response.error?.details?["selector"])
             }

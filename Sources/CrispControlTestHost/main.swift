@@ -2,14 +2,17 @@ import Darwin
 import Foundation
 import CrispControlCore
 
+private let fixtureExternalUUID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+
 private actor FixtureService: ControlCommandService {
-    private var brightness = ["fixture-built-in": 42.0, "fixture-external": 48.0]
+    private var brightness = ["fixture-built-in": 42.0, fixtureExternalUUID: 48.0]
     private var boostEnabled = false
     private var hdrEnabled = true
+    private var externalConnected = true
 
     func displays() async throws -> [ControlDisplay] {
         let builtinMax = boostEnabled ? 150.0 : 100.0
-        return [
+        var displays = [
             ControlDisplay(
                 uuid: "fixture-built-in", name: "Fixture Built-in", isMain: true, isBuiltin: true,
                 brightness: BrightnessCapability(
@@ -28,26 +31,91 @@ private actor FixtureService: ControlCommandService {
                 hdr: .unsupported(
                     reason: "built-in displays do not expose an HDR preference toggle",
                     remediation: "use Extra Brightness when eligible"
-                )
-            ),
-            ControlDisplay(
-                uuid: "fixture-external", name: "Fixture External", isMain: false, isBuiltin: false,
-                brightness: BrightnessCapability(
-                    state: .writable, backend: .software,
-                    range: ControlRange(min: 0, max: 100, precision: 1), readback: .unavailable
                 ),
-                brightnessPercent: brightness["fixture-external"],
-                extraBrightness: .unsupported(reason: "fixture external boost is unavailable"),
-                hdr: HDRCapability(state: .writable, enabled: hdrEnabled)
+                connection: .unsupported(
+                    connected: true,
+                    platformSupported: true,
+                    reason: "fixture built-in is reserved as the remaining viewable display"
+                )
             )
         ]
+        if externalConnected {
+            displays.append(
+                ControlDisplay(
+                    uuid: fixtureExternalUUID,
+                    name: "Fixture External",
+                    isMain: false,
+                    isBuiltin: false,
+                    brightness: BrightnessCapability(
+                        state: .writable, backend: .software,
+                        range: ControlRange(min: 0, max: 100, precision: 1), readback: .unavailable
+                    ),
+                    brightnessPercent: brightness[fixtureExternalUUID],
+                    extraBrightness: .unsupported(reason: "fixture external boost is unavailable"),
+                    hdr: HDRCapability(state: .writable, enabled: hdrEnabled),
+                    connection: DisplayConnectionCapability(
+                        state: .writable,
+                        connected: true,
+                        disconnectAllowed: true,
+                        reconnectAllowed: false,
+                        platformSupported: true,
+                        reason: "fixture built-in remains viewable"
+                    )
+                )
+            )
+        }
+        return displays
+    }
+
+    func disconnectedDisplays() async throws -> [ControlDisconnectedDisplay] {
+        guard !externalConnected else { return [] }
+        return [ControlDisconnectedDisplay(
+            uuid: fixtureExternalUUID,
+            name: "Fixture External",
+            width: 2560,
+            height: 1440,
+            connection: DisplayConnectionCapability(
+                state: .writable,
+                connected: false,
+                disconnectAllowed: false,
+                reconnectAllowed: true,
+                platformSupported: true,
+                reason: "fixture exact UUID is intentionally disconnected"
+            )
+        )]
+    }
+
+    func disconnectDisplay(displayUUID: String) async throws -> DisplayConnectionSetResult {
+        guard displayUUID == fixtureExternalUUID, externalConnected else {
+            throw DisplayConnectionMutationError(
+                classification: .preflightRejected,
+                displayUUID: displayUUID,
+                requestedConnectionState: .disconnected,
+                message: "fixture external UUID is not online"
+            )
+        }
+        externalConnected = false
+        return connectionResult(state: .disconnected)
+    }
+
+    func reconnectDisplay(displayUUID: String) async throws -> DisplayConnectionSetResult {
+        guard displayUUID == fixtureExternalUUID, !externalConnected else {
+            throw DisplayConnectionMutationError(
+                classification: .preflightRejected,
+                displayUUID: displayUUID,
+                requestedConnectionState: .connected,
+                message: "fixture UUID is absent from disconnected inventory"
+            )
+        }
+        externalConnected = true
+        return connectionResult(state: .connected)
     }
 
     func readBrightness(displayUUID: String) async throws -> Double? { brightness[displayUUID] }
 
     func readBrightnessState(displayUUID: String) async throws -> BrightnessReadSnapshot? {
         guard let logical = brightness[displayUUID] else { return nil }
-        let hardware = displayUUID == "fixture-external" ? nil : min(logical, 100)
+        let hardware = displayUUID == fixtureExternalUUID ? nil : min(logical, 100)
         return BrightnessReadSnapshot(logicalPercent: logical, hardwareReadbackPercent: hardware)
     }
 
@@ -73,13 +141,22 @@ private actor FixtureService: ControlCommandService {
     }
 
     func setHDR(displayUUID: String, enabled: Bool) async throws -> HDRSetResult {
-        guard displayUUID == "fixture-external" else {
+        guard displayUUID == fixtureExternalUUID else {
             throw ControlServiceError.unsupported("fixture HDR unsupported")
         }
         hdrEnabled = enabled
         return HDRSetResult(
             capability: HDRCapability(state: .writable, enabled: enabled),
             verification: .verified
+        )
+    }
+
+    private func connectionResult(state: DisplayConnectionState) -> DisplayConnectionSetResult {
+        DisplayConnectionSetResult(
+            displayUUID: fixtureExternalUUID,
+            requestedConnectionState: state,
+            observedConnectionState: state,
+            verification: .sameUUIDEnumeration
         )
     }
 }

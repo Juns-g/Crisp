@@ -181,6 +181,73 @@ public struct HDRCapability: Codable, Equatable, Sendable {
     }
 }
 
+public struct DisplayConnectionCapability: Codable, Equatable, Sendable {
+    public let state: CapabilityState
+    public let connected: Bool
+    public let disconnectAllowed: Bool
+    public let reconnectAllowed: Bool
+    public let platformSupported: Bool
+    public let reason: String?
+    public let remediation: String?
+
+    public init(
+        state: CapabilityState,
+        connected: Bool,
+        disconnectAllowed: Bool,
+        reconnectAllowed: Bool,
+        platformSupported: Bool,
+        reason: String? = nil,
+        remediation: String? = nil
+    ) {
+        self.state = state
+        self.connected = connected
+        self.disconnectAllowed = disconnectAllowed
+        self.reconnectAllowed = reconnectAllowed
+        self.platformSupported = platformSupported
+        self.reason = reason
+        self.remediation = remediation
+    }
+
+    public static func unsupported(
+        connected: Bool,
+        platformSupported: Bool = false,
+        reason: String,
+        remediation: String? = nil
+    ) -> Self {
+        Self(
+            state: .unsupported,
+            connected: connected,
+            disconnectAllowed: false,
+            reconnectAllowed: false,
+            platformSupported: platformSupported,
+            reason: reason,
+            remediation: remediation
+        )
+    }
+}
+
+public struct ControlDisconnectedDisplay: Codable, Equatable, Sendable {
+    public let uuid: String
+    public let name: String
+    public let width: Int
+    public let height: Int
+    public let connection: DisplayConnectionCapability
+
+    public init(
+        uuid: String,
+        name: String,
+        width: Int,
+        height: Int,
+        connection: DisplayConnectionCapability
+    ) {
+        self.uuid = uuid
+        self.name = name
+        self.width = width
+        self.height = height
+        self.connection = connection
+    }
+}
+
 public struct BrightnessReadSnapshot: Codable, Equatable, Sendable {
     public let logicalPercent: Double
     public let hardwareReadbackPercent: Double?
@@ -239,6 +306,7 @@ public struct ControlDisplay: Codable, Equatable, Sendable {
     public let brightnessPercent: Double?
     public let extraBrightness: ExtraBrightnessCapability
     public let hdr: HDRCapability
+    public let connection: DisplayConnectionCapability
 
     public init(
         uuid: String,
@@ -249,7 +317,11 @@ public struct ControlDisplay: Codable, Equatable, Sendable {
         brightness: BrightnessCapability,
         brightnessPercent: Double? = nil,
         extraBrightness: ExtraBrightnessCapability = .unsupported(reason: "Extra Brightness capability is unavailable"),
-        hdr: HDRCapability = .unsupported(reason: "HDR capability is unavailable")
+        hdr: HDRCapability = .unsupported(reason: "HDR capability is unavailable"),
+        connection: DisplayConnectionCapability = .unsupported(
+            connected: true,
+            reason: "display connection capability is unavailable in this response"
+        )
     ) {
         self.uuid = uuid
         self.name = name
@@ -260,9 +332,11 @@ public struct ControlDisplay: Codable, Equatable, Sendable {
         self.brightnessPercent = brightnessPercent
         self.extraBrightness = extraBrightness
         self.hdr = hdr
+        self.connection = connection
     }
     private enum CodingKeys: String, CodingKey {
-        case uuid, name, isMain, isBuiltin, isVirtual, brightness, brightnessPercent, extraBrightness, hdr
+        case uuid, name, isMain, isBuiltin, isVirtual, brightness, brightnessPercent
+        case extraBrightness, hdr, connection
     }
 
     public init(from decoder: Decoder) throws {
@@ -278,6 +352,11 @@ public struct ControlDisplay: Codable, Equatable, Sendable {
             ?? .unsupported(reason: "Extra Brightness capability is unavailable")
         hdr = try values.decodeIfPresent(HDRCapability.self, forKey: .hdr)
             ?? .unsupported(reason: "HDR capability is unavailable")
+        connection = try values.decodeIfPresent(DisplayConnectionCapability.self, forKey: .connection)
+            ?? .unsupported(
+                connected: true,
+                reason: "display connection capability is unavailable in this response"
+            )
     }
 }
 

@@ -1,5 +1,11 @@
 import Foundation
 
+enum CGOperationOutcome<Value: Sendable>: Sendable {
+    case completed(Value)
+    case timedOut
+    case cancelled
+}
+
 /// Shared utilities for wrapping blocking CoreGraphics calls.
 enum CGHelpers {
 
@@ -23,26 +29,63 @@ enum CGHelpers {
         fallback: T,
         operation: @escaping @Sendable () -> T
     ) async -> T {
-        await withCheckedContinuation { cont in
-            let lock = NSLock()
-            var didResume = false
-
-            DispatchQueue.global(qos: .userInitiated).async {
-                let result = operation()
-                lock.lock()
-                guard !didResume else { lock.unlock(); return }
-                didResume = true
-                lock.unlock()
-                cont.resume(returning: result)
-            }
-
-            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
-                lock.lock()
-                guard !didResume else { lock.unlock(); return }
-                didResume = true
-                lock.unlock()
-                cont.resume(returning: fallback)
-            }
+        switch await runWithTimeoutOutcome(seconds: seconds, operation: operation) {
+        case let .completed(value): value
+        case .timedOut, .cancelled: fallback
         }
+    }
+
+    /// Unlike the compatibility wrapper above, this preserves whether the language-level
+    /// wait timed out or was cancelled. The queued blocking operation is intentionally not
+    /// described as cancelled: Dispatch/WindowServer work may continue after either event.
+    static func runWithTimeoutOutcome<T: Sendable>(
+        seconds: Double,
+        operation: @escaping @Sendable () -> T
+    ) async -> CGOperationOutcome<T> {
+        guard !Task.isCancelled else { return .cancelled }
+        let race = CGOperationRace<T>()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                race.install(continuation)
+                DispatchQueue.global(qos: .userInitiated).async {
+                    race.resolve(.completed(operation()))
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + max(0, seconds)) {
+                    race.resolve(.timedOut)
+                }
+            }
+        } onCancel: {
+            race.resolve(.cancelled)
+        }
+    }
+}
+
+private final class CGOperationRace<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var outcome: CGOperationOutcome<Value>?
+    private var continuation: CheckedContinuation<CGOperationOutcome<Value>, Never>?
+
+    func install(_ continuation: CheckedContinuation<CGOperationOutcome<Value>, Never>) {
+        lock.lock()
+        if let outcome {
+            lock.unlock()
+            continuation.resume(returning: outcome)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func resolve(_ outcome: CGOperationOutcome<Value>) {
+        lock.lock()
+        guard self.outcome == nil else {
+            lock.unlock()
+            return
+        }
+        self.outcome = outcome
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(returning: outcome)
     }
 }

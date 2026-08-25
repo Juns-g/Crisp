@@ -195,6 +195,11 @@ final class TransportTests: XCTestCase {
         let ordinary = ControlRequest(requestID: "ordinary", command: "brightness.get-all")
         let settlingWrite = ControlRequest(requestID: "boost", command: "extra-brightness.set",
                                            arguments: ["selector": .string("uuid-a"), "enabled": .bool(true)])
+        let displayConnection = ControlRequest(
+            requestID: "disconnect",
+            command: "displays.disconnect",
+            arguments: ["uuid": .string("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")]
+        )
 
         XCTAssertEqual(ControlTimeoutPolicy.clientTimeout(
             for: batch, standard: 3, settlingWrite: 6, batch: 12
@@ -209,6 +214,20 @@ final class TransportTests: XCTestCase {
             for: settlingWrite, standard: 2, settlingWrite: 5, batch: 12
         ), 5)
         XCTAssertEqual(ControlTimeoutPolicy.clientTimeout(
+            for: displayConnection,
+            standard: 3,
+            settlingWrite: 6,
+            batch: 12,
+            displayConnection: 15
+        ), 15)
+        XCTAssertEqual(ControlTimeoutPolicy.handlerTimeout(
+            for: displayConnection,
+            standard: 2,
+            settlingWrite: 5,
+            batch: 12,
+            displayConnection: 13
+        ), 13)
+        XCTAssertEqual(ControlTimeoutPolicy.clientTimeout(
             for: ordinary, standard: 3, settlingWrite: 6, batch: 12
         ), 3)
         XCTAssertEqual(ControlTimeoutPolicy.handlerTimeout(
@@ -221,6 +240,18 @@ final class TransportTests: XCTestCase {
         XCTAssertGreaterThan(
             UnixSocketClient().batchTimeout,
             ControlTimeoutPolicy.defaultBatchHandlerTimeout
+        )
+    }
+
+    func testDefaultDisplayConnectionBudgetsCoverMutationSettlementAndResponseMargin() {
+        XCTAssertGreaterThanOrEqual(
+            ControlTimeoutPolicy.defaultDisplayConnectionHandlerTimeout,
+            ControlTimeoutPolicy.displayConfigurationTimeout
+                + ControlTimeoutPolicy.displayConnectionSettlementTimeout
+        )
+        XCTAssertGreaterThan(
+            UnixSocketClient().displayConnectionTimeout,
+            ControlTimeoutPolicy.defaultDisplayConnectionHandlerTimeout
         )
     }
 
@@ -260,7 +291,8 @@ final class TransportTests: XCTestCase {
             path: socketPath,
             connectionTimeout: 0.02,
             settlingWriteHandlerTimeout: 0.02,
-            batchHandlerTimeout: 0.02
+            batchHandlerTimeout: 0.02,
+            displayConnectionHandlerTimeout: 0.02
         ) { request in
             await withCheckedContinuation { continuation in
                 DispatchQueue.global().asyncAfter(deadline: .now() + 0.08) {
@@ -272,13 +304,23 @@ final class TransportTests: XCTestCase {
         try server.start()
         defer { server.stop() }
         let client = UnixSocketClient(
-            path: socketPath, timeout: 1, settlingWriteTimeout: 1, batchTimeout: 1
+            path: socketPath,
+            timeout: 1,
+            settlingWriteTimeout: 1,
+            batchTimeout: 1,
+            displayConnectionTimeout: 1
         )
         let cases: [(String, [String: JSONValue])] = [
             ("brightness.set", ["selector": .string("uuid-a"), "percent": .number(150)]),
             ("extra-brightness.set", ["selector": .string("uuid-a"), "enabled": .bool(true)]),
             ("hdr.set", ["selector": .string("uuid-b"), "enabled": .bool(false)]),
-            ("brightness.set-all", ["percent": .number(50)])
+            ("brightness.set-all", ["percent": .number(50)]),
+            ("displays.disconnect", [
+                "uuid": .string("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")
+            ]),
+            ("displays.reconnect", [
+                "uuid": .string("BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")
+            ])
         ]
 
         for (command, arguments) in cases {
@@ -288,6 +330,15 @@ final class TransportTests: XCTestCase {
             XCTAssertEqual(response.error?.code, .writeOutcomeIndeterminate, command)
             XCTAssertEqual(response.error?.details?["retrySafe"], .bool(false), command)
             XCTAssertEqual(response.error?.details?["command"], .string(command), command)
+            if command == "displays.disconnect" || command == "displays.reconnect" {
+                XCTAssertEqual(response.error?.details?["displayUUID"], arguments["uuid"], command)
+                XCTAssertEqual(
+                    response.error?.details?["requestedConnectionState"],
+                    .string(command == "displays.disconnect" ? "disconnected" : "connected"),
+                    command
+                )
+                XCTAssertEqual(response.error?.code.exitCode, 5, command)
+            }
         }
     }
 
@@ -297,7 +348,13 @@ final class TransportTests: XCTestCase {
             ("brightness.set", ["selector": .string("uuid-a"), "percent": .number(150)]),
             ("extra-brightness.set", ["selector": .string("uuid-a"), "enabled": .bool(true)]),
             ("hdr.set", ["selector": .string("uuid-b"), "enabled": .bool(false)]),
-            ("brightness.set-all", ["percent": .number(50)])
+            ("brightness.set-all", ["percent": .number(50)]),
+            ("displays.disconnect", [
+                "uuid": .string("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")
+            ]),
+            ("displays.reconnect", [
+                "uuid": .string("BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")
+            ])
         ]
 
         for (command, arguments) in cases {
@@ -319,7 +376,53 @@ final class TransportTests: XCTestCase {
             XCTAssertEqual(response.error?.code, .writeOutcomeIndeterminate, command)
             XCTAssertEqual(response.error?.details?["retrySafe"], .bool(false), command)
             XCTAssertEqual(response.error?.details?["command"], .string(command), command)
+            if command == "displays.disconnect" || command == "displays.reconnect" {
+                XCTAssertEqual(
+                    response.error?.details?["displayUUID"],
+                    arguments["uuid"],
+                    command
+                )
+                XCTAssertEqual(
+                    response.error?.details?["requestedConnectionState"],
+                    .string(command == "displays.disconnect" ? "disconnected" : "connected"),
+                    command
+                )
+                XCTAssertEqual(response.error?.code.exitCode, 5, command)
+            }
         }
+    }
+
+    func testDisplayConnectionDeadlineRejectsRequestsWithoutExactUUIDBeforeHandler() async {
+        let handled = LockedFlag()
+        let invalidRequests = [
+            ControlRequest(
+                requestID: "legacy-selector",
+                command: "displays.disconnect",
+                arguments: ["selector": .string("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")]
+            ),
+            ControlRequest(
+                requestID: "name",
+                command: "displays.disconnect",
+                arguments: ["uuid": .string("Fixture Display")]
+            ),
+            ControlRequest(
+                requestID: "missing",
+                command: "displays.reconnect"
+            )
+        ]
+
+        for request in invalidRequests {
+            let response = await responseBeforeDeadline(request: request, timeout: 0.01) { request in
+                handled.set()
+                return .success(requestID: request.requestID, result: .null)
+            }
+
+            XCTAssertEqual(response.error?.code, .invalidArguments, request.requestID)
+            XCTAssertEqual(response.error?.details?["phase"], .string("preflight"), request.requestID)
+            XCTAssertEqual(response.error?.details?["retrySafe"], .bool(true), request.requestID)
+            XCTAssertEqual(response.error?.details?["mutationDispatched"], .bool(false), request.requestID)
+        }
+        XCTAssertFalse(handled.value)
     }
 
     func testHDRSettlementBudgetCanReturnVerifiedResponseBeforeServerDeadline() throws {

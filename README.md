@@ -92,19 +92,34 @@ Thank you to the people chipping in toward keeping Crisp signed and notarized:
 
 The `crispctl` target provides a versioned JSON interface for display discovery,
 capabilities, brightness, Extra Brightness, and writable external HDR toggles
-through the running Crisp app.
+through the running Crisp app. The additive P1 source slice also exposes
+fail-closed physical display disconnect/reconnect on supported Apple Silicon
+systems; this is source availability, not a Crisp 1.5.0 release claim.
 
 | Crisp GUI capability | `crispctl` command |
 |---|---|
 | Display inventory and live capabilities | `displays list`, `displays get`, `displays capabilities` |
+| Intentionally disconnected physical displays | `displays disconnected` |
+| Physical display connection state | `displays disconnect <uuid>`, `displays reconnect <uuid>` |
 | One display's logical brightness | `brightness get`, `brightness set` |
 | All physical displays, same logical percent per display | `brightness get-all`, `brightness set-all` |
 | Extra Brightness / live EDR range | `extra-brightness get`, `extra-brightness set` |
 | Explicit external HDR toggle | `hdr get`, `hdr set` |
 
+Every connection write requires explicit authorization, fresh capability or
+disconnected inventory, and the exact same UUID. Disconnect accepts only a UUID
+copied unchanged from a fresh `displays list`/capabilities response; reconnect
+accepts only one copied from a fresh `displays disconnected` response. Names,
+`main`, and `builtin` are not connection-write inputs. Apple Silicon/macOS 13+,
+positive hardware-backed physical proof, and last-viewable-display gates fail
+closed. Every indeterminate connection timeout identifies the exact
+`displayUUID` and requested state and is never retried automatically; read and
+reconcile before a fresh decision. No real display write is exercised by the
+headless suite.
+
 Built-in displays intentionally have no `hdr set`; use Extra Brightness when its
-live capability is writable. Resolution, presets, arrangement, disconnect,
-virtual-display creation, and other P1/P2 settings remain GUI-only. See
+live capability is writable. Resolution, presets, arrangement,
+virtual-display creation, and other remaining P1/P2 settings remain GUI-only. See
 [docs/crispctl.md](docs/crispctl.md) for commands, response schema, security,
 and headless verification. AI agents can install the repository's standard
 Skill from [skills/crispctl/SKILL.md](skills/crispctl/SKILL.md) after reviewing

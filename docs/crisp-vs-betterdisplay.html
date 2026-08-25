@@ -208,7 +208,8 @@
           <tr><th>Brightness, including live Extra Brightness range</th><td><code>brightness get/set</code><br><code>extra-brightness get/set</code></td><td class="c"><span class="yes">✓</span> P0 source target</td></tr>
           <tr><th>External HDR toggle</th><td><code>hdr get/set</code></td><td class="c"><span class="yes">✓</span> P0 source target where the GUI offers the toggle; no fake built-in toggle</td></tr>
           <tr><th>All physical displays</th><td><code>brightness get-all</code><br><code>brightness set-all</code></td><td class="c"><span class="yes">✓</span> P0 source target, same logical percent per display</td></tr>
-          <tr><th>Resolution, presets, arrangement, disconnect, virtual displays, and other settings</th><td>—</td><td class="c">GUI-only; P1/P2 not implemented</td></tr>
+          <tr><th>Physical display disconnect / reconnect</th><td><code>displays disconnected/disconnect/reconnect</code></td><td class="c"><span class="yes">✓</span> P1 source target; exact-UUID writes and positive hardware-backed physical proof, not real-hardware validated here</td></tr>
+          <tr><th>Resolution, presets, arrangement, virtual displays, and other settings</th><td>—</td><td class="c">GUI-only; remaining P1/P2 not implemented</td></tr>
         </tbody>
       </table>
     </div>

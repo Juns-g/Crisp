@@ -37,16 +37,22 @@ public enum ControlSocket {
 
 public enum ControlTimeoutPolicy {
     public static let defaultBatchHandlerTimeout: TimeInterval = 11
+    public static let displayConfigurationTimeout: TimeInterval = 10
+    public static let displayConnectionSettlementTimeout: TimeInterval = 2
+    public static let defaultDisplayConnectionHandlerTimeout: TimeInterval = 13
+    public static let defaultDisplayConnectionClientTimeout: TimeInterval = 15
 
     public static func clientTimeout(
         for request: ControlRequest,
         standard: TimeInterval,
         settlingWrite: TimeInterval,
-        batch: TimeInterval
+        batch: TimeInterval,
+        displayConnection: TimeInterval = defaultDisplayConnectionClientTimeout
     ) -> TimeInterval {
         switch request.mutationKind {
         case .brightnessBatch: return batch
         case .extraBrightness, .hdr: return settlingWrite
+        case .displayConnection: return displayConnection
         default: return standard
         }
     }
@@ -55,11 +61,13 @@ public enum ControlTimeoutPolicy {
         for request: ControlRequest,
         standard: TimeInterval,
         settlingWrite: TimeInterval,
-        batch: TimeInterval
+        batch: TimeInterval,
+        displayConnection: TimeInterval = defaultDisplayConnectionHandlerTimeout
     ) -> TimeInterval {
         switch request.mutationKind {
         case .brightnessBatch: return batch
         case .extraBrightness, .hdr: return settlingWrite
+        case .displayConnection: return displayConnection
         default: return standard
         }
     }
@@ -73,17 +81,20 @@ public struct UnixSocketClient: Sendable {
     public let timeout: TimeInterval
     public let settlingWriteTimeout: TimeInterval
     public let batchTimeout: TimeInterval
+    public let displayConnectionTimeout: TimeInterval
 
     public init(
         path: String = ControlSocket.defaultPath,
         timeout: TimeInterval = 3,
         settlingWriteTimeout: TimeInterval = 6,
-        batchTimeout: TimeInterval = 12
+        batchTimeout: TimeInterval = 12,
+        displayConnectionTimeout: TimeInterval = ControlTimeoutPolicy.defaultDisplayConnectionClientTimeout
     ) {
         self.path = path
         self.timeout = timeout
         self.settlingWriteTimeout = settlingWriteTimeout
         self.batchTimeout = batchTimeout
+        self.displayConnectionTimeout = displayConnectionTimeout
     }
 
     public func send(_ request: ControlRequest) throws -> ControlResponse {
@@ -94,7 +105,9 @@ public struct UnixSocketClient: Sendable {
             expectedRequestID: request.requestID,
             timeoutOverride: ControlTimeoutPolicy.clientTimeout(
                 for: request, standard: timeout,
-                settlingWrite: settlingWriteTimeout, batch: batchTimeout
+                settlingWrite: settlingWriteTimeout,
+                batch: batchTimeout,
+                displayConnection: displayConnectionTimeout
             )
         )
     }
@@ -140,6 +153,7 @@ public final class UnixSocketServer: @unchecked Sendable {
     private let connectionTimeout: TimeInterval
     private let settlingWriteHandlerTimeout: TimeInterval
     private let batchHandlerTimeout: TimeInterval
+    private let displayConnectionHandlerTimeout: TimeInterval
     private let maximumConnections: Int
     private let queue = DispatchQueue(label: "com.crisp.control.socket")
     private let lock = NSLock()
@@ -152,6 +166,7 @@ public final class UnixSocketServer: @unchecked Sendable {
         connectionTimeout: TimeInterval = 2,
         settlingWriteHandlerTimeout: TimeInterval = 5,
         batchHandlerTimeout: TimeInterval = ControlTimeoutPolicy.defaultBatchHandlerTimeout,
+        displayConnectionHandlerTimeout: TimeInterval = ControlTimeoutPolicy.defaultDisplayConnectionHandlerTimeout,
         maximumConnections: Int = 16,
         handler: @escaping Handler
     ) {
@@ -159,6 +174,7 @@ public final class UnixSocketServer: @unchecked Sendable {
         self.connectionTimeout = connectionTimeout
         self.settlingWriteHandlerTimeout = max(connectionTimeout, settlingWriteHandlerTimeout)
         self.batchHandlerTimeout = max(connectionTimeout, batchHandlerTimeout)
+        self.displayConnectionHandlerTimeout = max(connectionTimeout, displayConnectionHandlerTimeout)
         self.maximumConnections = max(1, maximumConnections)
         self.handler = handler
     }
@@ -227,7 +243,7 @@ public final class UnixSocketServer: @unchecked Sendable {
                 Darwin.close(client)
                 continue
             }
-            Task { [handler, connectionTimeout, settlingWriteHandlerTimeout, batchHandlerTimeout] in
+            Task { [handler, connectionTimeout, settlingWriteHandlerTimeout, batchHandlerTimeout, displayConnectionHandlerTimeout] in
                 defer {
                     Darwin.close(client)
                     connectionLock.withLock { activeConnections -= 1 }
@@ -261,7 +277,9 @@ public final class UnixSocketServer: @unchecked Sendable {
                             request: request,
                             timeout: ControlTimeoutPolicy.handlerTimeout(
                                 for: request, standard: connectionTimeout,
-                                settlingWrite: settlingWriteHandlerTimeout, batch: batchHandlerTimeout
+                                settlingWrite: settlingWriteHandlerTimeout,
+                                batch: batchHandlerTimeout,
+                                displayConnection: displayConnectionHandlerTimeout
                             ),
                             handler: handler
                         )
@@ -342,6 +360,10 @@ func responseBeforeDeadline(
     },
     handler: @escaping UnixSocketServer.Handler
 ) async -> ControlResponse {
+    if request.mutationKind == .displayConnection,
+       request.exactDisplayConnectionUUID == nil {
+        return .invalidDisplayConnectionRequest(for: request)
+    }
     let deadline = monotonicDeadline(after: timeout, now: monotonicNow())
     return await withCheckedContinuation { continuation in
         let race = ResponseRace(continuation)

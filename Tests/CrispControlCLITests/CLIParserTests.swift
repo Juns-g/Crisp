@@ -3,6 +3,8 @@ import XCTest
 import CrispControlCore
 
 final class CLIParserTests: XCTestCase {
+    private let connectionUUID = "00000000-0000-0000-0000-000000000001"
+
     func testRequiredCommandsMapToProtocolCommands() throws {
         XCTAssertEqual(try parse(["version", "--json"]).request.command, "version")
         XCTAssertEqual(try parse(["status", "--json", "--no-start"]).request.command, "status")
@@ -11,6 +13,20 @@ final class CLIParserTests: XCTestCase {
         XCTAssertEqual(
             try parse(["displays", "capabilities", "builtin", "--json"]).request.command,
             "displays.capabilities"
+        )
+        XCTAssertEqual(
+            try parse(["displays", "disconnected", "--json"]).request.command,
+            "displays.disconnected"
+        )
+        XCTAssertEqual(
+            try parse(["displays", "disconnect", connectionUUID, "--json"]).request.command,
+            "displays.disconnect"
+        )
+        XCTAssertEqual(
+            try parse([
+                "displays", "reconnect", "00000000-0000-0000-0000-000000000001", "--json"
+            ]).request.command,
+            "displays.reconnect"
         )
         XCTAssertEqual(try parse(["brightness", "get", "uuid-a", "--json"]).request.command, "brightness.get")
         XCTAssertEqual(try parse(["brightness", "set", "uuid-a", "57.5", "--json"]).request.command, "brightness.set")
@@ -47,6 +63,15 @@ final class CLIParserTests: XCTestCase {
         XCTAssertThrowsError(try parse(["hdr", "set", "main", "1", "--json"]))
         XCTAssertThrowsError(try parse(["brightness", "set-all", "NaN", "--json"]))
         XCTAssertThrowsError(try parse(["brightness", "get-all", "main", "--json"]))
+        XCTAssertThrowsError(try parse(["displays", "disconnected", "main", "--json"]))
+        XCTAssertThrowsError(try parse(["displays", "disconnect", "--json"]))
+        XCTAssertThrowsError(try parse(["displays", "disconnect", "main", "--json"]))
+        XCTAssertThrowsError(try parse(["displays", "disconnect", "builtin", "--json"]))
+        XCTAssertThrowsError(try parse(["displays", "disconnect", "Fixture Display", "--json"]))
+        XCTAssertThrowsError(try parse(["displays", "disconnect", "not-a-uuid", "--json"]))
+        XCTAssertThrowsError(try parse(["displays", "reconnect", "main", "--json"]))
+        XCTAssertThrowsError(try parse(["displays", "reconnect", "Fixture Display", "--json"]))
+        XCTAssertThrowsError(try parse(["displays", "reconnect", "not-a-uuid", "--json"]))
     }
 
     func testToggleArgumentsAndHelpAreExplicit() throws {
@@ -67,10 +92,35 @@ final class CLIParserTests: XCTestCase {
         }
     }
 
+    func testDisplayConnectionArgumentsAndHelpAreExplicit() throws {
+        let disconnect = try parse([
+            "displays", "disconnect", connectionUUID, "--no-start", "--json"
+        ])
+        let reconnect = try parse(["displays", "reconnect", connectionUUID, "--json"])
+
+        XCTAssertEqual(disconnect.request.arguments["uuid"], .string(connectionUUID))
+        XCTAssertNil(disconnect.request.arguments["selector"])
+        XCTAssertTrue(disconnect.noStart)
+        XCTAssertEqual(reconnect.request.arguments["uuid"], .string(connectionUUID))
+        let timeout = ControlResponse.timeout(for: disconnect.request)
+        XCTAssertEqual(timeout.error?.details?["displayUUID"], .string(connectionUUID))
+        XCTAssertEqual(timeout.error?.details?["requestedConnectionState"], .string("disconnected"))
+        XCTAssertEqual(timeout.error?.details?["retrySafe"], .bool(false))
+        XCTAssertEqual(timeout.error?.code.exitCode, 5)
+        for usage in [
+            "displays disconnected", "displays disconnect <uuid>",
+            "displays reconnect <uuid>"
+        ] {
+            XCTAssertTrue(crispctlHelp.contains(usage), "missing help: \(usage)")
+        }
+    }
+
     func testParserDispatcherAndMutationClassifierInventoriesStaySynchronized() throws {
         let forms = [
             ["version"], ["status"], ["displays", "list"],
             ["displays", "get", "uuid-a"], ["displays", "capabilities", "uuid-a"],
+            ["displays", "disconnected"], ["displays", "disconnect", connectionUUID],
+            ["displays", "reconnect", "00000000-0000-0000-0000-000000000001"],
             ["brightness", "get", "uuid-a"], ["brightness", "set", "uuid-a", "50"],
             ["brightness", "get-all"], ["brightness", "set-all", "50"],
             ["extra-brightness", "get", "uuid-a"], ["extra-brightness", "set", "uuid-a", "on"],

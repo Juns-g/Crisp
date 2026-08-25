@@ -113,6 +113,30 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(hdr.enabled, true)
     }
 
+    func testDisplayConnectionCapabilityCarriesFailClosedPlatformAndActionTruth() throws {
+        let capability = DisplayConnectionCapability(
+            state: .writable,
+            connected: true,
+            disconnectAllowed: true,
+            reconnectAllowed: false,
+            platformSupported: true,
+            reason: "another physical display remains viewable",
+            remediation: nil
+        )
+
+        let data = try ControlJSON.encoder.encode(capability)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(object["state"] as? String, "writable")
+        XCTAssertEqual(object["connected"] as? Bool, true)
+        XCTAssertEqual(object["disconnectAllowed"] as? Bool, true)
+        XCTAssertEqual(object["reconnectAllowed"] as? Bool, false)
+        XCTAssertEqual(object["platformSupported"] as? Bool, true)
+        XCTAssertEqual(
+            try ControlJSON.decoder.decode(DisplayConnectionCapability.self, from: data),
+            capability
+        )
+    }
+
     func testEveryErrorHasAStableExitCode() {
         XCTAssertEqual(ControlErrorCode.appNotRunning.exitCode, 3)
         XCTAssertEqual(ControlErrorCode.invalidArguments.exitCode, 2)
@@ -138,6 +162,34 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(response.error?.details?["command"], .string("future-display.set"))
     }
 
+    func testDisplayConnectionTimeoutsCarryExactUUIDCommandStateAndNoRetryTruth() {
+        let uuid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+        let cases: [(String, [String: JSONValue], String)] = [
+            ("displays.disconnect", ["uuid": .string(uuid)], "disconnected"),
+            ("displays.reconnect", ["uuid": .string(uuid)], "connected")
+        ]
+
+        for (command, arguments, requestedState) in cases {
+            let response = ControlResponse.timeout(for: ControlRequest(
+                requestID: command,
+                command: command,
+                arguments: arguments
+            ))
+
+            XCTAssertEqual(response.error?.code, .writeOutcomeIndeterminate, command)
+            XCTAssertEqual(response.error?.details?["retrySafe"], .bool(false), command)
+            XCTAssertEqual(response.error?.details?["command"], .string(command), command)
+            XCTAssertEqual(response.error?.details?["displayUUID"], .string(uuid), command)
+            XCTAssertNil(response.error?.details?["selector"], command)
+            XCTAssertEqual(
+                response.error?.details?["requestedConnectionState"],
+                .string(requestedState),
+                command
+            )
+            XCTAssertEqual(response.error?.code.exitCode, 5, command)
+        }
+    }
+
     func testOldV1DisplayResponseDecodesWithAdditiveDefaults() throws {
         let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -155,6 +207,11 @@ final class ProtocolTests: XCTestCase {
         XCTAssertFalse(decoded.isVirtual)
         XCTAssertEqual(decoded.extraBrightness.state, .unsupported)
         XCTAssertEqual(decoded.hdr.state, .unsupported)
+        XCTAssertEqual(decoded.connection.state, .unsupported)
+        XCTAssertTrue(decoded.connection.connected)
+        XCTAssertFalse(decoded.connection.disconnectAllowed)
+        XCTAssertFalse(decoded.connection.reconnectAllowed)
+        XCTAssertFalse(decoded.connection.platformSupported)
         XCTAssertEqual(crispControlProtocolVersion, 1)
     }
 }

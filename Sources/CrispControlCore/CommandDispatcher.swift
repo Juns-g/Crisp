@@ -2,6 +2,9 @@ import Foundation
 
 public protocol ControlCommandService: Sendable {
     func displays() async throws -> [ControlDisplay]
+    func disconnectedDisplays() async throws -> [ControlDisconnectedDisplay]
+    func disconnectDisplay(displayUUID: String) async throws -> DisplayConnectionSetResult
+    func reconnectDisplay(displayUUID: String) async throws -> DisplayConnectionSetResult
     func readBrightness(displayUUID: String) async throws -> Double?
     func writeBrightness(displayUUID: String, percent: Double) async throws -> Double
     func readBrightnessState(displayUUID: String) async throws -> BrightnessReadSnapshot?
@@ -10,6 +13,26 @@ public protocol ControlCommandService: Sendable {
 }
 
 public extension ControlCommandService {
+    func disconnectedDisplays() async throws -> [ControlDisconnectedDisplay] { [] }
+
+    func disconnectDisplay(displayUUID: String) async throws -> DisplayConnectionSetResult {
+        throw DisplayConnectionMutationError(
+            classification: .preflightRejected,
+            displayUUID: displayUUID,
+            requestedConnectionState: .disconnected,
+            message: "physical display disconnect is unavailable"
+        )
+    }
+
+    func reconnectDisplay(displayUUID: String) async throws -> DisplayConnectionSetResult {
+        throw DisplayConnectionMutationError(
+            classification: .preflightRejected,
+            displayUUID: displayUUID,
+            requestedConnectionState: .connected,
+            message: "physical display reconnect is unavailable"
+        )
+    }
+
     func readBrightnessState(displayUUID: String) async throws -> BrightnessReadSnapshot? {
         try await readBrightness(displayUUID: displayUUID).map {
             BrightnessReadSnapshot(logicalPercent: $0, hardwareReadbackPercent: nil)
@@ -107,18 +130,10 @@ public struct ControlCommandDispatcher: Sendable {
             ])
         case "status":
             return .object(["running": .bool(true), "appVersion": .string(appVersion)])
-        case "displays.list":
-            return .object(["displays": try jsonValue(await service.displays())])
-        case "displays.get":
-            return .object(["display": try jsonValue(await selectedDisplay(for: request))])
-        case "displays.capabilities":
-            let display = try await selectedDisplay(for: request)
-            return .object([
-                "displayUUID": .string(display.uuid),
-                "brightness": try jsonValue(display.brightness),
-                "extraBrightness": try jsonValue(display.extraBrightness),
-                "hdr": try jsonValue(display.hdr)
-            ])
+        case "displays.list", "displays.get", "displays.capabilities":
+            return try await executeDisplayRead(request)
+        case "displays.disconnected", "displays.disconnect", "displays.reconnect":
+            return try await executeDisplayConnection(request)
         case "brightness.get":
             let display = try await selectedDisplay(for: request)
             try requireSupported(display.brightness)
@@ -205,6 +220,265 @@ public struct ControlCommandDispatcher: Sendable {
         }
 
         return try await performBrightnessSet(display: display, requested: requested)
+    }
+
+}
+
+extension ControlCommandDispatcher {
+    private func executeDisplayRead(_ request: ControlRequest) async throws -> JSONValue {
+        switch request.command {
+        case "displays.list":
+            return .object(["displays": try jsonValue(await service.displays())])
+        case "displays.get":
+            return .object(["display": try jsonValue(await selectedDisplay(for: request))])
+        case "displays.capabilities":
+            let display = try await selectedDisplay(for: request)
+            return .object([
+                "displayUUID": .string(display.uuid),
+                "brightness": try jsonValue(display.brightness),
+                "extraBrightness": try jsonValue(display.extraBrightness),
+                "hdr": try jsonValue(display.hdr),
+                "connection": try jsonValue(display.connection)
+            ])
+        default:
+            throw CommandFailure(
+                code: .invalidArguments,
+                message: "unknown display read command: \(request.command)"
+            )
+        }
+    }
+
+    private func executeDisplayConnection(_ request: ControlRequest) async throws -> JSONValue {
+        switch request.command {
+        case "displays.disconnected":
+            let displays = try await service.disconnectedDisplays().sorted { $0.uuid < $1.uuid }
+            return .object(["displays": try jsonValue(displays)])
+        case "displays.disconnect":
+            return try await disconnectDisplay(request)
+        case "displays.reconnect":
+            return try await reconnectDisplay(request)
+        default:
+            throw CommandFailure(
+                code: .invalidArguments,
+                message: "unknown display connection command: \(request.command)"
+            )
+        }
+    }
+
+    private func disconnectDisplay(_ request: ControlRequest) async throws -> JSONValue {
+        guard let uuid = request.exactDisplayConnectionUUID else {
+            throw CommandFailure(
+                code: .invalidArguments,
+                message: "disconnect requires an exact UUID from a fresh display inventory"
+            )
+        }
+        let discoveredMatches = try await service.displays().filter { $0.uuid == uuid }
+        guard discoveredMatches.count == 1, let discovered = discoveredMatches.first else {
+            throw CommandFailure(
+                code: .selectorNotFound,
+                message: "display UUID is absent or non-unique in the fresh online inventory",
+                details: .object([
+                    "phase": .string("preflight"),
+                    "displayUUID": .string(uuid),
+                    "retrySafe": .bool(true),
+                    "mutationDispatched": .bool(false)
+                ])
+            )
+        }
+        try requireDisconnectAllowed(discovered)
+
+        let freshMatches = try await service.displays().filter { $0.uuid == uuid }
+        guard freshMatches.count == 1, let fresh = freshMatches.first else {
+            throw CommandFailure(
+                code: .selectorNotFound,
+                message: "display UUID disappeared or changed before disconnect",
+                details: .object([
+                    "phase": .string("preflight"),
+                    "displayUUID": .string(uuid),
+                    "retrySafe": .bool(true),
+                    "mutationDispatched": .bool(false)
+                ])
+            )
+        }
+        try requireDisconnectAllowed(fresh)
+
+        do {
+            let result = try await service.disconnectDisplay(displayUUID: fresh.uuid)
+            try Task.checkCancellation()
+            return try validatedConnectionResult(
+                result,
+                command: request.command,
+                expectedUUID: fresh.uuid,
+                requestedState: .disconnected
+            )
+        } catch let error as DisplayConnectionMutationError {
+            throw connectionFailure(error, command: request.command)
+        } catch is CancellationError {
+            throw indeterminateConnectionFailure(
+                command: request.command,
+                uuid: fresh.uuid,
+                state: .disconnected,
+                message: "disconnect wait was cancelled after service dispatch"
+            )
+        }
+    }
+
+    private func reconnectDisplay(_ request: ControlRequest) async throws -> JSONValue {
+        guard let uuid = request.exactDisplayConnectionUUID else {
+            throw CommandFailure(
+                code: .invalidArguments,
+                message: "reconnect requires an exact UUID from a fresh disconnected inventory"
+            )
+        }
+        let matches = try await service.disconnectedDisplays().filter { $0.uuid == uuid }
+        guard !matches.isEmpty else {
+            throw CommandFailure(
+                code: .selectorNotFound,
+                message: "UUID is absent from the fresh disconnected inventory",
+                details: .object([
+                    "phase": .string("preflight"),
+                    "displayUUID": .string(uuid),
+                    "retrySafe": .bool(true),
+                    "mutationDispatched": .bool(false)
+                ])
+            )
+        }
+        guard matches.count == 1, let disconnected = matches.first else {
+            throw CommandFailure(
+                code: .ambiguousSelector,
+                message: "duplicate disconnected records make the UUID unsafe to reconnect",
+                details: .object([
+                    "phase": .string("preflight"),
+                    "displayUUID": .string(uuid),
+                    "retrySafe": .bool(true),
+                    "mutationDispatched": .bool(false)
+                ])
+            )
+        }
+        try requireReconnectAllowed(disconnected)
+
+        do {
+            let result = try await service.reconnectDisplay(displayUUID: uuid)
+            try Task.checkCancellation()
+            return try validatedConnectionResult(
+                result,
+                command: request.command,
+                expectedUUID: uuid,
+                requestedState: .connected
+            )
+        } catch let error as DisplayConnectionMutationError {
+            throw connectionFailure(error, command: request.command)
+        } catch is CancellationError {
+            throw indeterminateConnectionFailure(
+                command: request.command,
+                uuid: uuid,
+                state: .connected,
+                message: "reconnect wait was cancelled after service dispatch"
+            )
+        }
+    }
+
+    private func requireDisconnectAllowed(_ display: ControlDisplay) throws {
+        let capability = display.connection
+        guard !display.isVirtual,
+              capability.state == .writable,
+              capability.connected,
+              capability.disconnectAllowed,
+              capability.platformSupported else {
+            try connectionCapabilityFailure(
+                uuid: display.uuid,
+                message: "physical display disconnect is not allowed now",
+                capability: capability
+            )
+        }
+    }
+
+    private func requireReconnectAllowed(_ display: ControlDisconnectedDisplay) throws {
+        let capability = display.connection
+        guard capability.state == .writable,
+              !capability.connected,
+              capability.reconnectAllowed,
+              capability.platformSupported else {
+            try connectionCapabilityFailure(
+                uuid: display.uuid,
+                message: "physical display reconnect is not allowed now",
+                capability: capability
+            )
+        }
+    }
+
+    private func connectionCapabilityFailure(
+        uuid: String,
+        message: String,
+        capability: DisplayConnectionCapability
+    ) throws -> Never {
+        guard case var .object(details) = try jsonValue(capability) else {
+            throw CommandFailure(code: .unsupportedCapability, message: message)
+        }
+        details["phase"] = .string("preflight")
+        details["displayUUID"] = .string(uuid)
+        details["retrySafe"] = .bool(true)
+        details["mutationDispatched"] = .bool(false)
+        throw CommandFailure(code: .unsupportedCapability, message: message, details: .object(details))
+    }
+
+    private func validatedConnectionResult(
+        _ result: DisplayConnectionSetResult,
+        command: String,
+        expectedUUID: String,
+        requestedState: DisplayConnectionState
+    ) throws -> JSONValue {
+        guard result.displayUUID == expectedUUID,
+              result.requestedConnectionState == requestedState,
+              result.observedConnectionState == requestedState,
+              result.verification == .sameUUIDEnumeration else {
+            throw indeterminateConnectionFailure(
+                command: command,
+                uuid: expectedUUID,
+                state: requestedState,
+                message: "service result could not prove the exact post-mutation UUID state"
+            )
+        }
+        return try jsonValue(result)
+    }
+
+    private func connectionFailure(
+        _ error: DisplayConnectionMutationError,
+        command: String
+    ) -> CommandFailure {
+        let isIndeterminate = error.classification == .indeterminate
+        let details: JSONValue = .object([
+            "phase": .string(isIndeterminate ? "post_dispatch" : "preflight"),
+            "retrySafe": .bool(error.retrySafe),
+            "mutationDispatched": .bool(isIndeterminate),
+            "outcome": .string(isIndeterminate ? "unknown" : "definite"),
+            "command": .string(command),
+            "displayUUID": .string(error.displayUUID),
+            "requestedConnectionState": .string(error.requestedConnectionState.rawValue)
+        ])
+        let code: ControlErrorCode = switch error.classification {
+        case .preflightRejected: .unsupportedCapability
+        case .definiteFailure: .writeVerificationFailed
+        case .indeterminate: .writeOutcomeIndeterminate
+        }
+        return CommandFailure(code: code, message: error.message, details: details)
+    }
+
+    private func indeterminateConnectionFailure(
+        command: String,
+        uuid: String,
+        state: DisplayConnectionState,
+        message: String
+    ) -> CommandFailure {
+        connectionFailure(
+            DisplayConnectionMutationError(
+                classification: .indeterminate,
+                displayUUID: uuid,
+                requestedConnectionState: state,
+                message: message
+            ),
+            command: command
+        )
     }
 
     private func performBrightnessSet(
