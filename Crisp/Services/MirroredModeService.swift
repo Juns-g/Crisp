@@ -216,7 +216,11 @@ final class MirroredModeService: ObservableObject {
             : CGSize(width: Double(nativeW) / 110.0 * 25.4, height: Double(nativeH) / 110.0 * 25.4)
         descriptor.maxPixelsWide = UInt32(nativeW * 2)
         descriptor.maxPixelsHigh = UInt32(nativeH * 2)
-        descriptor.name = display.name
+        // Panel name plus a marker: system UI lists the virtual while
+        // mirrored (Control Center, the first-run Extend picker), and a
+        // distinct name reads as a feature where a duplicate "Name (2)"
+        // reads as a glitch.
+        descriptor.name = String(localized: "\(display.name) (Crisp)")
         descriptor.vendorID = VirtualDisplayService.crispVirtualVendorID
         // Stable per monitor; the serial carries the mirror marker. Two
         // identical monitors mirroring at once would collide, accepted edge.
