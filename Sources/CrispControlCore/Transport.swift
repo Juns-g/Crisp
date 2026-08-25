@@ -334,15 +334,23 @@ private final class ResponseRace: @unchecked Sendable {
     }
 }
 
-private func responseBeforeDeadline(
+func responseBeforeDeadline(
     request: ControlRequest,
     timeout: TimeInterval,
+    monotonicNow: @escaping @Sendable () -> UInt64 = {
+        DispatchTime.now().uptimeNanoseconds
+    },
     handler: @escaping UnixSocketServer.Handler
 ) async -> ControlResponse {
-    await withCheckedContinuation { continuation in
+    let deadline = monotonicDeadline(after: timeout, now: monotonicNow())
+    return await withCheckedContinuation { continuation in
         let race = ResponseRace(continuation)
         let operation = Task {
-            _ = race.resolve(await handler(request))
+            let response = await handler(request)
+            let resolvedResponse = monotonicNow() < deadline
+                ? response
+                : .timeout(for: request)
+            _ = race.resolve(resolvedResponse)
         }
         race.setOperation(operation)
         Task {
@@ -381,9 +389,11 @@ private func setNoSigPipe(_ descriptor: Int32) {
     _ = setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout.size(ofValue: enabled)))
 }
 
-private func monotonicDeadline(after seconds: TimeInterval) -> UInt64 {
+private func monotonicDeadline(
+    after seconds: TimeInterval,
+    now: UInt64 = DispatchTime.now().uptimeNanoseconds
+) -> UInt64 {
     let interval = UInt64(max(0, seconds) * 1_000_000_000)
-    let now = DispatchTime.now().uptimeNanoseconds
     let (deadline, overflow) = now.addingReportingOverflow(interval)
     return overflow ? UInt64.max : deadline
 }

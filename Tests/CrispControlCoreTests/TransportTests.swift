@@ -291,6 +291,37 @@ final class TransportTests: XCTestCase {
         }
     }
 
+    func testExpiredHandlerSuccessCannotWinWhenTimeoutTaskIsDelayed() async {
+        let clock = ManualUptimeClock()
+        let cases: [(String, [String: JSONValue])] = [
+            ("brightness.set", ["selector": .string("uuid-a"), "percent": .number(150)]),
+            ("extra-brightness.set", ["selector": .string("uuid-a"), "enabled": .bool(true)]),
+            ("hdr.set", ["selector": .string("uuid-b"), "enabled": .bool(false)]),
+            ("brightness.set-all", ["percent": .number(50)])
+        ]
+
+        for (command, arguments) in cases {
+            clock.set(0)
+            let request = ControlRequest(
+                requestID: command,
+                command: command,
+                arguments: arguments
+            )
+            let response = await responseBeforeDeadline(
+                request: request,
+                timeout: 1,
+                monotonicNow: { clock.now }
+            ) { request in
+                clock.set(2_000_000_000)
+                return .success(requestID: request.requestID, result: .null)
+            }
+
+            XCTAssertEqual(response.error?.code, .writeOutcomeIndeterminate, command)
+            XCTAssertEqual(response.error?.details?["retrySafe"], .bool(false), command)
+            XCTAssertEqual(response.error?.details?["command"], .string(command), command)
+        }
+    }
+
     func testHDRSettlementBudgetCanReturnVerifiedResponseBeforeServerDeadline() throws {
         let server = UnixSocketServer(
             path: socketPath,
@@ -427,4 +458,15 @@ private final class LockedFlag: @unchecked Sendable {
     private var stored = false
     var value: Bool { lock.withLock { stored } }
     func set() { lock.withLock { stored = true } }
+}
+
+private final class ManualUptimeClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: UInt64 = 0
+
+    var now: UInt64 { lock.withLock { stored } }
+
+    func set(_ value: UInt64) {
+        lock.withLock { stored = value }
+    }
 }
