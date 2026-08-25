@@ -1,23 +1,132 @@
 // Crisp/Services/BrightnessBoostService.swift
 import AppKit
 import CoreGraphics
+import ObjectiveC
+#if canImport(CrispControlCore)
+import CrispControlCore
+#endif
+
+/// All private MonitorPanel ABI calls live here. Selector presence and the full
+/// Objective-C method signature are checked before invocation; callers receive
+/// nil/false on ABI drift.
+@MainActor
+private final class MonitorPanelRuntimeAdapter: HDRPreferenceAdapting {
+    private let manager: NSObject?
+
+    init() {
+        guard dlopen("/System/Library/PrivateFrameworks/MonitorPanel.framework/MonitorPanel", RTLD_LAZY) != nil,
+              let cls = NSClassFromString("MPDisplayMgr") as? NSObject.Type else {
+            manager = nil
+            return
+        }
+        manager = cls.init()
+    }
+
+    func snapshot(for displayID: CGDirectDisplayID) -> HDRAdapterState? {
+        guard let state = readState(displayID: displayID), state.canSet else { return nil }
+        return state
+    }
+
+    func readState(displayID: UInt32) -> HDRAdapterState? {
+        guard let display = displayObject(for: displayID),
+              let supports = boolGetter("hasHDRModes", on: display),
+              let prefers = boolGetter("preferHDRModes", on: display) else { return nil }
+        let setter = NSSelectorFromString("setPreferHDRModes:")
+        return HDRAdapterState(
+            supportsHDR: supports,
+            prefersHDR: prefers,
+            canSet: hasCompatibleMethod(setter, on: display, as: .boolSetter),
+            identity: String(describing: ObjectIdentifier(display))
+        )
+    }
+
+    func setPreference(
+        _ enabled: Bool,
+        displayID: UInt32,
+        expectedIdentity: String
+    ) -> Bool {
+        guard let display = displayObject(for: displayID),
+              String(describing: ObjectIdentifier(display)) == expectedIdentity else { return false }
+        let selector = NSSelectorFromString("setPreferHDRModes:")
+        guard let method = compatibleMethod(selector, on: display, as: .boolSetter) else { return false }
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+        unsafeBitCast(method_getImplementation(method), to: Setter.self)(display, selector, enabled)
+        return true
+    }
+
+    private func displayObject(for displayID: CGDirectDisplayID) -> NSObject? {
+        let displaysSelector = NSSelectorFromString("displays")
+        guard let manager,
+              hasCompatibleMethod(displaysSelector, on: manager, as: .displaysGetter),
+              let value = manager.perform(displaysSelector)?.takeUnretainedValue(),
+              let displays = value as? [NSObject] else { return nil }
+        return displays.first { display in
+            let selector = NSSelectorFromString("displayID")
+            guard let method = compatibleMethod(selector, on: display, as: .displayIDGetter) else { return false }
+            typealias Getter = @convention(c) (AnyObject, Selector) -> UInt32
+            return unsafeBitCast(method_getImplementation(method), to: Getter.self)(
+                display, selector
+            ) == displayID
+        }
+    }
+
+    private func boolGetter(_ name: String, on object: NSObject) -> Bool? {
+        let selector = NSSelectorFromString(name)
+        guard let method = compatibleMethod(selector, on: object, as: .boolGetter) else { return nil }
+        typealias Getter = @convention(c) (AnyObject, Selector) -> Bool
+        return unsafeBitCast(method_getImplementation(method), to: Getter.self)(object, selector)
+    }
+
+    private func hasCompatibleMethod(
+        _ selector: Selector,
+        on object: NSObject,
+        as method: MonitorPanelABIMethod
+    ) -> Bool {
+        compatibleMethod(selector, on: object, as: method) != nil
+    }
+
+    private func compatibleMethod(
+        _ selector: Selector,
+        on object: NSObject,
+        as expectedMethod: MonitorPanelABIMethod
+    ) -> Method? {
+        guard object.responds(to: selector),
+              let runtimeMethod = class_getInstanceMethod(type(of: object), selector),
+              let encoding = methodEncoding(runtimeMethod) else { return nil }
+        guard MonitorPanelABISignatureValidator.isCompatible(
+            encoding,
+            with: expectedMethod
+        ) else { return nil }
+        return runtimeMethod
+    }
+
+    private func methodEncoding(_ method: Method) -> ObjectiveCMethodEncoding? {
+        let returnType = method_copyReturnType(method)
+        defer { free(returnType) }
+        var argumentTypes: [String] = []
+        argumentTypes.reserveCapacity(Int(method_getNumberOfArguments(method)))
+        for index in 0..<method_getNumberOfArguments(method) {
+            guard let argumentType = method_copyArgumentType(method, index) else { return nil }
+            argumentTypes.append(String(cString: argumentType))
+            free(argumentType)
+        }
+        return ObjectiveCMethodEncoding(
+            returnType: String(cString: returnType),
+            argumentTypes: argumentTypes
+        )
+    }
+}
 
 /// Policy brain for the Extra Brightness (EDR upscaling) feature. Decides which
 /// displays can boost, maps brightness above 100% to an overlay factor (via
 /// BrightnessBoostMath + EDROverlayManager), switches external monitors into
 /// HDR mode when boost needs it, and persists the per-display toggle by
 /// displayUUID. Also exposes the explicit per-display HDR toggle (private
-/// MonitorPanel.framework, same dlopen + KVC pattern as DisplayPresetService).
+/// MonitorPanel.framework behind the runtime-checked adapter above).
 @MainActor
 final class BrightnessBoostService {
     static let shared = BrightnessBoostService()
-
-    /// MPDisplayMgr instance; nil when MonitorPanel is unavailable.
-    private let manager: NSObject? = {
-        guard dlopen("/System/Library/PrivateFrameworks/MonitorPanel.framework/MonitorPanel", RTLD_LAZY) != nil,
-              let cls = NSClassFromString("MPDisplayMgr") as? NSObject.Type else { return nil }
-        return cls.init()
-    }()
+    private let monitorPanel = MonitorPanelRuntimeAdapter()
 
     /// Animates DisplayInfo.maxBrightness so the slider range grows and
     /// shrinks with the same ~125Hz ease-out glide brightness itself uses,
@@ -25,15 +134,112 @@ final class BrightnessBoostService {
     /// disable-collapse animator (see collapseAndDisable), keyed the same way
     /// so a rapid re-enable cancels whichever of the two is running.
     private var maxAnimators: [CGDirectDisplayID: BrightnessAnimator] = [:]
+    private var boostTransitions = BoostTransitionCoordinator()
+    private var hdrMutations = HDRMutationCoordinator()
+    /// Last factor committed through Crisp's app-owned overlay/transfer-table
+    /// path. Queued external writes publish only from their completion callback
+    /// after the UUID guard and transfer-table write both ran.
+    private var appliedFactorCommits = AppliedFactorCommitCoordinator()
 
-    private func animateMaxBrightness(to target: Double, for display: DisplayInfo) {
+    private func recordControlAppliedFactor(_ factor: Double, for display: DisplayInfo) {
+        let identity = displayIdentity(display)
+        let token = appliedFactorCommits.begin(
+            uuid: display.displayUUID,
+            identity: identity,
+            factor: factor
+        )
+        _ = appliedFactorCommits.complete(
+            token,
+            queueAccepted: true,
+            currentUUID: display.displayUUID,
+            currentIdentity: identity
+        )
+    }
+
+    private func queueExternalFactor(_ factor: Double, for display: DisplayInfo) {
+        let uuid = display.displayUUID
+        let displayID = display.displayID
+        let identity = displayIdentity(display)
+        let token = appliedFactorCommits.begin(uuid: uuid, identity: identity, factor: factor)
+        BrightnessService.shared.setBoostFactor(
+            factor,
+            for: displayID,
+            expectedDisplayUUID: uuid
+        ) { [weak self] queueAccepted in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let current = DisplayManagerAccessor.shared.displays.first(where: {
+                          $0.displayUUID == uuid && $0.displayID == displayID
+                      }) else { return }
+                _ = self.appliedFactorCommits.complete(
+                    token,
+                    queueAccepted: queueAccepted,
+                    currentUUID: current.displayUUID,
+                    currentIdentity: self.displayIdentity(current)
+                )
+            }
+        }
+    }
+
+    /// Restore the app-owned boost path to identity and await the external
+    /// transfer-table queue. This verifies committed Crisp app state only.
+    private func restoreIdentityFactor(for display: DisplayInfo) async throws -> Bool {
+        if display.isBuiltin {
+            guard EDROverlayManager.shared.setFactor(1, for: display.displayID) else { return false }
+            recordControlAppliedFactor(1, for: display)
+        } else {
+            let identity = displayIdentity(display)
+            let token = appliedFactorCommits.begin(
+                uuid: display.displayUUID,
+                identity: identity,
+                factor: 1
+            )
+            let queueAccepted = await BrightnessService.shared.setBoostFactorForControl(
+                1, for: display.displayID, expectedDisplayUUID: display.displayUUID
+            )
+            try Task.checkCancellation()
+            guard currentDisplayMatches(display) else { return false }
+            guard appliedFactorCommits.complete(
+                token,
+                queueAccepted: queueAccepted,
+                currentUUID: display.displayUUID,
+                currentIdentity: displayIdentity(display)
+            ) else { return false }
+        }
+        return true
+    }
+
+    private func displayIdentity(_ display: DisplayInfo) -> String {
+        String(describing: ObjectIdentifier(display))
+    }
+
+    private func currentDisplayMatches(_ display: DisplayInfo) -> Bool {
+        DisplayManagerAccessor.shared.displays.contains {
+            $0 === display && $0.displayUUID == display.displayUUID && $0.displayID == display.displayID
+        }
+    }
+
+    private func transitionAccepts(_ token: BoostTransitionToken, display: DisplayInfo) -> Bool {
+        currentDisplayMatches(display) && boostTransitions.accepts(
+            token,
+            currentUUID: display.displayUUID,
+            currentIdentity: displayIdentity(display)
+        )
+    }
+
+    private func animateMaxBrightness(
+        to target: Double,
+        for display: DisplayInfo,
+        token: BoostTransitionToken
+    ) {
         let animator = maxAnimators[display.displayID] ?? BrightnessAnimator()
         maxAnimators[display.displayID] = animator
         animator.animate(
             from: display.maxBrightness, to: target,
             steps: max(8, Int(0.2 / 0.008)), duration: 0.2
-        ) { [weak display] value, _ in
-            display?.maxBrightness = value
+        ) { [weak self, weak display] value, _ in
+            guard let self, let display, self.transitionAccepts(token, display: display) else { return }
+            display.maxBrightness = value
         }
     }
 
@@ -97,7 +303,7 @@ final class BrightnessBoostService {
                     self.headroomLossSince[display.displayID] = since
                     if Date().timeIntervalSince(since) >= 1.5 {
                         self.headroomLossSince.removeValue(forKey: display.displayID)
-                        await self.setEnabled(false, for: display)
+                        _ = try? await self.setEnabled(false, for: display)
                     }
                 }
                 if !anyBoosted {
@@ -145,6 +351,21 @@ final class BrightnessBoostService {
         return Double(s.maximumExtendedDynamicRangeColorComponentValue)
     }
 
+    /// Narrow read-only automation snapshot. Values are relative EDR component
+    /// headroom reported by NSScreen, never inferred nits.
+    func controlHeadroomSnapshot(for display: DisplayInfo) -> EDRHeadroomSnapshot {
+        let appliedFactor = appliedFactorCommits.appliedFactor(
+            uuid: display.displayUUID,
+            identity: displayIdentity(display)
+        )
+        return EDRHeadroomSnapshot(
+            potential: potentialHeadroom(for: display.displayID),
+            current: currentHeadroom(for: display.displayID),
+            appliedFactor: appliedFactor,
+            factorVerification: appliedFactor == nil ? nil : "app_state"
+        )
+    }
+
     // MARK: - Eligibility
 
     /// A display can boost when it reports usable EDR headroom (built-in XDR,
@@ -157,14 +378,27 @@ final class BrightnessBoostService {
         return false
     }
 
+    /// A disable remains available after live eligibility disappears when
+    /// Crisp still has persisted or active boost state to collapse and clear.
+    func needsDisableCleanup(for display: DisplayInfo) -> Bool {
+        isEnabled(for: display)
+            || display.maxBrightness > 100
+            || display.brightness > 100
+            || activeBoostDisplays.contains(display.displayID)
+            || collapsingDisplays.contains(display.displayID)
+    }
+
     // MARK: - Toggle
 
     /// Enable or disable boost. Async because switching an external monitor to
     /// HDR mode takes a moment to settle. Returns false when enabling failed
     /// (caller reverts the toggle UI).
     @discardableResult
-    func setEnabled(_ enabled: Bool, for display: DisplayInfo) async -> Bool {
+    func setEnabled(_ enabled: Bool, for display: DisplayInfo) async throws -> Bool {
         let uuid = display.displayUUID
+        let token = boostTransitions.begin(
+            uuid: uuid, identity: displayIdentity(display), enabled: enabled
+        )
         if enabled {
             // A disable-collapse may still be running from a rapid off/on
             // flip; cancel it where it is (through the same maxAnimators slot
@@ -174,15 +408,48 @@ final class BrightnessBoostService {
             BrightnessService.shared.cancelAnimation(for: display.displayID)
             maxAnimators[display.displayID]?.cancel()
             collapsingDisplays.remove(display.displayID)
-            // Externals in SDR mode: switch to HDR first.
+            // Externals in SDR mode: switch to HDR first. A matching live
+            // preference read-back is necessary but not sufficient; EDR
+            // headroom can appear later, so readiness settles separately.
             var switchedHDRForThisAttempt = false
-            if !display.isBuiltin, potentialHeadroom(for: display.displayID) <= 1.05 {
-                guard supportsHDRMode(display.displayID), setHDRMode(true, for: display.displayID) else { return false }
-                switchedHDRForThisAttempt = true
-                // Give WindowServer a moment to re-sync the display in HDR mode.
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            var potential = potentialHeadroom(for: display.displayID)
+            if !display.isBuiltin, potential <= 1.05 {
+                guard supportsHDRMode(display.displayID) else { return false }
+                if controlHDRState(for: display) != true {
+                    guard try await setHDRMode(true, for: display) else { return false }
+                    switchedHDRForThisAttempt = true
+                }
+                let settlement = try await EDRHeadroomSettlement.wait(
+                    maxSamples: 20,
+                    threshold: 1.05,
+                    isCurrent: {
+                        self.transitionAccepts(token, display: display)
+                    },
+                    isCapable: {
+                        self.supportsHDRMode(display.displayID)
+                            && self.controlHDRState(for: display) == true
+                    },
+                    potentialHeadroom: {
+                        self.potentialHeadroom(for: display.displayID)
+                    },
+                    pause: {
+                        try await Task.sleep(nanoseconds: 100_000_000)
+                    }
+                )
+                try Task.checkCancellation()
+                switch settlement {
+                case let .ready(potentialHeadroom):
+                    potential = potentialHeadroom
+                case .timedOut, .capabilityLost:
+                    if switchedHDRForThisAttempt, transitionAccepts(token, display: display) {
+                        _ = try await setHDRMode(false, for: display, requiring: token)
+                    }
+                    return false
+                case .invalidated:
+                    return false
+                }
             }
-            let potential = potentialHeadroom(for: display.displayID)
+            guard transitionAccepts(token, display: display) else { return false }
             let newMax = BrightnessBoostMath.sliderMax(potentialHeadroom: potential)
             guard newMax > 100 else {
                 // No usable headroom: fail quietly. A user-set HDR mode is
@@ -191,18 +458,19 @@ final class BrightnessBoostService {
                 // (preference recorded, mode never applied) leaves the OS
                 // rendering HDR into an SDR link, washing the screen out.
                 if switchedHDRForThisAttempt {
-                    _ = setHDRMode(false, for: display.displayID)
+                    _ = try await setHDRMode(false, for: display, requiring: token)
                 }
                 return false
             }
             UserDefaults.standard.set(true, forKey: enabledKey(uuid))
-            animateMaxBrightness(to: newMax, for: display)
+            guard boostTransitions.completeEnable(token) else { return false }
+            animateMaxBrightness(to: newMax, for: display, token: token)
             syncOverlay(for: display)
+            try Task.checkCancellation()
             return true
         } else {
             UserDefaults.standard.set(false, forKey: enabledKey(uuid))
-            collapseAndDisable(for: display)
-            return true
+            return try await collapseAndDisable(for: display, token: token)
         }
     }
 
@@ -214,13 +482,19 @@ final class BrightnessBoostService {
     /// sliderMax for the overlay factor is the frozen starting maxBrightness
     /// (max0), not the live (shrinking) one, so the multiplier tracks the
     /// thumb instead of jumping.
-    private func collapseAndDisable(for display: DisplayInfo) {
+    private func collapseAndDisable(
+        for display: DisplayInfo,
+        token: BoostTransitionToken
+    ) async throws -> Bool {
         let displayID = display.displayID
         let v0 = display.brightness
         let max0 = display.maxBrightness
         guard abs(v0 - 100) > 0.001 || abs(max0 - 100) > 0.001 else {
-            finishDisable(for: display)
-            return
+            display.brightness = min(display.brightness, 100)
+            display.maxBrightness = 100
+            guard try await restoreIdentityFactor(for: display),
+                  transitionAccepts(token, display: display) else { return false }
+            return try await finishDisable(for: display, token: token)
         }
         collapsingDisplays.insert(displayID)
         let animator = maxAnimators[displayID] ?? BrightnessAnimator()
@@ -238,6 +512,7 @@ final class BrightnessBoostService {
                 self.maxAnimators[displayID]?.cancel()
                 return
             }
+            guard self.transitionAccepts(token, display: display) else { return }
             // A brightness already at or below 100 is in the native range and
             // must stay put; only the boosted excess collapses toward 100.
             let vEnd = min(v0, 100)
@@ -249,28 +524,44 @@ final class BrightnessBoostService {
                     currentEDR: self.currentHeadroom(for: displayID),
                     potentialHeadroom: self.potentialHeadroom(for: displayID)
                 )
-                EDROverlayManager.shared.setFactor(factor, for: displayID)
+                if EDROverlayManager.shared.setFactor(factor, for: displayID) {
+                    self.recordControlAppliedFactor(factor, for: display)
+                }
             } else {
                 let factor = BrightnessBoostMath.externalBoostFactor(
                     brightness: display.brightness, sliderMax: max0)
-                BrightnessService.shared.setBoostFactor(factor, for: displayID)
+                self.queueExternalFactor(factor, for: display)
             }
             if isLast {
                 self.collapsingDisplays.remove(displayID)
-                self.finishDisable(for: display)
             }
         }
+        var polls = 0
+        while collapsingDisplays.contains(displayID), polls < 100 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            guard transitionAccepts(token, display: display) else { return false }
+            polls += 1
+        }
+        guard !collapsingDisplays.contains(displayID),
+              display.brightness <= 100.001, display.maxBrightness <= 100.001 else { return false }
+        display.brightness = min(display.brightness, 100)
+        display.maxBrightness = 100
+        guard try await restoreIdentityFactor(for: display),
+              transitionAccepts(token, display: display) else { return false }
+        return try await finishDisable(for: display, token: token)
     }
 
-    private func finishDisable(for display: DisplayInfo) {
+    private func finishDisable(
+        for display: DisplayInfo,
+        token: BoostTransitionToken
+    ) async throws -> Bool {
         // Close the EDR surface only after everything is static: closing
         // exits EDR mode, and doing that mid-motion is what flashed.
         let displayID = display.displayID
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard !self.isEnabled(for: display) else { return }
-            EDROverlayManager.shared.removeOverlay(for: displayID)
-        }
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        guard transitionAccepts(token, display: display), !isEnabled(for: display) else { return false }
+        EDROverlayManager.shared.removeOverlay(for: displayID)
+        return boostTransitions.completeDisable(token, atIdentity: true)
     }
 
     // MARK: - Overlay sync (called on every brightness change)
@@ -292,6 +583,9 @@ final class BrightnessBoostService {
         // letting this run concurrently (e.g. from the headroom poll) would
         // fight it.
         guard !collapsingDisplays.contains(display.displayID) else { return }
+        guard boostTransitions.headroomMaySync(
+            uuid: display.displayUUID, identity: displayIdentity(display)
+        ) else { return }
         if display.isBuiltin {
             let factor = BrightnessBoostMath.overlayFactor(
                 brightness: display.brightness,
@@ -299,7 +593,9 @@ final class BrightnessBoostService {
                 currentEDR: currentHeadroom(for: display.displayID),
                 potentialHeadroom: potentialHeadroom(for: display.displayID)
             )
-            EDROverlayManager.shared.setFactor(factor, for: display.displayID)
+            if EDROverlayManager.shared.setFactor(factor, for: display.displayID) {
+                recordControlAppliedFactor(factor, for: display)
+            }
             // First entry into the boost region arms the fast-poll window: the
             // EDR ramp that follows is what the poll needs to track closely.
             if factor > 1.001 {
@@ -316,7 +612,7 @@ final class BrightnessBoostService {
             // the table after an ICC-restore clobber without extra plumbing.
             let factor = BrightnessBoostMath.externalBoostFactor(
                 brightness: display.brightness, sliderMax: display.maxBrightness)
-            BrightnessService.shared.setBoostFactor(factor, for: display.displayID)
+            queueExternalFactor(factor, for: display)
         }
         if display.maxBrightness > 100 { startHeadroomPollIfNeeded() }
     }
@@ -328,7 +624,20 @@ final class BrightnessBoostService {
     func reapplyAll() {
         syncHDRRouting()
         var anyEnabled = false
-        for display in DisplayManagerAccessor.shared.displays where isEnabled(for: display) {
+        for display in DisplayManagerAccessor.shared.displays {
+            guard isEnabled(for: display) else {
+                if display.maxBrightness > 100 {
+                    display.brightness = min(display.brightness, 100)
+                    display.maxBrightness = 100
+                    if display.isBuiltin {
+                        EDROverlayManager.shared.removeOverlay(for: display.displayID)
+                        recordControlAppliedFactor(1, for: display)
+                    } else {
+                        queueExternalFactor(1, for: display)
+                    }
+                }
+                continue
+            }
             anyEnabled = true
             guard isEligible(display) else { continue }
             let potential = potentialHeadroom(for: display.displayID)
@@ -359,9 +668,15 @@ final class BrightnessBoostService {
     /// displayID cannot inherit it (same hazard as BrightnessService's
     /// invalidateDDCState; DisplayManager calls both from its removed loop).
     func invalidate(for displayID: CGDirectDisplayID) {
+        if let display = DisplayManagerAccessor.shared.displays.first(where: { $0.displayID == displayID }) {
+            boostTransitions.invalidate(uuid: display.displayUUID, identity: displayIdentity(display))
+            appliedFactorCommits.removeAll()
+            hdrMutations = HDRMutationCoordinator()
+        }
         maxAnimators[displayID]?.cancel()
         maxAnimators.removeValue(forKey: displayID)
         headroomLossSince.removeValue(forKey: displayID)
+        activeBoostDisplays.remove(displayID)
         hdrRequestGeneration.removeValue(forKey: displayID)
         collapsingDisplays.remove(displayID)
         hdrSupportCache.removeValue(forKey: displayID)
@@ -369,8 +684,21 @@ final class BrightnessBoostService {
 
     @objc private func screenParametersChanged() {
         // DisplayIDs can be reassigned across a reconfiguration; drop the
-        // capability cache before anything re-reads it.
+        // capability cache and all in-flight identity generations before
+        // anything re-reads or mutates a potentially re-used display ID.
         hdrSupportCache.removeAll()
+        boostTransitions = BoostTransitionCoordinator()
+        hdrMutations = HDRMutationCoordinator()
+        hdrRequestGeneration.removeAll()
+        maxAnimators.values.forEach { $0.cancel() }
+        maxAnimators.removeAll()
+        collapsingDisplays.removeAll()
+        appliedFactorCommits.removeAll()
+        headroomPollTask?.cancel()
+        headroomPollTask = nil
+        headroomLossSince.removeAll()
+        activeBoostDisplays.removeAll()
+        fastPollUntil = nil
         // Reconcile ONCE after connect/disconnect storms settle (mirrors the
         // panel's own debounce; mid-reconfig geometry and headroom reads are
         // garbage): cancel any reconcile a previous notification scheduled.
@@ -394,8 +722,13 @@ final class BrightnessBoostService {
     /// Live HDR mode state, read straight from MPDisplay (not persisted: the
     /// OS already remembers HDR preference itself).
     func isHDREnabled(for display: DisplayInfo) -> Bool {
-        guard let d = mpDisplay(for: display.displayID) else { return false }
-        return (d.value(forKey: "preferHDRModes") as? Bool) == true
+        controlHDRState(for: display) == true
+    }
+
+    /// Narrow read-only automation state. Nil means MonitorPanel cannot
+    /// currently provide a live preference value for this display.
+    func controlHDRState(for display: DisplayInfo) -> Bool? {
+        monitorPanel.readState(displayID: display.displayID)?.prefersHDR
     }
 
     /// Newest HDR-preference request per display. An off request waits out
@@ -411,15 +744,16 @@ final class BrightnessBoostService {
     /// 100 before the mode switch, instead of the collapse animation fighting
     /// an SDR display underneath it.
     @discardableResult
-    func setHDRPreference(_ on: Bool, for display: DisplayInfo) async -> Bool {
+    func setHDRPreference(_ on: Bool, for display: DisplayInfo) async throws -> Bool {
         let displayID = display.displayID
         let generation = (hdrRequestGeneration[displayID] ?? 0) + 1
         hdrRequestGeneration[displayID] = generation
         if on {
-            return setHDRMode(true, for: displayID)
+            return try await setHDRMode(true, for: display)
         }
+        let hadBoostState = isEnabled(for: display) || collapsingDisplays.contains(displayID)
         if isEnabled(for: display) {
-            _ = await setEnabled(false, for: display)
+            guard try await setEnabled(false, for: display) else { return false }
         }
         // Wait on the live collapse set, not the isEnabled flag: a collapse
         // started moments earlier from the Extra Brightness row has already
@@ -428,22 +762,30 @@ final class BrightnessBoostService {
         // tick would otherwise leave the marker set and spin this forever.
         var waited = 0
         while collapsingDisplays.contains(displayID), waited < 40 {
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            try await Task.sleep(nanoseconds: 50_000_000)
             waited += 1
         }
         // Brief settle so the collapse's last brightness write lands
         // before the mode switch.
-        try? await Task.sleep(nanoseconds: 200_000_000)
-        guard hdrRequestGeneration[displayID] == generation else { return false }
-        return setHDRMode(false, for: displayID)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        guard hdrRequestGeneration[displayID] == generation,
+              currentDisplayMatches(display),
+              !collapsingDisplays.contains(displayID),
+              !isEnabled(for: display),
+              display.brightness <= 100.001,
+              display.maxBrightness <= 100.001 else { return false }
+        if hadBoostState {
+            guard appliedFactorCommits.isCommitted(
+                factor: 1,
+                uuid: display.displayUUID,
+                identity: displayIdentity(display),
+                tolerance: 0.001
+            ) else { return false }
+        }
+        return try await setHDRMode(false, for: display)
     }
 
     // MARK: - MonitorPanel HDR mode (private API; selectors verified by the Task 1 spike)
-
-    private func mpDisplay(for displayID: CGDirectDisplayID) -> NSObject? {
-        guard let displays = manager?.value(forKey: "displays") as? [NSObject] else { return nil }
-        return displays.first { ($0.value(forKey: "displayID") as? UInt32) == displayID }
-    }
 
     /// Hardware capability, cached per displayID: the MPDisplay read is a
     /// synchronous WindowServer round-trip (SLSDisplaySupportsHDRMode), and
@@ -454,21 +796,49 @@ final class BrightnessBoostService {
 
     private func supportsHDRMode(_ displayID: CGDirectDisplayID) -> Bool {
         if let cached = hdrSupportCache[displayID] { return cached }
-        guard let d = mpDisplay(for: displayID) else { return false }
-        let supported = (d.value(forKey: "hasHDRModes") as? Bool) == true
+        let supported = monitorPanel.snapshot(for: displayID)?.supportsHDR == true
         hdrSupportCache[displayID] = supported
         return supported
     }
 
     @discardableResult
-    private func setHDRMode(_ on: Bool, for displayID: CGDirectDisplayID) -> Bool {
-        guard let d = mpDisplay(for: displayID) else { return false }
-        let sel = NSSelectorFromString("setPreferHDRModes:")
-        guard d.responds(to: sel) else { return false }
-        typealias Fn = @convention(c) (NSObject, Selector, Bool) -> Void
-        unsafeBitCast(d.method(for: sel), to: Fn.self)(d, sel, on)
-        BrightnessService.shared.setHDRSoftwareDimming(on, for: displayID)
-        return true
+    private func setHDRMode(
+        _ on: Bool,
+        for display: DisplayInfo,
+        requiring boostToken: BoostTransitionToken? = nil
+    ) async throws -> Bool {
+        try Task.checkCancellation()
+        if let boostToken {
+            guard transitionAccepts(boostToken, display: display) else { return false }
+        }
+        guard display.isOnline, !display.isBuiltin,
+              !VirtualDisplayService.shared.isVirtualDisplay(display.displayID),
+              currentDisplayMatches(display),
+              let monitorPanelIdentity = HDRPreferenceAdapterDriver.beginSet(
+                  using: monitorPanel, displayID: display.displayID, requested: on
+              ) else { return false }
+        let mutationIdentity = "\(displayIdentity(display))|\(monitorPanelIdentity)"
+        let token = hdrMutations.begin(
+            uuid: display.displayUUID, identity: mutationIdentity, requested: on
+        )
+        guard hdrMutations.recordSetterInvocation(token) else { return false }
+        for _ in 0..<20 {
+            try Task.checkCancellation()
+            guard currentDisplayMatches(display) else { return false }
+            if let liveState = monitorPanel.readState(displayID: display.displayID),
+               liveState.identity == monitorPanelIdentity,
+               hdrMutations.observe(
+                   token,
+                   currentUUID: display.displayUUID,
+                   currentIdentity: mutationIdentity,
+                   readback: liveState.prefersHDR
+               ), let verified = hdrMutations.verifiedRoutingState(for: token) {
+                BrightnessService.shared.setHDRSoftwareDimming(verified, for: display.displayID)
+                return true
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
     }
 
     /// Keeps BrightnessService's DDC-vs-software routing in step with each
@@ -483,7 +853,7 @@ final class BrightnessBoostService {
         // must be actively cleared out of the software-dimming set, or its
         // DDC control stays silently routed to gamma.
         for display in DisplayManagerAccessor.shared.displays where !display.isBuiltin {
-            let dimmed = isEligibleForHDRToggle(display) && isHDREnabled(for: display)
+            let dimmed = controlHDRState(for: display) == true
             BrightnessService.shared.setHDRSoftwareDimming(dimmed, for: display.displayID)
         }
     }

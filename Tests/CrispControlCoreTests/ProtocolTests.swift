@@ -51,12 +51,110 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(capability.readback, .authoritative)
     }
 
+    func testP0CapabilitiesRoundTripDynamicRangeAndDistinctToggleTruth() throws {
+        let display = ControlDisplay(
+            uuid: "xdr", name: "Built-in XDR", isMain: true, isBuiltin: true,
+            brightness: BrightnessCapability(
+                state: .writable, backend: .displayServices,
+                range: ControlRange(min: 0, max: 162.5, precision: 0.1), readback: .authoritative,
+                hardwareRange: ControlRange(min: 0, max: 100, precision: 0.1),
+                logicalRange: ControlRange(min: 0, max: 162.5, precision: 0.1)
+            ),
+            brightnessPercent: 120,
+            extraBrightness: ExtraBrightnessCapability(
+                state: .writable, enabled: true, persistedEnabled: true, maxBrightness: 162.5,
+                headroom: EDRHeadroomSnapshot(
+                    potential: 1.8, current: 1.62,
+                    appliedFactor: 1.4, factorVerification: "app_state"
+                )
+            ),
+            hdr: HDRCapability.unsupported(
+                enabled: nil,
+                reason: "built-in displays do not expose an HDR preference toggle",
+                remediation: "use Extra Brightness when eligible"
+            )
+        )
+
+        let data = try ControlJSON.encoder.encode(display)
+        let decoded = try ControlJSON.decoder.decode(ControlDisplay.self, from: data)
+
+        XCTAssertEqual(decoded.brightness.hardwareRange.max, 100)
+        XCTAssertEqual(decoded.brightness.logicalRange.max, 162.5)
+        XCTAssertEqual(decoded.extraBrightness.state, .writable)
+        XCTAssertEqual(decoded.extraBrightness.enabled, true)
+        XCTAssertEqual(decoded.extraBrightness.persistedEnabled, true)
+        XCTAssertEqual(decoded.extraBrightness.maxBrightness, 162.5)
+        XCTAssertEqual(decoded.extraBrightness.headroom?.potential, 1.8)
+        XCTAssertEqual(decoded.extraBrightness.headroom?.current, 1.62)
+        XCTAssertEqual(decoded.extraBrightness.headroom?.appliedFactor, 1.4)
+        XCTAssertEqual(decoded.extraBrightness.headroom?.factorVerification, "app_state")
+        XCTAssertEqual(decoded.hdr.state, .unsupported)
+        XCTAssertTrue(decoded.hdr.remediation?.contains("Extra Brightness") == true)
+    }
+
+    func testIneligibleCapabilitiesCarryReasonsWithoutPretendingHDRMeansBoostReady() throws {
+        let boost = ExtraBrightnessCapability.unsupported(
+            enabled: true,
+            persistedEnabled: false,
+            maxBrightness: 100,
+            headroom: EDRHeadroomSnapshot(potential: 1, current: 1),
+            reason: "no usable EDR headroom and no writable external HDR toggle",
+            remediation: "enable HDR in the display or macOS settings if available"
+        )
+        let hdr = HDRCapability(
+            state: .readable, enabled: true,
+            reason: "HDR is live but Crisp does not expose a writable toggle for this display"
+        )
+
+        XCTAssertEqual(boost.state, .unsupported)
+        XCTAssertEqual(boost.enabled, true)
+        XCTAssertEqual(boost.maxBrightness, 100)
+        XCTAssertEqual(hdr.state, .readable)
+        XCTAssertEqual(hdr.enabled, true)
+    }
+
     func testEveryErrorHasAStableExitCode() {
         XCTAssertEqual(ControlErrorCode.appNotRunning.exitCode, 3)
         XCTAssertEqual(ControlErrorCode.invalidArguments.exitCode, 2)
         XCTAssertEqual(ControlErrorCode.unsupportedCapability.exitCode, 4)
         XCTAssertEqual(ControlErrorCode.writeVerificationFailed.exitCode, 5)
         XCTAssertEqual(ControlErrorCode.writeOutcomeIndeterminate.exitCode, 5)
+        XCTAssertEqual(ControlErrorCode.batchPartialFailure.exitCode, 5)
+        XCTAssertEqual(ControlErrorCode.batchPreflightFailed.exitCode, 4)
+        XCTAssertEqual(ControlErrorCode.emptyPhysicalInventory.exitCode, 4)
         XCTAssertEqual(ControlErrorCode.internalError.exitCode, 1)
+    }
+
+    func testUnknownFutureSetCommandDefaultsToIndeterminateMutationSafety() {
+        let request = ControlRequest(
+            requestID: "future", command: "future-display.set",
+            arguments: ["selector": .string("uuid-a")]
+        )
+
+        XCTAssertEqual(request.mutationKind, .unknown)
+        let response = ControlResponse.timeout(for: request)
+        XCTAssertEqual(response.error?.code, .writeOutcomeIndeterminate)
+        XCTAssertEqual(response.error?.details?["retrySafe"], .bool(false))
+        XCTAssertEqual(response.error?.details?["command"], .string("future-display.set"))
+    }
+
+    func testOldV1DisplayResponseDecodesWithAdditiveDefaults() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/old-v1-display.json")
+        let oldV1 = try Data(contentsOf: fixture)
+
+        let decoded = try ControlJSON.decoder.decode(ControlDisplay.self, from: oldV1)
+
+        XCTAssertEqual(decoded.uuid, "old-uuid")
+        XCTAssertEqual(decoded.brightnessPercent, 42)
+        XCTAssertEqual(decoded.brightness.range.max, 100)
+        XCTAssertEqual(decoded.brightness.hardwareRange.max, 100)
+        XCTAssertEqual(decoded.brightness.logicalRange.max, 100)
+        XCTAssertFalse(decoded.isVirtual)
+        XCTAssertEqual(decoded.extraBrightness.state, .unsupported)
+        XCTAssertEqual(decoded.hdr.state, .unsupported)
+        XCTAssertEqual(crispControlProtocolVersion, 1)
     }
 }

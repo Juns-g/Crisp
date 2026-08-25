@@ -471,6 +471,13 @@ final class BrightnessService: @unchecked Sendable {
             return value
         }
         guard controlBackend(for: display) == .ddc else { return display.brightness }
+        guard let percent = await readExternalDDCBrightnessForControl(for: display) else { return nil }
+        display.brightness = percent
+        return percent
+    }
+
+    @MainActor
+    private func readExternalDDCBrightnessForControl(for display: DisplayInfo) async -> Double? {
         let result = await withCheckedContinuation { continuation in
             DDCService.shared.readAsync(displayID: display.displayID, command: DDCService.brightnessVCP) {
                 continuation.resume(returning: $0)
@@ -481,16 +488,49 @@ final class BrightnessService: @unchecked Sendable {
             ddcMaxBrightness[display.displayID] = result.max
             ddcAvailable[display.displayID] = true
         }
-        let percent = Double(result.current) / Double(result.max) * 100
-        display.brightness = percent
-        return percent
+        return Double(result.current) / Double(result.max) * 100
+    }
+
+    /// Separates Crisp's logical slider state from native/DDC read-back. While
+    /// boosted, hardware is intentionally pinned at 100 and must not overwrite
+    /// the committed logical value above 100.
+    @MainActor
+    func readBrightnessStateForControl(for display: DisplayInfo) async -> BrightnessReadSnapshot? {
+        if display.brightness > 100 {
+            let hardware: Double? = if display.isBuiltin {
+                await withCheckedContinuation { continuation in
+                    queue.async { [weak self] in
+                        continuation.resume(returning: self?.getInternalBrightness())
+                    }
+                }
+            } else if controlBackend(for: display) == .ddc {
+                await readExternalDDCBrightnessForControl(for: display)
+            } else {
+                nil
+            }
+            return BrightnessReadSnapshot(
+                logicalPercent: display.brightness,
+                hardwareReadbackPercent: hardware
+            )
+        }
+        guard let value = await readBrightnessForControl(for: display) else { return nil }
+        let hardware = controlReadbackQuality(for: display) == .unavailable ? nil : value
+        return BrightnessReadSnapshot(logicalPercent: display.brightness, hardwareReadbackPercent: hardware)
     }
 
     /// Performs one bounded backend write for crispctl. The dispatcher owns range
     /// validation and the subsequent independent read-back check.
     @MainActor
     func writeBrightnessForControl(_ percent: Double, for display: DisplayInfo) async throws -> Double {
-        let applied = max(0, min(100, percent))
+        guard percent >= 0, percent <= display.maxBrightness else {
+            throw ControlServiceError.writeFailed("brightness is outside the live logical range")
+        }
+        if percent > 100 {
+            await setBrightness(percent, for: display)
+            return display.brightness
+        }
+
+        let applied = max(0, min(display.maxBrightness, percent))
         cancelAnimation(for: display.displayID)
 
         return try await BrightnessWriteCommit.perform {
@@ -810,9 +850,43 @@ final class BrightnessService: @unchecked Sendable {
     /// External boost region: BrightnessBoostService drives the transfer table
     /// above 1.0 through here, on the same serial queue as the dim path, so
     /// slider motion above and below 100 is always one writer, one table.
-    func setBoostFactor(_ factor: Double, for displayID: CGDirectDisplayID) {
+    func setBoostFactor(
+        _ factor: Double,
+        for displayID: CGDirectDisplayID,
+        expectedDisplayUUID: String,
+        completion: @escaping @Sendable (Bool) -> Void
+    ) {
         queue.async { [weak self] in
-            self?.setSoftwareBrightness(factor * 100.0, for: displayID)
+            guard Self.displayUUIDString(for: displayID) == expectedDisplayUUID,
+                  let self else {
+                completion(false)
+                return
+            }
+            self.setSoftwareBrightness(factor * 100.0, for: displayID)
+            completion(true)
+        }
+    }
+
+    /// Automation terminal-state barrier for Extra Brightness disable. This
+    /// still uses the GUI-owned transfer-table path; completion means Crisp's
+    /// queued app-state write ran, not that emitted light was independently
+    /// measured.
+    @MainActor
+    func setBoostFactorForControl(
+        _ factor: Double,
+        for displayID: CGDirectDisplayID,
+        expectedDisplayUUID: String
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                guard Self.displayUUIDString(for: displayID) == expectedDisplayUUID,
+                      let self else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                self.setSoftwareBrightness(factor * 100.0, for: displayID)
+                continuation.resume(returning: true)
+            }
         }
     }
 

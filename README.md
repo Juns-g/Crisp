@@ -91,7 +91,20 @@ Thank you to the people chipping in toward keeping Crisp signed and notarized:
 ## Automation
 
 The `crispctl` target provides a versioned JSON interface for display discovery,
-capabilities, and brightness through the running Crisp app. See
+capabilities, brightness, Extra Brightness, and writable external HDR toggles
+through the running Crisp app.
+
+| Crisp GUI capability | `crispctl` command |
+|---|---|
+| Display inventory and live capabilities | `displays list`, `displays get`, `displays capabilities` |
+| One display's logical brightness | `brightness get`, `brightness set` |
+| All physical displays, same logical percent per display | `brightness get-all`, `brightness set-all` |
+| Extra Brightness / live EDR range | `extra-brightness get`, `extra-brightness set` |
+| Explicit external HDR toggle | `hdr get`, `hdr set` |
+
+Built-in displays intentionally have no `hdr set`; use Extra Brightness when its
+live capability is writable. Resolution, presets, arrangement, disconnect,
+virtual-display creation, and other P1/P2 settings remain GUI-only. See
 [docs/crispctl.md](docs/crispctl.md) for commands, response schema, security,
 and headless verification. AI agents can install the repository's standard
 Skill from [skills/crispctl/SKILL.md](skills/crispctl/SKILL.md) after reviewing

@@ -189,6 +189,41 @@ final class TransportTests: XCTestCase {
         XCTAssertEqual(response.error?.code, .timeout)
     }
 
+    func testBatchGetsLongerHandlerBudgetWithoutWeakeningConnectionDeadline() throws {
+        let batch = ControlRequest(requestID: "batch-budget", command: "brightness.set-all",
+                                   arguments: ["percent": .number(50)])
+        let ordinary = ControlRequest(requestID: "ordinary", command: "brightness.get-all")
+        let settlingWrite = ControlRequest(requestID: "boost", command: "extra-brightness.set",
+                                           arguments: ["selector": .string("uuid-a"), "enabled": .bool(true)])
+
+        XCTAssertEqual(ControlTimeoutPolicy.clientTimeout(
+            for: batch, standard: 3, settlingWrite: 6, batch: 12
+        ), 12)
+        XCTAssertEqual(ControlTimeoutPolicy.handlerTimeout(
+            for: batch, standard: 2, settlingWrite: 5, batch: 12
+        ), 12)
+        XCTAssertEqual(ControlTimeoutPolicy.clientTimeout(
+            for: settlingWrite, standard: 3, settlingWrite: 6, batch: 12
+        ), 6)
+        XCTAssertEqual(ControlTimeoutPolicy.handlerTimeout(
+            for: settlingWrite, standard: 2, settlingWrite: 5, batch: 12
+        ), 5)
+        XCTAssertEqual(ControlTimeoutPolicy.clientTimeout(
+            for: ordinary, standard: 3, settlingWrite: 6, batch: 12
+        ), 3)
+        XCTAssertEqual(ControlTimeoutPolicy.handlerTimeout(
+            for: ordinary, standard: 2, settlingWrite: 5, batch: 12
+        ), 2)
+        XCTAssertEqual(ControlTimeoutPolicy.receiveTimeout(standard: 2), 2)
+    }
+
+    func testDefaultBatchClientBudgetLeavesTimeToDeliverHandlerResponse() {
+        XCTAssertGreaterThan(
+            UnixSocketClient().batchTimeout,
+            ControlTimeoutPolicy.defaultBatchHandlerTimeout
+        )
+    }
+
     func testBrightnessWriteTimeoutReportsIndeterminateOutcomeBeforeLateCallback() throws {
         let lateMutation = LockedFlag()
         let server = UnixSocketServer(path: socketPath, connectionTimeout: 0.05) { request in
@@ -218,6 +253,83 @@ final class TransportTests: XCTestCase {
         XCTAssertEqual(response.error?.details?["retrySafe"], .bool(false))
         Thread.sleep(forTimeInterval: 0.2)
         XCTAssertTrue(lateMutation.value)
+    }
+
+    func testEveryServerSideMutationTimeoutIsIndeterminate() throws {
+        let server = UnixSocketServer(
+            path: socketPath,
+            connectionTimeout: 0.02,
+            settlingWriteHandlerTimeout: 0.02,
+            batchHandlerTimeout: 0.02
+        ) { request in
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.08) {
+                    continuation.resume()
+                }
+            }
+            return .success(requestID: request.requestID, result: .null)
+        }
+        try server.start()
+        defer { server.stop() }
+        let client = UnixSocketClient(
+            path: socketPath, timeout: 1, settlingWriteTimeout: 1, batchTimeout: 1
+        )
+        let cases: [(String, [String: JSONValue])] = [
+            ("brightness.set", ["selector": .string("uuid-a"), "percent": .number(150)]),
+            ("extra-brightness.set", ["selector": .string("uuid-a"), "enabled": .bool(true)]),
+            ("hdr.set", ["selector": .string("uuid-b"), "enabled": .bool(false)]),
+            ("brightness.set-all", ["percent": .number(50)])
+        ]
+
+        for (command, arguments) in cases {
+            let response = try client.send(ControlRequest(
+                requestID: command, command: command, arguments: arguments
+            ))
+            XCTAssertEqual(response.error?.code, .writeOutcomeIndeterminate, command)
+            XCTAssertEqual(response.error?.details?["retrySafe"], .bool(false), command)
+            XCTAssertEqual(response.error?.details?["command"], .string(command), command)
+        }
+    }
+
+    func testHDRSettlementBudgetCanReturnVerifiedResponseBeforeServerDeadline() throws {
+        let server = UnixSocketServer(
+            path: socketPath,
+            connectionTimeout: 0.01,
+            settlingWriteHandlerTimeout: 0.1
+        ) { request in
+            try? await Task.sleep(for: .milliseconds(30))
+            return .success(requestID: request.requestID, result: .object(["verification": .string("verified")]))
+        }
+        try server.start()
+        defer { server.stop() }
+
+        let response = try UnixSocketClient(
+            path: socketPath, timeout: 0.05, settlingWriteTimeout: 0.2
+        ).send(ControlRequest(
+            requestID: "hdr-settle", command: "hdr.set",
+            arguments: ["selector": .string("uuid-a"), "enabled": .bool(true)]
+        ))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.result?["verification"], .string("verified"))
+    }
+
+    func testTimedOutHandlerReleasesConnectionCapacity() throws {
+        let server = UnixSocketServer(
+            path: socketPath, connectionTimeout: 0.02, maximumConnections: 1
+        ) { request in
+            if request.requestID == "slow" { try? await Task.sleep(for: .milliseconds(100)) }
+            return .success(requestID: request.requestID, result: .null)
+        }
+        try server.start()
+        defer { server.stop() }
+        let client = UnixSocketClient(path: socketPath, timeout: 1)
+
+        let first = try client.send(ControlRequest(requestID: "slow", command: "brightness.get-all"))
+        let second = try client.send(ControlRequest(requestID: "next", command: "status"))
+
+        XCTAssertEqual(first.error?.code, .timeout)
+        XCTAssertTrue(second.ok)
     }
 
     func testProductionDefaultTimeoutsDeliverStructuredIndeterminateBrightnessResult() throws {

@@ -88,7 +88,7 @@ public struct CLIRunner: Sendable {
 
     private func transportFailure(_ invocation: CLIInvocation, _ error: Error) -> CLIRunResult {
         if let ipcError = error as? IPCError, ipcError == .timeout {
-            if invocation.request.command == "brightness.set" {
+            if invocation.request.isMutating {
                 return CLIRunResult(response: .timeout(for: invocation.request))
             }
             return failure(invocation, .timeout, "Crisp control request timed out")

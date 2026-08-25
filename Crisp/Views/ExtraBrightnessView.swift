@@ -28,7 +28,9 @@ struct ExtraBrightnessView: View {
                     .onChange(of: isOn) { _, newValue in
                         guard !isProgrammaticChange else { return }
                         Task { @MainActor in
-                            let ok = await BrightnessBoostService.shared.setEnabled(newValue, for: display)
+                            let ok = (try? await BrightnessBoostService.shared.setEnabled(
+                                newValue, for: display
+                            )) == true
                             if !ok {
                                 // Quiet revert, per the spec: no dialogs.
                                 isProgrammaticChange = true

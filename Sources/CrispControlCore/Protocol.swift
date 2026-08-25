@@ -79,6 +79,40 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         self.command = command
         self.arguments = arguments
     }
+
+    public var mutationKind: ControlMutationKind? {
+        switch command {
+        case "brightness.set": .brightness
+        case "brightness.set-all": .brightnessBatch
+        case "extra-brightness.set": .extraBrightness
+        case "hdr.set": .hdr
+        default:
+            command.hasSuffix(".set") || command.hasSuffix(".set-all") ? .unknown : nil
+        }
+    }
+
+    public var isMutating: Bool { mutationKind != nil }
+}
+
+public enum ControlMutationKind: String, Codable, Equatable, Sendable {
+    case brightness
+    case brightnessBatch = "brightness_batch"
+    case extraBrightness = "extra_brightness"
+    case hdr
+    /// Conservative fallback for a future set-shaped command omitted from the
+    /// explicit inventory: timeout safety must fail closed until CI classifies it.
+    case unknown
+}
+
+public enum ControlCommandInventory {
+    public static let dispatcherCommands: Set<String> = [
+        "version", "status", "displays.list", "displays.get", "displays.capabilities",
+        "brightness.get", "brightness.set", "brightness.get-all", "brightness.set-all",
+        "extra-brightness.get", "extra-brightness.set", "hdr.get", "hdr.set"
+    ]
+    public static let mutatingCommands: Set<String> = [
+        "brightness.set", "brightness.set-all", "extra-brightness.set", "hdr.set"
+    ]
 }
 
 public enum ControlErrorCode: String, Codable, CaseIterable, Sendable {
@@ -89,6 +123,9 @@ public enum ControlErrorCode: String, Codable, CaseIterable, Sendable {
     case unsupportedCapability = "unsupported_capability"
     case writeVerificationFailed = "write_verification_failed"
     case writeOutcomeIndeterminate = "write_outcome_indeterminate"
+    case batchPartialFailure = "batch_partial_failure"
+    case batchPreflightFailed = "batch_preflight_failed"
+    case emptyPhysicalInventory = "empty_physical_inventory"
     case selectorNotFound = "selector_not_found"
     case ambiguousSelector = "ambiguous_selector"
     case protocolMismatch = "protocol_mismatch"
@@ -101,8 +138,8 @@ public enum ControlErrorCode: String, Codable, CaseIterable, Sendable {
         switch self {
         case .invalidArguments: 2
         case .appNotRunning, .appLaunchFailed, .appReadinessTimeout: 3
-        case .unsupportedCapability: 4
-        case .writeVerificationFailed, .writeOutcomeIndeterminate: 5
+        case .unsupportedCapability, .batchPreflightFailed, .emptyPhysicalInventory: 4
+        case .writeVerificationFailed, .writeOutcomeIndeterminate, .batchPartialFailure: 5
         case .selectorNotFound, .ambiguousSelector: 6
         case .protocolMismatch, .malformedRequest: 7
         case .timeout, .transportError: 8
@@ -146,7 +183,7 @@ public struct ControlResponse: Codable, Equatable, Sendable {
     }
 
     public static func timeout(for request: ControlRequest) -> Self {
-        guard request.command == "brightness.set" else {
+        guard request.isMutating else {
             return .failure(
                 requestID: request.requestID,
                 code: .timeout,
@@ -155,14 +192,19 @@ public struct ControlResponse: Codable, Equatable, Sendable {
         }
         var details: [String: JSONValue] = [
             "retrySafe": .bool(false),
-            "outcome": .string("unknown")
+            "outcome": .string("unknown"),
+            "command": .string(request.command)
         ]
         if let selector = request.arguments["selector"] { details["selector"] = selector }
         if let percent = request.arguments["percent"] { details["targetPercent"] = percent }
+        if let enabled = request.arguments["enabled"] { details["targetEnabled"] = enabled }
+        if request.command == "brightness.set-all" {
+            details["target"] = .string("all_physical_displays")
+        }
         return .failure(
             requestID: request.requestID,
             code: .writeOutcomeIndeterminate,
-            message: "brightness write timed out; the display may still reach the requested value",
+            message: "control write timed out; one or more displays may still reach the requested state",
             details: .object(details)
         )
     }

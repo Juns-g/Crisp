@@ -50,6 +50,12 @@ crispctl displays get <uuid|main|builtin|name> --json [--no-start]
 crispctl displays capabilities <selector> --json [--no-start]
 crispctl brightness get <selector> --json [--no-start]
 crispctl brightness set <selector> <percent> --json [--no-start]
+crispctl brightness get-all --json [--no-start]
+crispctl brightness set-all <percent> --json [--no-start]
+crispctl extra-brightness get <selector> --json [--no-start]
+crispctl extra-brightness set <selector> on|off --json [--no-start]
+crispctl hdr get <selector> --json [--no-start]
+crispctl hdr set <selector> on|off --json [--no-start]
 ```
 
 Display UUID is the stable canonical selector. `main` and `builtin` are
@@ -61,12 +67,67 @@ If Crisp is unavailable, the CLI normally resolves and launches the registered
 for a bounded interval. `--no-start` returns `app_not_running` immediately.
 Tests inject a launcher and never open the GUI.
 
-Brightness values are percentages within the selected display's reported
-capability range. A set response includes requested, original, applied, and
-read-back values, the active backend, verification quality, and warnings. An
-authoritative or approximate backend does not return success until read-back is
-within its declared precision. Software/gamma fallback reports unavailable
-read-back instead of inventing precision.
+Brightness values are logical percentages within the selected display's current
+`brightness.logicalRange` (also retained as the compatible `brightness.range`).
+`brightness.hardwareRange` is always the native/DDC range, normally 0...100.
+When Extra Brightness is enabled and usable, the logical maximum is the live
+`DisplayInfo.maxBrightness`; it is never hardcoded to 200 and does not represent
+absolute nits. `headroom.potential` and `headroom.current` are relative NSScreen
+EDR component values. `headroom.appliedFactor` is the most recent factor Crisp
+committed through its overlay or transfer-table path. Its
+`factorVerification` is `app_state`; a missing value is `null`. Neither field is
+an independent measurement of EDR output or emitted light.
+
+A read returns compatible `percent` plus unambiguous `logicalPercent` and
+`hardwareReadbackPercent`. A logical value above 100 can therefore coexist with
+a hardware read-back of 100. A set response includes requested, original,
+applied, and read-back values, backend, verification quality, and warnings. At
+or below 100, authoritative/approximate/unavailable retain their existing
+meaning. Above 100, `app_state_verified` means Crisp committed the logical state
+and synchronized its existing EDR/boost path; it is not hardware-authoritative
+EDR verification. An unavailable independent EDR read-back is stated in
+`warnings`.
+
+`extra-brightness get/set` reports `state`, live `enabled`,
+`persistedEnabled`, `maxBrightness`, relative `headroom`, reasons, and
+remediation. Disable awaits its generation-guarded terminal state: logical
+brightness is at most 100, the ceiling and boost factor are at identity, and
+the overlay is removed. An accepted enable can return `settling` while its
+animated ceiling grows. `hdr get/set` is distinct and writable only for an
+external display where Crisp's GUI exposes the explicit HDR toggle. A built-in
+display returns `unsupported_capability` with remediation to use Extra
+Brightness when eligible. HDR set is verified only after bounded live read-back.
+
+Normally every write requires a fresh discovery response with `state: writable`
+and the exact same UUID. The sole exception is
+`extra-brightness set <same-uuid> off`: a freshly returned same-UUID Extra
+Brightness state may have `state: unsupported` while positively proving cleanup
+is needed through `persistedEnabled: true`, `enabled: true`, or
+`maxBrightness > 100`. This exception never permits `on`, never permits
+unsupported HDR or brightness writes, and never permits unsupported `off`
+without a cleanup indicator. Obtain explicit user authorization for that exact
+cleanup command. For every other capability collapse, unsupported state, or
+stale UUID, stop and re-discover before a fresh user decision. The cleanup path
+retains `write_outcome_indeterminate`, `retrySafe: false`, separate read-back,
+and no automatic retry rules.
+
+`brightness get-all` and `brightness set-all` target every connected
+non-virtual physical display in UUID order. Their semantics are
+`same_logical_percent_per_display`: 125 means logical 125 on each display, not a
+normalized fraction, so preflight fails without any write if even one target's
+dynamic maximum is lower. Hardware writes are not atomic and are never rolled
+back. A partial execution returns `batch_partial_failure`, ordered per-display
+outcomes, `appliedUUIDs`, `failedUUIDs`, `indeterminateUUIDs`, and
+`notAttemptedUUIDs`. Each outcome says whether it was attempted and carries its
+own `attempted`, `outcome`, `verification`, `code`, and `retrySafe` fields; a
+successful member uses `code: null`, while a member that was not attempted is
+explicitly classified. The aggregate is `retrySafe: false`. The batch's
+internal deadline returns accumulated results before the server deadline, so
+only the in-flight member is indeterminate and later members are not attempted.
+Do not retry successful or indeterminate members. Only a `retrySafe: true`
+member may be reconsidered after reconciliation and a fresh authorized
+decision; there is no automatic retry. Empty
+physical inventory returns `empty_physical_inventory`.
 
 ## Response contract
 
@@ -88,10 +149,21 @@ Every stdout response in JSON mode is one JSON value followed by a newline:
 Success uses `result` instead of `error`. Exit codes are stable by category:
 1 internal, 2 arguments, 3 app lifecycle, 4 unsupported capability, 5 write
 verification or indeterminate write outcome, 6 selector, 7 protocol, and 8
-transport/timeout. `write_outcome_indeterminate` includes `retrySafe: false`
+transport/timeout. Batch preflight/empty inventory use capability category 4;
+`batch_partial_failure` uses write category 5. `write_outcome_indeterminate`
+includes `retrySafe: false`
 and the requested selector/target: an in-flight macOS or DDC callback may still
 apply after the CLI times out, so callers must read current state and must not
 automatically repeat the write.
+
+These fields and commands are additive protocol-v1 extensions. Older v1
+display payloads decode with defaults for the new capability fields; existing
+field names, types, and exit categories remain unchanged.
+
+All mutating commands (`brightness set`, `brightness set-all`,
+`extra-brightness set`, and `hdr set`) use this indeterminate contract. Batch
+timeouts identify `all_physical_displays`; selector writes include the selector
+and target. Read current state before seeking a new user-authorized decision.
 
 ## Security and lifecycle
 
@@ -121,7 +193,8 @@ swift build --disable-sandbox --product crispctl
 ```
 
 The round-trip script starts a separate fixture host process, exercises list,
-status, brightness get/set and verified read-back through the real socket, then
+status, all P0 get/set commands, >100 logical state, batch behavior, and verified
+read-back through the real socket, then
 removes the process and socket. It contains the only hardcoded display fixture;
 production discovery always comes from Crisp's live `DisplayManager`.
 

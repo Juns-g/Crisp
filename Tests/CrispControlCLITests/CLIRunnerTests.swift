@@ -87,6 +87,65 @@ final class CLIRunnerTests: XCTestCase {
         XCTAssertEqual(result.exitCode, ControlErrorCode.writeOutcomeIndeterminate.exitCode)
     }
 
+    func testEveryP0MutationTimeoutIsIndeterminateWithTargetAndNoRetry() {
+        let cases: [MutationTimeoutCase] = [
+            MutationTimeoutCase(
+                command: "extra-brightness.set",
+                arguments: ["selector": .string("uuid-a"), "enabled": .bool(true)],
+                targetKey: "targetEnabled",
+                targetValue: .bool(true)
+            ),
+            MutationTimeoutCase(
+                command: "hdr.set",
+                arguments: ["selector": .string("uuid-b"), "enabled": .bool(false)],
+                targetKey: "targetEnabled",
+                targetValue: .bool(false)
+            ),
+            MutationTimeoutCase(
+                command: "brightness.set-all",
+                arguments: ["percent": .number(125)],
+                targetKey: "targetPercent",
+                targetValue: .number(125)
+            )
+        ]
+
+        for testCase in cases {
+            let request = ControlRequest(
+                requestID: testCase.command,
+                command: testCase.command,
+                arguments: testCase.arguments
+            )
+            let invocation = CLIInvocation(request: request, noStart: true, socketPath: "/tmp/test.sock")
+            let result = CLIRunner(
+                transport: MockTransport([.failure(IPCError.timeout)]), launcher: MockLauncher()
+            ).run(invocation)
+
+            XCTAssertEqual(result.response.error?.code, .writeOutcomeIndeterminate, testCase.command)
+            XCTAssertEqual(result.response.error?.details?["retrySafe"], .bool(false), testCase.command)
+            XCTAssertEqual(
+                result.response.error?.details?[testCase.targetKey],
+                testCase.targetValue,
+                testCase.command
+            )
+            if testCase.command == "brightness.set-all" {
+                XCTAssertEqual(result.response.error?.details?["target"], .string("all_physical_displays"))
+            } else {
+                XCTAssertNotNil(result.response.error?.details?["selector"])
+            }
+            XCTAssertEqual(result.exitCode, 5)
+        }
+    }
+
+    func testReadTimeoutRemainsOrdinaryTimeout() {
+        let request = ControlRequest(requestID: "read-timeout", command: "brightness.get-all")
+        let result = CLIRunner(
+            transport: MockTransport([.failure(IPCError.timeout)]), launcher: MockLauncher()
+        ).run(CLIInvocation(request: request, noStart: true, socketPath: "/tmp/test.sock"))
+
+        XCTAssertEqual(result.response.error?.code, .timeout)
+        XCTAssertEqual(result.exitCode, ControlErrorCode.timeout.exitCode)
+    }
+
     func testJSONOutputIsOneValueWithTrailingNewline() throws {
         let response = ControlResponse.success(requestID: "req", result: .object(["b": .number(2), "a": .number(1)]))
         let output = try CLIOutput.jsonLine(response)
@@ -100,6 +159,13 @@ final class CLIRunnerTests: XCTestCase {
         CLIInvocation(request: ControlRequest(requestID: "req", command: "status"),
                       noStart: noStart, socketPath: "/tmp/test.sock")
     }
+}
+
+private struct MutationTimeoutCase {
+    let command: String
+    let arguments: [String: JSONValue]
+    let targetKey: String
+    let targetValue: JSONValue
 }
 
 private final class MockTransport: ControlTransport, @unchecked Sendable {

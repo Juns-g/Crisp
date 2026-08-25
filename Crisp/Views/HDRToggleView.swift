@@ -35,7 +35,9 @@ struct HDRToggleView: View {
                         guard !isProgrammaticChange else { return }
                         requestInFlight = true
                         Task { @MainActor in
-                            _ = await BrightnessBoostService.shared.setHDRPreference(newValue, for: display)
+                            _ = try? await BrightnessBoostService.shared.setHDRPreference(
+                                newValue, for: display
+                            )
                             // Read back the live state rather than trust newValue:
                             // this both confirms success and is the quiet revert
                             // on failure, per the spec: no dialogs.

@@ -1,0 +1,13 @@
+{
+  "uuid": "old-uuid",
+  "name": "Old Display",
+  "isMain": true,
+  "isBuiltin": true,
+  "brightness": {
+    "state": "writable",
+    "backend": "DisplayServices",
+    "range": {"min": 0, "max": 100, "precision": 0.1},
+    "readback": "authoritative"
+  },
+  "brightnessPercent": 42
+}

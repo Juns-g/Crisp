@@ -3,26 +3,84 @@ import Foundation
 import CrispControlCore
 
 private actor FixtureService: ControlCommandService {
-    private var brightness = 42.0
-    private let capability = BrightnessCapability(
-        state: .writable,
-        backend: .displayServices,
-        range: ControlRange(min: 0, max: 100, precision: 0.1),
-        readback: .authoritative
-    )
+    private var brightness = ["fixture-built-in": 42.0, "fixture-external": 48.0]
+    private var boostEnabled = false
+    private var hdrEnabled = true
 
     func displays() async throws -> [ControlDisplay] {
-        [ControlDisplay(
-            uuid: "fixture-built-in", name: "Fixture Display", isMain: true, isBuiltin: true,
-            brightness: capability, brightnessPercent: brightness
-        )]
+        let builtinMax = boostEnabled ? 150.0 : 100.0
+        return [
+            ControlDisplay(
+                uuid: "fixture-built-in", name: "Fixture Built-in", isMain: true, isBuiltin: true,
+                brightness: BrightnessCapability(
+                    state: .writable, backend: .displayServices,
+                    range: ControlRange(min: 0, max: builtinMax, precision: 0.1),
+                    readback: .authoritative,
+                    hardwareRange: ControlRange(min: 0, max: 100, precision: 0.1),
+                    logicalRange: ControlRange(min: 0, max: builtinMax, precision: 0.1)
+                ),
+                brightnessPercent: brightness["fixture-built-in"],
+                extraBrightness: ExtraBrightnessCapability(
+                    state: .writable, enabled: boostEnabled, persistedEnabled: boostEnabled,
+                    maxBrightness: builtinMax,
+                    headroom: EDRHeadroomSnapshot(potential: 1.6, current: 1.5)
+                ),
+                hdr: .unsupported(
+                    reason: "built-in displays do not expose an HDR preference toggle",
+                    remediation: "use Extra Brightness when eligible"
+                )
+            ),
+            ControlDisplay(
+                uuid: "fixture-external", name: "Fixture External", isMain: false, isBuiltin: false,
+                brightness: BrightnessCapability(
+                    state: .writable, backend: .software,
+                    range: ControlRange(min: 0, max: 100, precision: 1), readback: .unavailable
+                ),
+                brightnessPercent: brightness["fixture-external"],
+                extraBrightness: .unsupported(reason: "fixture external boost is unavailable"),
+                hdr: HDRCapability(state: .writable, enabled: hdrEnabled)
+            )
+        ]
     }
 
-    func readBrightness(displayUUID: String) async throws -> Double? { brightness }
+    func readBrightness(displayUUID: String) async throws -> Double? { brightness[displayUUID] }
+
+    func readBrightnessState(displayUUID: String) async throws -> BrightnessReadSnapshot? {
+        guard let logical = brightness[displayUUID] else { return nil }
+        let hardware = displayUUID == "fixture-external" ? nil : min(logical, 100)
+        return BrightnessReadSnapshot(logicalPercent: logical, hardwareReadbackPercent: hardware)
+    }
 
     func writeBrightness(displayUUID: String, percent: Double) async throws -> Double {
-        brightness = percent
+        brightness[displayUUID] = percent
         return percent
+    }
+
+    func setExtraBrightness(displayUUID: String, enabled: Bool) async throws -> ExtraBrightnessSetResult {
+        guard displayUUID == "fixture-built-in" else {
+            throw ControlServiceError.unsupported("fixture boost unsupported")
+        }
+        boostEnabled = enabled
+        let maximum = enabled ? 150.0 : 100.0
+        return ExtraBrightnessSetResult(
+            capability: ExtraBrightnessCapability(
+                state: .writable, enabled: enabled, persistedEnabled: enabled,
+                maxBrightness: maximum,
+                headroom: EDRHeadroomSnapshot(potential: 1.6, current: 1.5)
+            ),
+            verification: .appStateVerified
+        )
+    }
+
+    func setHDR(displayUUID: String, enabled: Bool) async throws -> HDRSetResult {
+        guard displayUUID == "fixture-external" else {
+            throw ControlServiceError.unsupported("fixture HDR unsupported")
+        }
+        hdrEnabled = enabled
+        return HDRSetResult(
+            capability: HDRCapability(state: .writable, enabled: enabled),
+            verification: .verified
+        )
     }
 }
 
