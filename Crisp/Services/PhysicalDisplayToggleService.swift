@@ -1,7 +1,11 @@
+// Safety-critical display recovery is intentionally kept beside its persistence adapter.
+// swiftlint:disable file_length
 import Foundation
 import CoreGraphics
 import ColorSync
 import IOKit
+import Security
+import Darwin
 #if canImport(CrispControlCore)
 import CrispControlCore
 #endif
@@ -19,67 +23,57 @@ private func CGDisplayIOServicePortForPhysicalProof(
 /// PLATFORM: Apple Silicon + macOS 13+ ONLY. On Intel the API does not perform a true
 /// disconnect. Everything is gated behind `isSupported`.
 ///
-/// KEY QUIRK: once a display is disabled it disappears from `CGGetOnlineDisplayList`
-/// (and `CGGetActiveDisplayList`). To reconnect it we must find it again via
-/// `SLSGetDisplayList`, which still enumerates disabled displays. Because the disconnected
-/// display is also gone from DisplayManager's list, this service keeps its own snapshot
-/// (`disconnected`) of what we turned off so the UI can still offer a Reconnect action.
+/// KEY QUIRK: once a display is disabled it can lose its UUID even though `SLSGetDisplayList`
+/// retains an ID. This service keeps UUID-scoped UI metadata plus a bounded, one-shot recovery
+/// capability; exact UUID resolution always takes priority when it is available.
 @MainActor
 final class PhysicalDisplayToggleService: ObservableObject, DisplayConnectionMutationAdapter {
+    private static let connectionRecoveryStateKey =
+        "crisp.PhysicalDisplayToggleService.connectionRecoveryState.v1"
     static let shared = PhysicalDisplayToggleService()
+
+    private let connectionPersistence: DisplayConnectionPersistenceBoundary
     private init() {
+        let key = Self.connectionRecoveryStateKey
+        connectionPersistence = DisplayConnectionPersistenceBoundary(
+            read: { UserDefaults.standard.data(forKey: key) },
+            write: { UserDefaults.standard.set($0, forKey: key) }
+        )
         loadDesired()
     }
 
     /// Snapshot of a display we disconnected, kept because a disconnected display no longer
     /// appears in DisplayManager.displays, so we need its metadata to render a Reconnect row.
-    struct DisconnectedDisplay: Identifiable, Codable, Sendable, Equatable {
-        let uuid: String            // stable identity across CGDirectDisplayID reassignment
-        var displayID: CGDirectDisplayID  // last-known ID (all-black emergency recovery only)
-        var name: String
-        var width: Int
-        var height: Int
-        var id: String { uuid }
-    }
-
+    typealias DisconnectedDisplay = DisplayConnectionPersistedRecord
+    private typealias PersistedConnectionState = DisplayConnectionPersistenceEnvelope
     enum ToggleError: Error, Sendable, CustomStringConvertible {
-        case unsupportedPlatform
-        case wouldLeaveNoActiveDisplay
+        case unsupportedPlatform, wouldLeaveNoActiveDisplay, outcomeIndeterminate
+        case displayNotFound, hardwareBackingUnproven
         case configurationFailed(CGError)
-        case outcomeIndeterminate
-        case displayNotFound
-        case hardwareBackingUnproven
+        case mutationFailed(String)
 
         var description: String {
             switch self {
-            case .unsupportedPlatform:
-                return String(localized: "Physical display disconnect requires Apple Silicon (macOS 13+).")
-            case .wouldLeaveNoActiveDisplay:
-                return String(localized: "Refusing to disconnect: it would leave no active display.")
-            case .configurationFailed(let err):
-                return String(localized: "Display configuration failed (CGError \(String(err.rawValue))).")
+            case .unsupportedPlatform: return String(localized: "Physical display disconnect requires Apple Silicon (macOS 13+).")
+            case .wouldLeaveNoActiveDisplay: return String(localized: "Refusing to disconnect: it would leave no active display.")
+            case .configurationFailed(let err): return String(localized: "Display configuration failed (CGError \(String(err.rawValue))).")
             case .outcomeIndeterminate:
                 return String(localized: "Display configuration may still complete; refresh before deciding again.")
-            case .displayNotFound:
-                return String(localized: "Display not found.")
-            case .hardwareBackingUnproven:
-                return String(localized: "Display cannot be proven to be hardware-backed physical.")
+            case .displayNotFound: return String(localized: "Display not found.")
+            case .hardwareBackingUnproven: return String(localized: "Display cannot be proven to be hardware-backed physical.")
+            case let .mutationFailed(message): return message
             }
         }
     }
 
     private enum ConfigurationTransactionOutcome: Sendable {
-        case completed
+        case completed, timedOut, cancelled
         case rejectedBeforeDispatch(CGError)
         case failedAfterDispatch(CGError)
-        case timedOut
-        case cancelled
     }
 
     private enum ControlEnumerationError: Error {
-        case fullListFailed(CGError)
-        case onlineListFailed(CGError)
-        case activeListFailed(CGError)
+        case fullListFailed(CGError), onlineListFailed(CGError), activeListFailed(CGError)
         case persistenceFailed
     }
 
@@ -89,6 +83,14 @@ final class PhysicalDisplayToggleService: ObservableObject, DisplayConnectionMut
     /// relaunch can restore the intended state.
     @Published private(set) var disconnected: [DisconnectedDisplay] = []
 
+    /// Process-local ownership for explicit reconnects. The durable reservation below records
+    /// crash uncertainty; only this set proves that the current process still has a live owner.
+    private var liveReconnectReservationUUIDs: Set<String> = []
+    /// Quarantine reconciliation is explicit and read-back-only, but still single-flight so an
+    /// overlapping GUI/CLI request cannot observe its metadata transition and dispatch a write.
+    private var liveQuarantineReconciliationUUIDs: Set<String> = []
+
+    // Legacy keys are migration-only once the authoritative envelope exists.
     private let desiredKey = "crisp.PhysicalDisconnectedUUIDs"
     /// UUIDs whose automation disconnect was prepared but has not yet been proved offline.
     /// The marker is persisted before dispatch. A timed-out WindowServer call may continue,
@@ -111,9 +113,6 @@ final class PhysicalDisplayToggleService: ObservableObject, DisplayConnectionMut
     private var strandedRecoveryInFlight = false
     /// Sleep guard parked by a soft reconnect that has not verifiably recovered.
     private var lingeringSleepGuard: CGVirtualDisplay?
-    /// Guards against overlapping all-screens-black recovery attempts.
-    private var restoreInFlight = false
-
     /// Portables enforce Clamshell Sleep the moment no display is active; desktops don't.
     /// Battery presence is the lid-independent laptop test.
     private static let hasBattery: Bool = {
@@ -126,32 +125,52 @@ final class PhysicalDisplayToggleService: ObservableObject, DisplayConnectionMut
         return true
     }()
 
-    private func pendingControlDisconnectUUIDs() -> Set<String> {
-        Set(UserDefaults.standard.stringArray(forKey: controlPendingDisconnectUUIDsKey) ?? [])
-    }
-
-    private func persistPendingControlDisconnectUUIDs(_ pending: Set<String>) throws {
-        if pending.isEmpty {
-            UserDefaults.standard.removeObject(forKey: controlPendingDisconnectUUIDsKey)
-        } else {
-            UserDefaults.standard.set(pending.sorted(), forKey: controlPendingDisconnectUUIDsKey)
-        }
-        guard pendingControlDisconnectUUIDs() == pending else {
+    private func connectionStateSnapshot(
+        synchronizePublished: Bool = false
+    ) throws -> DisplayConnectionPersistenceSnapshot {
+        do {
+            let snapshot = try connectionPersistence.snapshot()
+            if synchronizePublished {
+                connectionPersistence.adoptPublishedRecords(from: snapshot)
+                disconnected = connectionPersistence.publishedRecords
+            }
+            return snapshot
+        } catch {
             throw ControlEnumerationError.persistenceFailed
         }
     }
 
+    @discardableResult
+    private func persistConnectionState(
+        _ proposedState: PersistedConnectionState,
+        replacing oldSnapshot: DisplayConnectionPersistenceSnapshot,
+        quarantiningUUIDs: Set<String>
+    ) throws -> PersistedConnectionState {
+        let result: DisplayConnectionPersistenceWriteResult
+        do {
+            result = try connectionPersistence.replace(
+                oldState: oldSnapshot.envelope,
+                proposedState: proposedState,
+                quarantiningUUIDs: quarantiningUUIDs
+            )
+        } catch {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        disconnected = connectionPersistence.publishedRecords
+        guard result.disposition == .committedProposed else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        return result.snapshot.envelope
+    }
     private func pendingSoftReconnectUUIDs() -> [String] {
         UserDefaults.standard.stringArray(forKey: softReconnectPendingKey) ?? []
     }
-
     private func addPendingSoftReconnect(_ displayUUID: String) {
         var pending = pendingSoftReconnectUUIDs()
         guard !pending.contains(displayUUID) else { return }
         pending.append(displayUUID)
         UserDefaults.standard.set(pending, forKey: softReconnectPendingKey)
     }
-
     private func removePendingSoftReconnect(_ displayUUID: String) {
         let pending = pendingSoftReconnectUUIDs().filter { $0 != displayUUID }
         if pending.isEmpty {
@@ -222,23 +241,50 @@ final class PhysicalDisplayToggleService: ObservableObject, DisplayConnectionMut
         let needsFramebufferFallback = !isBuiltin
             && !isKnownVirtual
             && !conformsToDisplayConnect
-        let coreGraphicsIdentity = needsFramebufferFallback
-            ? HardwareDisplayIdentity(
-                vendorID: CGDisplayVendorNumber(displayID),
-                productID: CGDisplayModelNumber(displayID),
-                serialNumber: CGDisplaySerialNumber(displayID)
-            )
-            : nil
-        let framebufferSnapshot = needsFramebufferFallback
-            ? framebufferSnapshotForPhysicalProof()
-            : nil
         return HardwareBackedPhysicalDisplayEvidence(
             isBuiltin: isBuiltin,
             isKnownVirtual: isKnownVirtual,
             hasIOServicePort: hasIOServicePort,
             ioServiceConformsToDisplayConnect: conformsToDisplayConnect,
-            coreGraphicsIdentity: coreGraphicsIdentity,
-            framebufferSnapshot: framebufferSnapshot
+            coreGraphicsIdentity: needsFramebufferFallback
+                ? hardwareIdentity(for: displayID)
+                : nil,
+            framebufferSnapshot: needsFramebufferFallback
+                ? framebufferSnapshotForPhysicalProof()
+                : nil
+        )
+    }
+
+    private func hardwareBackingEvidence(
+        for displayID: CGDirectDisplayID,
+        framebufferSnapshot: [HardwareFramebufferIdentityEvidence]?
+    ) -> HardwareBackedPhysicalDisplayEvidence {
+        let servicePort = CGDisplayIOServicePortForPhysicalProof(displayID)
+        let hasIOServicePort = servicePort != 0 && servicePort != MACH_PORT_NULL
+        let conformsToDisplayConnect = hasIOServicePort
+            && IOObjectConformsTo(servicePort, "IODisplayConnect") != 0
+        let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
+        let isKnownVirtual = VirtualDisplayService.shared.isVirtualDisplay(displayID)
+        let needsFramebufferFallback = !isBuiltin
+            && !isKnownVirtual
+            && !conformsToDisplayConnect
+        return HardwareBackedPhysicalDisplayEvidence(
+            isBuiltin: isBuiltin,
+            isKnownVirtual: isKnownVirtual,
+            hasIOServicePort: hasIOServicePort,
+            ioServiceConformsToDisplayConnect: conformsToDisplayConnect,
+            coreGraphicsIdentity: needsFramebufferFallback
+                ? hardwareIdentity(for: displayID)
+                : nil,
+            framebufferSnapshot: needsFramebufferFallback ? framebufferSnapshot : nil
+        )
+    }
+
+    private func hardwareIdentity(for displayID: CGDirectDisplayID) -> HardwareDisplayIdentity {
+        HardwareDisplayIdentity(
+            vendorID: CGDisplayVendorNumber(displayID),
+            productID: CGDisplayModelNumber(displayID),
+            serialNumber: CGDisplaySerialNumber(displayID)
         )
     }
 
@@ -272,7 +318,13 @@ final class PhysicalDisplayToggleService: ObservableObject, DisplayConnectionMut
             kCFAllocatorDefault,
             0
         )?.takeRetainedValue() as? String
+        var registryEntryID: UInt64 = 0
+        let hasRegistryEntryID = IORegistryEntryGetRegistryEntryID(
+            service,
+            &registryEntryID
+        ) == KERN_SUCCESS
         return HardwareFramebufferIdentityEvidence(
+            registryEntryID: hasRegistryEntryID ? registryEntryID : nil,
             hasEDIDUUID: edidUUID?.isEmpty == false,
             identity: framebufferIdentityForPhysicalProof(service)
         )
@@ -325,14 +377,136 @@ final class PhysicalDisplayToggleService: ObservableObject, DisplayConnectionMut
         ControlRequest.isExactDisplayUUID(value)
     }
 
+    private func connectionCandidate(
+        displayID: CGDirectDisplayID,
+        onlineIDs: Set<CGDirectDisplayID>,
+        framebufferSnapshot: [HardwareFramebufferIdentityEvidence]?,
+        retainedRecords: [DisconnectedDisplay]
+    ) -> DisplayConnectionCandidate {
+        let evidence = hardwareBackingEvidence(
+            for: displayID,
+            framebufferSnapshot: framebufferSnapshot
+        )
+        let isHardwareBacked = HardwareBackedPhysicalDisplayClassifier.isHardwareBacked(evidence)
+        let stableUUID = stableUUID(for: displayID)
+        let directRecoveryProof = recoveryHardwareProof(
+            for: displayID,
+            isHardwareBacked: isHardwareBacked,
+            framebufferSnapshot: framebufferSnapshot
+        )
+        return DisplayConnectionCandidate(
+            displayID: displayID,
+            stableUUID: stableUUID,
+            isOnline: onlineIDs.contains(displayID),
+            isHardwareBackedPhysical: isHardwareBacked,
+            recoveryHardwareProof: directRecoveryProof ?? (stableUUID == nil
+                ? retainedRecoveryHardwareProof(
+                    for: displayID,
+                    framebufferSnapshot: framebufferSnapshot,
+                    retainedRecords: retainedRecords
+                )
+                : nil)
+        )
+    }
+
+    private func retainedRecoveryHardwareProof(
+        for displayID: CGDirectDisplayID,
+        framebufferSnapshot: [HardwareFramebufferIdentityEvidence]?,
+        retainedRecords: [DisconnectedDisplay]
+    ) -> DisplayConnectionRecoveryHardwareProof? {
+        let claims = retainedRecords.compactMap(\.recoveryCapability).filter {
+            $0.displayID == displayID
+        }
+        guard claims.count == 1, let proof = claims.first?.hardwareProof else { return nil }
+        return DisplayConnectionRecoveryProofBinder.isDirectlyBound(
+            retainedProof: proof,
+            currentIsBuiltIn: CGDisplayIsBuiltin(displayID) != 0,
+            currentIdentity: hardwareIdentity(for: displayID),
+            framebufferSnapshot: framebufferSnapshot
+        ) ? proof : nil
+    }
+
+    private func recoveryHardwareProof(
+        for displayID: CGDirectDisplayID,
+        isHardwareBacked: Bool,
+        framebufferSnapshot: [HardwareFramebufferIdentityEvidence]?
+    ) -> DisplayConnectionRecoveryHardwareProof? {
+        guard isHardwareBacked else { return nil }
+        if CGDisplayIsBuiltin(displayID) != 0 {
+            return DisplayConnectionRecoveryHardwareProof(isBuiltIn: true, identity: nil)
+        }
+        let identity = hardwareIdentity(for: displayID)
+        guard HardwareFramebufferIdentityMatcher.hasUniqueExactMatch(
+            target: identity,
+            framebufferSnapshot: framebufferSnapshot
+        ) else { return nil }
+        return DisplayConnectionRecoveryHardwareProof(isBuiltIn: false, identity: identity)
+    }
+
+    private func currentBootSessionID() -> String? {
+        guard let value = sysctlString("kern.bootsessionuuid"),
+              UUID(uuidString: value) != nil else { return nil }
+        return value.uppercased()
+    }
+
+    private func currentLoginSessionID() -> String? {
+        var sessionID: SecuritySessionId = 0
+        var attributes = SessionAttributeBits(rawValue: 0)
+        guard SessionGetInfo(
+            callerSecuritySession,
+            &sessionID,
+            &attributes
+        ) == errSecSuccess, sessionID != 0 else { return nil }
+        return String(sessionID)
+    }
+
+    private func currentWakeSessionID() -> String? {
+        var timebase = mach_timebase_info_data_t()
+        guard mach_timebase_info(&timebase) == KERN_SUCCESS else { return nil }
+        let continuousBefore = mach_continuous_time()
+        let absolute = mach_absolute_time()
+        let continuousAfter = mach_continuous_time()
+        return DisplayConnectionMachSleepOffsetToken.make(
+            continuousBeforeTicks: continuousBefore,
+            absoluteTicks: absolute,
+            continuousAfterTicks: continuousAfter,
+            timebaseNumerator: timebase.numer, timebaseDenominator: timebase.denom
+        )
+    }
+
+    private func sysctlString(_ name: String) -> String? {
+        var size = 0
+        guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 1 else { return nil }
+        var buffer = [CChar](repeating: 0, count: size)
+        guard sysctlbyname(name, &buffer, &size, nil, 0) == 0 else { return nil }
+        return String(cString: buffer)
+    }
 }
 
 // MARK: - Automation control adapter
 
 extension PhysicalDisplayToggleService {
-    func connectionCapabilityForControl(
-        _ display: DisplayInfo
-    ) -> DisplayConnectionCapability {
+    func connectionCapabilitiesForControl(
+        _ displays: [DisplayInfo]
+    ) -> [String: DisplayConnectionCapability] {
+        let subjects = displays.map { display in
+            DisplayConnectionCapabilitySubject(
+                uuid: display.displayUUID,
+                staticUnsupportedCapability: staticUnsupportedConnectionCapability(for: display)
+            )
+        }
+        return DisplayConnectionReadOnlyQueries.connectedCapabilities(
+            subjects: subjects,
+            loadSnapshot: { try connectionStateSnapshot() },
+            buildObservation: { snapshot in
+                try connectionObservation(persistenceSnapshot: snapshot)
+            }
+        )
+    }
+
+    private func staticUnsupportedConnectionCapability(
+        for display: DisplayInfo
+    ) -> DisplayConnectionCapability? {
         guard isSupported else {
             return .unsupported(
                 connected: true,
@@ -355,129 +529,23 @@ extension PhysicalDisplayToggleService {
             ) {
             return unsupported
         }
-        guard !pendingControlDisconnectUUIDs().contains(display.displayUUID) else {
-            return .unsupported(
-                connected: true,
-                platformSupported: true,
-                reason: "the disconnect outcome is indeterminate and may still change",
-                remediation: "refresh the disconnected inventory; never retry the write automatically"
-            )
-        }
-        do {
-            let observation = try connectionObservation()
-            guard observation.allUUIDs.contains(display.displayUUID),
-                  observation.onlineUUIDs.contains(display.displayUUID) else {
-                return .unsupported(
-                    connected: false,
-                    platformSupported: true,
-                    reason: "the exact UUID is absent from the fresh online inventory",
-                    remediation: "run displays list again and make a fresh decision"
-                )
-            }
-            guard observation.activePhysicalViewableUUIDs.contains(display.displayUUID),
-                  observation.activePhysicalViewableUUIDs.count > 1 else {
-                return .unsupported(
-                    connected: true,
-                    platformSupported: true,
-                    reason: "disconnect would leave no active physical viewable display",
-                    remediation: "connect another physical display before disconnecting this one"
-                )
-            }
-            return DisplayConnectionCapability(
-                state: .writable,
-                connected: true,
-                disconnectAllowed: true,
-                reconnectAllowed: false,
-                platformSupported: true,
-                reason: "another active physical viewable display remains"
-            )
-        } catch {
-            return .unsupported(
-                connected: true,
-                platformSupported: true,
-                reason: "fresh WindowServer enumeration is unavailable",
-                remediation: "refresh displays and retry only after capability becomes writable"
-            )
-        }
+        return nil
     }
 
     func disconnectedDisplaysForControl() throws -> [ControlDisconnectedDisplay] {
-        let fresh = try connectionObservation()
-        let initiallyPending = pendingControlDisconnectUUIDs()
-        for record in disconnected
-        where fresh.onlineUUIDs.contains(record.uuid) && !initiallyPending.contains(record.uuid) {
-            try removeDisconnectedRecord(uuid: record.uuid)
-        }
-        for record in disconnected
-        where initiallyPending.contains(record.uuid)
-            && fresh.allUUIDs.contains(record.uuid)
-            && !fresh.onlineUUIDs.contains(record.uuid) {
-            try confirmDisconnectedRecord(uuid: record.uuid)
-        }
-        let observation = try connectionObservation()
-
-        let pending = pendingControlDisconnectUUIDs()
-        return disconnected.compactMap { record in
-            guard isExactControlUUID(record.uuid) else { return nil }
-            let capability: DisplayConnectionCapability
-            if pending.contains(record.uuid) {
-                capability = .unsupported(
-                    connected: observation.onlineUUIDs.contains(record.uuid),
-                    platformSupported: isSupported,
-                    reason: "the disconnect outcome is indeterminate and may still change",
-                    remediation: "refresh this inventory; never retry the write automatically"
-                )
-            } else if !isSupported {
-                capability = .unsupported(
-                    connected: observation.onlineUUIDs.contains(record.uuid),
-                    reason: "physical display reconnect requires Apple Silicon and macOS 13 or later",
-                    remediation: "use a supported Apple Silicon Mac"
-                )
-            } else if observation.onlineUUIDs.contains(record.uuid) {
-                capability = .unsupported(
-                    connected: true,
-                    platformSupported: true,
-                    reason: "the record is stale because the exact UUID is already online",
-                    remediation: "refresh the disconnected inventory"
-                )
-            } else if !observation.allUUIDs.contains(record.uuid) {
-                capability = .unsupported(
-                    connected: false,
-                    platformSupported: true,
-                    reason: "the exact UUID cannot be resolved in the full display list",
-                    remediation: "check the cable or wake state, then request a fresh inventory"
-                )
-            } else if observation.virtualUUIDs.contains(record.uuid) {
-                capability = .unsupported(
-                    connected: false,
-                    platformSupported: true,
-                    reason: "virtual displays cannot use physical reconnect",
-                    remediation: "manage this display through Crisp's virtual display controls"
-                )
-            } else {
-                capability = DisplayConnectionCapability(
-                    state: .writable,
-                    connected: false,
-                    disconnectAllowed: false,
-                    reconnectAllowed: true,
-                    platformSupported: true,
-                    reason: "exact UUID is present in the full list and intentionally disconnected"
-                )
-            }
-            return ControlDisconnectedDisplay(
-                uuid: record.uuid,
-                name: record.name,
-                width: record.width,
-                height: record.height,
-                connection: capability
-            )
-        }.sorted { $0.uuid < $1.uuid }
+        let snapshot = try connectionStateSnapshot()
+        let observation = try connectionObservation(persistenceSnapshot: snapshot)
+        return DisplayConnectionReadOnlyQueries.disconnectedDisplays(
+            persistenceSnapshot: snapshot,
+            observation: observation
+        )
     }
 
     func disconnectForControl(_ display: DisplayInfo) async throws
         -> DisplayConnectionSetResult {
         let target = DisplayConnectionTarget(
             uuid: display.displayUUID,
+            displayID: display.displayID,
             name: display.name,
             width: display.pixelWidth,
             height: display.pixelHeight,
@@ -491,104 +559,452 @@ extension PhysicalDisplayToggleService {
     }
 
     func connectionObservation() throws -> DisplayConnectionObservation {
+        let persistenceSnapshot = try connectionStateSnapshot(synchronizePublished: true)
+        return try connectionObservation(persistenceSnapshot: persistenceSnapshot)
+    }
+
+    private func connectionObservation(
+        persistenceSnapshot: DisplayConnectionPersistenceSnapshot
+    ) throws -> DisplayConnectionObservation {
+        let records = persistenceSnapshot.envelope.records
+        guard records.allSatisfy({ isExactControlUUID($0.uuid) }) else {
+            throw ControlEnumerationError.persistenceFailed
+        }
         let all = try controlAllDisplayIDs()
         let online = try controlOnlineDisplayIDs()
         let active = try controlActiveDisplayIDs()
-        let allUUIDs = Set(all.compactMap(stableUUID(for:)))
-        let onlineUUIDs = Set(online.compactMap(stableUUID(for:)))
-        let hardwareBackedUUIDs = hardwareBackedPhysicalUUIDs(in: all)
+        let onlineIDs = Set(online)
+        let framebufferSnapshot = framebufferSnapshotForPhysicalProof()
+        let candidates = all.map {
+            connectionCandidate(
+                displayID: $0,
+                onlineIDs: onlineIDs,
+                framebufferSnapshot: framebufferSnapshot,
+                retainedRecords: records
+            )
+        }
+        let allUUIDs = Set(candidates.compactMap(\.stableUUID))
+        let onlineUUIDs = Set(candidates.compactMap { candidate in
+            candidate.isOnline ? candidate.stableUUID : nil
+        })
+        let hardwareBackedUUIDs = hardwareBackedPhysicalUUIDs(in: candidates)
         let unsafePhysicalMutationUUIDs = allUUIDs.subtracting(hardwareBackedUUIDs)
         let activePhysicalViewableUUIDs = Set(active.compactMap { id -> String? in
-            guard isHardwareBackedPhysicalDisplay(id),
-                  let uuid = stableUUID(for: id),
+            let matches = candidates.filter { $0.displayID == id }
+            guard matches.count == 1, let candidate = matches.first,
+                  candidate.isHardwareBackedPhysical,
+                  let uuid = candidate.stableUUID,
                   hardwareBackedUUIDs.contains(uuid) else { return nil }
             return uuid
         })
-        let intentional = Set(disconnected.compactMap { record in
-            isExactControlUUID(record.uuid) ? record.uuid : nil
-        })
         return DisplayConnectionObservation(
+            persistenceSnapshot: persistenceSnapshot,
             platformSupported: isSupported,
             allUUIDs: allUUIDs,
             onlineUUIDs: onlineUUIDs,
-            intentionalDisconnectedUUIDs: intentional,
             virtualUUIDs: unsafePhysicalMutationUUIDs,
-            activePhysicalViewableUUIDs: activePhysicalViewableUUIDs
+            activePhysicalViewableUUIDs: activePhysicalViewableUUIDs,
+            candidates: candidates,
+            bootSessionID: currentBootSessionID(),
+            loginSessionID: currentLoginSessionID(),
+            wakeSessionID: currentWakeSessionID(),
+            topologyFingerprint: DisplayConnectionTopologyFingerprint.make(
+                displayIDs: all,
+                framebufferSnapshot: framebufferSnapshot
+            )
         )
     }
 
     private func hardwareBackedPhysicalUUIDs(
-        in displayIDs: [CGDirectDisplayID]
+        in candidates: [DisplayConnectionCandidate]
     ) -> Set<String> {
-        let identified = displayIDs.compactMap { displayID -> (uuid: String, id: CGDirectDisplayID)? in
-            guard let uuid = stableUUID(for: displayID) else { return nil }
-            return (uuid, displayID)
+        let identified = candidates.compactMap { candidate -> (String, Bool)? in
+            guard let uuid = candidate.stableUUID else { return nil }
+            return (uuid, candidate.isHardwareBackedPhysical)
         }
-        let grouped = Dictionary(grouping: identified, by: \.uuid)
-        return Set(grouped.compactMap { uuid, candidates in
-            guard candidates.count == 1,
-                  let candidate = candidates.first,
-                  isHardwareBackedPhysicalDisplay(candidate.id) else { return nil }
+        let grouped = Dictionary(grouping: identified, by: \.0)
+        return Set(grouped.compactMap { uuid, matches in
+            guard matches.count == 1, matches[0].1 else { return nil }
             return uuid
         })
     }
 
-    func retainDisconnectedRecord(_ target: DisplayConnectionTarget) throws {
-        let matches = try resolveControlDisplayIDs(uuid: target.uuid)
-        guard matches.count == 1, let displayID = matches.first else {
+    func retainDisconnectedRecord(
+        _ target: DisplayConnectionTarget
+    ) throws -> DisplayConnectionRecoveryCapability? {
+        let snapshot = try connectionStateSnapshot(synchronizePublished: true)
+        guard snapshot.authorizesConnectionMutation else {
             throw ControlEnumerationError.persistenceFailed
         }
-        let previousRecords = disconnected
-        let previousPending = pendingControlDisconnectUUIDs()
-        var nextPending = previousPending
+        let currentState = snapshot.envelope
+        let observation = try connectionObservation(persistenceSnapshot: snapshot)
+        let matches = observation.candidates.filter { $0.stableUUID == target.uuid }
+        guard matches.count == 1, let candidate = matches.first,
+              candidate.isOnline,
+              candidate.isHardwareBackedPhysical,
+              target.displayID == nil || target.displayID == candidate.displayID else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        let recoveryCapability: DisplayConnectionRecoveryCapability?
+        if let proof = candidate.recoveryHardwareProof,
+           let bootSessionID = observation.bootSessionID,
+           let loginSessionID = observation.loginSessionID,
+           let wakeSessionID = observation.wakeSessionID,
+           let topologyFingerprint = observation.topologyFingerprint {
+            recoveryCapability = DisplayConnectionRecoveryCapability(
+                uuid: target.uuid,
+                displayID: candidate.displayID,
+                hardwareProof: proof,
+                bootSessionID: bootSessionID,
+                loginSessionID: loginSessionID,
+                wakeSessionID: wakeSessionID,
+                topologyFingerprint: topologyFingerprint,
+                state: .prepared
+            )
+        } else {
+            recoveryCapability = nil
+        }
+        var nextPending = currentState.pendingSet
         nextPending.insert(target.uuid)
-        try persistPendingControlDisconnectUUIDs(nextPending)
-        disconnected.removeAll { $0.uuid == target.uuid }
-        disconnected.append(DisconnectedDisplay(
+        var nextRecords = currentState.records.filter { $0.uuid != target.uuid }
+        nextRecords.append(DisconnectedDisplay(
             uuid: target.uuid,
-            displayID: displayID,
+            displayID: candidate.displayID,
             name: target.name,
             width: target.width,
-            height: target.height
+            height: target.height,
+            recoveryCapability: recoveryCapability
         ))
+        try persistConnectionState(
+            PersistedConnectionState(
+                records: nextRecords,
+                pendingUUIDs: nextPending,
+                reconnectReservationUUIDs: currentState.reconnectReservationSet,
+                reconnectPersistenceUncertainUUIDs:
+                    currentState.reconnectPersistenceUncertainSet
+            ),
+            replacing: snapshot,
+            quarantiningUUIDs: [target.uuid]
+        )
+        return recoveryCapability
+    }
+    func confirmDisconnectedRecord(uuid: String) throws {
+        let snapshot = try connectionStateSnapshot(synchronizePublished: true)
+        guard snapshot.authorizesConnectionMutation else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        let currentState = snapshot.envelope
+        var nextRecords = currentState.records
+        var nextPending = currentState.pendingSet
+        let removedPending = nextPending.remove(uuid) != nil
+        if let index = nextRecords.firstIndex(where: { $0.uuid == uuid }),
+           let capability = nextRecords[index].recoveryCapability,
+           capability.state == .prepared {
+            nextRecords[index].recoveryCapability = capability.changingState(to: .available)
+        }
+        guard removedPending || nextRecords != currentState.records else { return }
+        try persistConnectionState(
+            PersistedConnectionState(
+                records: nextRecords,
+                pendingUUIDs: nextPending,
+                reconnectReservationUUIDs: currentState.reconnectReservationSet,
+                reconnectPersistenceUncertainUUIDs:
+                    currentState.reconnectPersistenceUncertainSet
+            ),
+            replacing: snapshot,
+            quarantiningUUIDs: [uuid]
+        )
+    }
+    func consumeRecoveryCapability(
+        _ capability: DisplayConnectionRecoveryCapability
+    ) throws -> DisplayConnectionRecoveryCapability {
+        let snapshot = try connectionStateSnapshot(synchronizePublished: true)
+        guard snapshot.authorizesConnectionMutation else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        let currentState = snapshot.envelope
+        let matches = currentState.records.indices.filter {
+            currentState.records[$0].uuid == capability.uuid
+                && currentState.records[$0].recoveryCapability == capability
+        }
+        guard matches.count == 1, let index = matches.first,
+              capability.state == .available else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        let consumed = capability.changingState(to: .consumed)
+        var nextRecords = currentState.records
+        nextRecords[index].recoveryCapability = consumed
+        try persistConnectionState(
+            PersistedConnectionState(
+                records: nextRecords,
+                pendingUUIDs: currentState.pendingSet,
+                reconnectReservationUUIDs: currentState.reconnectReservationSet,
+                reconnectPersistenceUncertainUUIDs:
+                    currentState.reconnectPersistenceUncertainSet
+            ),
+            replacing: snapshot,
+            quarantiningUUIDs: [capability.uuid]
+        )
+        return consumed
+    }
+    private func updateReconnectReservation(uuid: String, adding: Bool) throws {
+        let snapshot = try connectionStateSnapshot(synchronizePublished: true)
+        guard snapshot.authorizesConnectionMutation else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        let currentState = snapshot.envelope
+        guard currentState.records.filter({ $0.uuid == uuid }).count == 1 else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        var reservations = currentState.reconnectReservationSet
+        let changed = adding
+            ? reservations.insert(uuid).inserted
+            : reservations.remove(uuid) != nil
+        guard changed else { throw ControlEnumerationError.persistenceFailed }
+        try persistConnectionState(
+            PersistedConnectionState(
+                records: currentState.records,
+                pendingUUIDs: currentState.pendingSet,
+                reconnectReservationUUIDs: reservations,
+                reconnectPersistenceUncertainUUIDs:
+                    currentState.reconnectPersistenceUncertainSet
+            ),
+            replacing: snapshot,
+            quarantiningUUIDs: [uuid]
+        )
+    }
+    func reserveReconnect(uuid: String) throws {
+        guard !liveReconnectReservationUUIDs.contains(uuid) else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        liveReconnectReservationUUIDs.insert(uuid)
         do {
-            try persistDisconnectedForControl()
+            try updateReconnectReservation(uuid: uuid, adding: true)
         } catch {
-            disconnected = previousRecords
-            try? persistDisconnectedForControl()
-            try? persistPendingControlDisconnectUUIDs(previousPending)
+            liveReconnectReservationUUIDs.remove(uuid)
             throw error
         }
     }
+    func releaseReconnectReservation(uuid: String) throws {
+        guard liveReconnectReservationUUIDs.contains(uuid) else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        try updateReconnectReservation(uuid: uuid, adding: false)
+        liveReconnectReservationUUIDs.remove(uuid)
+    }
+    func rollbackRejectedReconnectBeforeDispatch(
+        uuid: String,
+        consumedRecoveryCapability: DisplayConnectionRecoveryCapability?
+    ) throws {
+        guard liveReconnectReservationUUIDs.contains(uuid) else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        defer { liveReconnectReservationUUIDs.remove(uuid) }
+        let snapshot = try connectionStateSnapshot(synchronizePublished: true)
+        guard snapshot.authorizesConnectionMutation else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        let rolledBack = try RejectedReconnectRollback.proposedState(
+            uuid: uuid,
+            consumedRecoveryCapability: consumedRecoveryCapability,
+            currentState: snapshot.envelope
+        )
+        try persistConnectionState(
+            rolledBack,
+            replacing: snapshot,
+            quarantiningUUIDs: [uuid]
+        )
+    }
+    func reconcileOrphanedReconnectAttempt(
+        uuid: String
+    ) throws -> DisplayReconnectOrphanReconciliation {
+        let snapshot = try connectionStateSnapshot(synchronizePublished: true)
+        guard snapshot.authority == .durable else { return .unavailable }
+        let currentState = snapshot.envelope
+        guard currentState.reconnectReservationSet.contains(uuid) else { return .unavailable }
+        guard !liveReconnectReservationUUIDs.contains(uuid) else { return .liveAttempt }
+        let observation = try connectionObservation(persistenceSnapshot: snapshot)
+        if DisplayConnectionRecoveryResolver.uniqueOnlineHardwareCandidate(
+            uuid: uuid,
+            observation: observation
+        ) != nil {
+            return .alreadyOnline
+        }
+        let resolution = DisplayConnectionRecoveryResolver.orphanedReconnectResolution(
+            uuid: uuid,
+            observation: observation
+        )
+        var nextRecords = currentState.records
+        switch resolution {
+        case .exactUUID:
+            if let index = nextRecords.firstIndex(where: { $0.uuid == uuid }),
+               let capability = nextRecords[index].recoveryCapability,
+               [.consumed, .indeterminate].contains(capability.state) {
+                if DisplayConnectionRecoveryResolver
+                    .restorableRecoveryCapabilityForExactOrphan(
+                        uuid: uuid,
+                        observation: observation
+                    ) == capability {
+                    nextRecords[index].recoveryCapability = capability.changingState(to: .available)
+                } else {
+                    // Exact UUID authority is sufficient for the next explicit request. Drop an
+                    // unsafe fallback rather than reviving it without direct continuity proof.
+                    nextRecords[index].recoveryCapability = nil
+                }
+            }
+        case let .oneShotRecovery(capability):
+            let matches = nextRecords.indices.filter {
+                nextRecords[$0].uuid == uuid
+                    && nextRecords[$0].recoveryCapability == capability
+            }
+            guard matches.count == 1, let index = matches.first else { return .unavailable }
+            nextRecords[index].recoveryCapability = capability.changingState(to: .available)
+        case .alreadyOnline, .unavailable:
+            return .unavailable
+        }
+        var nextReservations = currentState.reconnectReservationSet
+        guard nextReservations.remove(uuid) != nil else { return .unavailable }
+        var nextUncertain = currentState.reconnectPersistenceUncertainSet
+        nextUncertain.remove(uuid)
+        try persistConnectionState(
+            PersistedConnectionState(
+                records: nextRecords,
+                pendingUUIDs: currentState.pendingSet,
+                reconnectReservationUUIDs: nextReservations,
+                reconnectPersistenceUncertainUUIDs: nextUncertain
+            ),
+            replacing: snapshot,
+            quarantiningUUIDs: [uuid]
+        )
+        return .reconciled
+    }
+    func reconcileQuarantinedReconnectAttempt(
+        uuid: String
+    ) async throws -> DisplayReconnectQuarantineReconciliation {
+        guard !liveReconnectReservationUUIDs.contains(uuid),
+              !liveQuarantineReconciliationUUIDs.contains(uuid) else {
+            return .liveAttempt
+        }
+        liveQuarantineReconciliationUUIDs.insert(uuid)
 
-    func confirmDisconnectedRecord(uuid: String) throws {
-        var pending = pendingControlDisconnectUUIDs()
-        guard pending.remove(uuid) != nil else { return }
-        try persistPendingControlDisconnectUUIDs(pending)
+        let snapshot = try connectionStateSnapshot(synchronizePublished: true)
+        guard snapshot.authority == .durable,
+              snapshot.envelope.reconnectPersistenceUncertainSet.contains(uuid) else {
+            return .unavailable
+        }
+        let observation = try connectionObservation(persistenceSnapshot: snapshot)
+        guard let result = try connectionPersistence.reconcileQuarantinedReconnect(
+            uuid: uuid,
+            snapshot: snapshot,
+            observation: observation
+        ) else { return .unavailable }
+        disconnected = connectionPersistence.publishedRecords
+        guard result.writeResult.disposition == .committedProposed else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        switch result.kind {
+        case .reconciledOffline:
+            return .reconciled
+        case .alreadyOnline:
+            return .alreadyOnline
+        }
+    }
+    func finishQuarantinedReconnectAttempt(uuid: String) {
+        liveQuarantineReconciliationUUIDs.remove(uuid)
+    }
+    private func changeRecoveryCapabilityState(
+        uuid: String,
+        allowedStates: Set<DisplayConnectionRecoveryCapabilityState>,
+        to state: DisplayConnectionRecoveryCapabilityState
+    ) throws {
+        let snapshot = try connectionStateSnapshot(synchronizePublished: true)
+        guard snapshot.authorizesConnectionMutation else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        let currentState = snapshot.envelope
+        guard let index = currentState.records.firstIndex(where: { $0.uuid == uuid }),
+              let capability = currentState.records[index].recoveryCapability,
+              allowedStates.contains(capability.state), capability.state != state else { return }
+        var nextRecords = currentState.records
+        nextRecords[index].recoveryCapability = capability.changingState(to: state)
+        try persistConnectionState(
+            PersistedConnectionState(
+                records: nextRecords,
+                pendingUUIDs: currentState.pendingSet,
+                reconnectReservationUUIDs: currentState.reconnectReservationSet,
+                reconnectPersistenceUncertainUUIDs:
+                    currentState.reconnectPersistenceUncertainSet
+            ),
+            replacing: snapshot,
+            quarantiningUUIDs: [uuid]
+        )
+    }
+    func markReconnectAttemptIndeterminate(uuid: String) throws {
+        defer { liveReconnectReservationUUIDs.remove(uuid) }
+        try changeRecoveryCapabilityState(
+            uuid: uuid,
+            allowedStates: [.prepared, .available, .invalidatedByWake, .consumed],
+            to: .indeterminate
+        )
+    }
+    func markRecoveryCapabilityIndeterminate(uuid: String) throws {
+        let snapshot = try connectionStateSnapshot(synchronizePublished: true)
+        guard snapshot.authorizesConnectionMutation else {
+            throw ControlEnumerationError.persistenceFailed
+        }
+        let currentState = snapshot.envelope
+        guard let index = currentState.records.firstIndex(where: { $0.uuid == uuid }) else {
+            return
+        }
+        var nextRecords = currentState.records
+        if let capability = nextRecords[index].recoveryCapability {
+            nextRecords[index].recoveryCapability = capability.changingState(to: .indeterminate)
+        }
+        var nextPending = currentState.pendingSet
+        nextPending.insert(uuid)
+        try persistConnectionState(
+            PersistedConnectionState(
+                records: nextRecords,
+                pendingUUIDs: nextPending,
+                reconnectReservationUUIDs: currentState.reconnectReservationSet,
+                reconnectPersistenceUncertainUUIDs:
+                    currentState.reconnectPersistenceUncertainSet
+            ),
+            replacing: snapshot,
+            quarantiningUUIDs: [uuid]
+        )
     }
 
     func removeDisconnectedRecord(uuid: String) throws {
-        let previousRecords = disconnected
-        let previousPending = pendingControlDisconnectUUIDs()
-        disconnected.removeAll { $0.uuid == uuid }
-        var nextPending = previousPending
-        nextPending.remove(uuid)
-        do {
-            try persistDisconnectedForControl()
-            try persistPendingControlDisconnectUUIDs(nextPending)
-        } catch {
-            disconnected = previousRecords
-            try? persistDisconnectedForControl()
-            try? persistPendingControlDisconnectUUIDs(previousPending)
-            throw error
+        let snapshot = try connectionStateSnapshot(synchronizePublished: true)
+        guard snapshot.authority == .durable else {
+            throw ControlEnumerationError.persistenceFailed
         }
+        let currentState = snapshot.envelope
+        let nextRecords = currentState.records.filter { $0.uuid != uuid }
+        var nextPending = currentState.pendingSet
+        nextPending.remove(uuid)
+        var nextReservations = currentState.reconnectReservationSet
+        nextReservations.remove(uuid)
+        var nextUncertain = currentState.reconnectPersistenceUncertainSet
+        nextUncertain.remove(uuid)
+        try persistConnectionState(
+            PersistedConnectionState(
+                records: nextRecords,
+                pendingUUIDs: nextPending,
+                reconnectReservationUUIDs: nextReservations,
+                reconnectPersistenceUncertainUUIDs: nextUncertain
+            ),
+            replacing: snapshot,
+            quarantiningUUIDs: [uuid]
+        )
+        liveReconnectReservationUUIDs.remove(uuid)
     }
 
     func dispatchConnectionChange(
-        uuid: String,
-        requestedState: DisplayConnectionState
+        _ request: DisplayConnectionDispatchRequest
     ) async -> DisplayConnectionDispatchOutcome {
-        guard isSupported, isExactControlUUID(uuid) else {
+        guard isSupported, isExactControlUUID(request.uuid), request.displayID != 0 else {
             return .rejectedBeforeDispatch("platform support or stable UUID preflight failed")
         }
         let observation: DisplayConnectionObservation
@@ -597,27 +1013,47 @@ extension PhysicalDisplayToggleService {
         } catch {
             return .rejectedBeforeDispatch("fresh full-list re-resolution failed before mutation")
         }
-        if let rejection = connectionPreflightRejection(
-            uuid: uuid,
-            requestedState: requestedState,
-            observation: observation
-        ) {
-            return .rejectedBeforeDispatch(rejection)
-        }
-
-        let finalMatches: [CGDirectDisplayID]
-        do {
-            finalMatches = try resolveControlDisplayIDs(uuid: uuid)
-        } catch {
-            return .rejectedBeforeDispatch("final exact-UUID re-resolution failed before mutation")
-        }
-        guard finalMatches.count == 1, let targetID = finalMatches.first else {
-            return .rejectedBeforeDispatch("exact UUID did not resolve to one display before mutation")
+        switch request.authorization {
+        case .exactUUID:
+            let authorized: Bool
+            switch request.requestedState {
+            case .disconnected:
+                authorized = DisplayConnectionRecoveryResolver.authorizesExactDisconnect(
+                    uuid: request.uuid,
+                    displayID: request.displayID,
+                    observation: observation
+                )
+            case .connected:
+                authorized = DisplayConnectionRecoveryResolver.authorizesReservedExactReconnect(
+                    uuid: request.uuid,
+                    displayID: request.displayID,
+                    observation: observation
+                )
+            }
+            guard authorized else {
+                return .rejectedBeforeDispatch(
+                    "fresh exact-UUID and hardware preflight rejected the mutation"
+                )
+            }
+        case .oneShotRecovery:
+            guard request.requestedState == .connected,
+                  DisplayConnectionRecoveryResolver.authorizesConsumedRecoveryDispatch(
+                    uuid: request.uuid,
+                    displayID: request.displayID,
+                    observation: observation
+                  ) else {
+                return .rejectedBeforeDispatch(
+                    "consumed recovery capability failed final continuity validation"
+                )
+            }
         }
         guard !Task.isCancelled else {
             return .rejectedBeforeDispatch("display connection request was cancelled before dispatch")
         }
-        switch await setEnabledOutcome(requestedState == .connected, displayID: targetID) {
+        switch await setEnabledOutcome(
+            request.requestedState == .connected,
+            displayID: request.displayID
+        ) {
         case .completed:
             return .completed
         case let .rejectedBeforeDispatch(error):
@@ -629,44 +1065,6 @@ extension PhysicalDisplayToggleService {
         case .cancelled:
             return .cancelled
         }
-    }
-
-    private func connectionPreflightRejection(
-        uuid: String,
-        requestedState: DisplayConnectionState,
-        observation: DisplayConnectionObservation
-    ) -> String? {
-        switch requestedState {
-        case .disconnected:
-            guard observation.onlineUUIDs.contains(uuid) else {
-                return "exact UUID disappeared from the online list"
-            }
-            guard !observation.virtualUUIDs.contains(uuid) else {
-                return "virtual displays cannot be physically disconnected"
-            }
-            guard observation.intentionalDisconnectedUUIDs.contains(uuid) else {
-                return "UUID-scoped recovery state was not retained"
-            }
-            guard observation.activePhysicalViewableUUIDs.contains(uuid),
-                  observation.activePhysicalViewableUUIDs.count > 1 else {
-                return "disconnect would leave no physical viewable display"
-            }
-        case .connected:
-            guard observation.intentionalDisconnectedUUIDs.contains(uuid) else {
-                return "UUID is absent from intentional-disconnected records"
-            }
-            guard !observation.onlineUUIDs.contains(uuid) else {
-                return "exact UUID is already online"
-            }
-            guard !observation.virtualUUIDs.contains(uuid) else {
-                return "virtual displays cannot use physical reconnect"
-            }
-        }
-        return nil
-    }
-
-    private func resolveControlDisplayIDs(uuid: String) throws -> [CGDirectDisplayID] {
-        try controlAllDisplayIDs().filter { stableUUID(for: $0) == uuid }
     }
 
     private func controlAllDisplayIDs() throws -> [CGDirectDisplayID] {
@@ -702,16 +1100,6 @@ extension PhysicalDisplayToggleService {
         return Array(ids.prefix(Int(count)))
     }
 
-    private func persistDisconnectedForControl() throws {
-        let data = try JSONEncoder().encode(disconnected)
-        UserDefaults.standard.set(data, forKey: desiredKey)
-        guard let stored = UserDefaults.standard.data(forKey: desiredKey),
-              let decoded = try? JSONDecoder().decode([DisconnectedDisplay].self, from: stored),
-              decoded == disconnected else {
-            throw ControlEnumerationError.persistenceFailed
-        }
-    }
-
 }
 
 // MARK: - Disconnect / Reconnect
@@ -721,130 +1109,27 @@ extension PhysicalDisplayToggleService {
     /// would leave zero active displays, so the user can never black out their only screen.
     @discardableResult
     func disconnect(_ display: DisplayInfo) async -> Result<Void, ToggleError> {
-        guard isSupported else { return .failure(.unsupportedPlatform) }
-        guard let exactUUID = stableUUID(for: display.displayID) else {
-            return .failure(.displayNotFound)
-        }
-        guard let initialDisplayID = resolveUniqueCurrentID(uuid: exactUUID),
-              initialDisplayID == display.displayID else {
-            return .failure(.displayNotFound)
-        }
-        guard isHardwareBackedPhysicalDisplay(initialDisplayID) else {
-            return .failure(.hardwareBackingUnproven)
-        }
-        if wouldLeaveNoActiveDisplay(initialDisplayID) {
-            return .failure(.wouldLeaveNoActiveDisplay)
-        }
-
-        // Snapshot BEFORE disabling, afterwards the display is gone from the normal APIs.
-        let snapshot = DisconnectedDisplay(
-            uuid: exactUUID,
-            displayID: initialDisplayID,
-            name: display.name,
-            width: display.pixelWidth,
-            height: display.pixelHeight
-        )
-
-        let previousRecords = disconnected
-        let previousPending = pendingControlDisconnectUUIDs()
-        var preparedPending = previousPending
-        preparedPending.insert(snapshot.uuid)
         do {
-            try persistPendingControlDisconnectUUIDs(preparedPending)
-            disconnected.removeAll { $0.uuid == snapshot.uuid }
-            disconnected.append(snapshot)
-            try persistDisconnectedForControl()
+            _ = try await disconnectForControl(display)
+            return .success(())
+        } catch let error as DisplayConnectionMutationError {
+            return .failure(.mutationFailed(error.message))
         } catch {
-            restorePreparedDisconnect(records: previousRecords, pending: previousPending)
             return .failure(.configurationFailed(.failure))
         }
-        guard !Task.isCancelled else {
-            restorePreparedDisconnect(records: previousRecords, pending: previousPending)
-            return .failure(.configurationFailed(.failure))
-        }
-        guard let finalDisplayID = resolveUniqueCurrentID(uuid: exactUUID),
-              finalDisplayID == display.displayID else {
-            restorePreparedDisconnect(records: previousRecords, pending: previousPending)
-            return .failure(.displayNotFound)
-        }
-        guard isHardwareBackedPhysicalDisplay(finalDisplayID) else {
-            restorePreparedDisconnect(records: previousRecords, pending: previousPending)
-            return .failure(.hardwareBackingUnproven)
-        }
-        guard !wouldLeaveNoActiveDisplay(finalDisplayID) else {
-            restorePreparedDisconnect(records: previousRecords, pending: previousPending)
-            return .failure(.wouldLeaveNoActiveDisplay)
-        }
-
-        switch await setEnabledOutcome(false, displayID: finalDisplayID) {
-        case .completed:
-            guard await verifyDisconnected(uuid: snapshot.uuid) else {
-                return .failure(.outcomeIndeterminate)
-            }
-            do {
-                try confirmDisconnectedRecord(uuid: snapshot.uuid)
-                return .success(())
-            } catch {
-                return .failure(.outcomeIndeterminate)
-            }
-        case let .rejectedBeforeDispatch(error):
-            restorePreparedDisconnect(records: previousRecords, pending: previousPending)
-            return .failure(.configurationFailed(error))
-        case .failedAfterDispatch, .timedOut, .cancelled:
-            return .failure(.outcomeIndeterminate)
-        }
-    }
-
-    private func restorePreparedDisconnect(
-        records: [DisconnectedDisplay],
-        pending: Set<String>
-    ) {
-        disconnected = records
-        try? persistDisconnectedForControl()
-        try? persistPendingControlDisconnectUUIDs(pending)
     }
 
     /// Reconnects a previously disconnected display and drops it from the disconnected set.
     @discardableResult
     func reconnect(uuid: String) async -> Result<Void, ToggleError> {
-        guard isSupported else { return .failure(.unsupportedPlatform) }
-        guard isExactControlUUID(uuid) else {
-            return .failure(.displayNotFound)
-        }
-        guard let record = disconnected.first(where: { $0.uuid == uuid }) else {
-            return .failure(.displayNotFound)
-        }
-        // The CGDirectDisplayID can be reassigned; re-resolve by UUID against the full list.
-        guard let targetID = resolveUniqueCurrentID(for: record) else {
-            return .failure(.displayNotFound)
-        }
-        guard isHardwareBackedPhysicalDisplay(targetID) else {
-            return .failure(.hardwareBackingUnproven)
-        }
-        let result = await setEnabled(true, displayID: targetID)
-        guard case .success = result else { return result }
-        guard await verifyBackOnline(uuid: uuid) else {
-            return .failure(.configurationFailed(.failure))
-        }
         do {
-            try removeDisconnectedRecord(uuid: uuid)
+            _ = try await reconnectForControl(uuid: uuid)
+            return .success(())
+        } catch let error as DisplayConnectionMutationError {
+            return .failure(.mutationFailed(error.message))
         } catch {
             return .failure(.configurationFailed(.failure))
         }
-        return result
-    }
-
-    /// Finds the current CGDirectDisplayID for a disconnected record by matching its UUID
-    /// across the full (incl. disabled) display list.
-    private func resolveUniqueCurrentID(for record: DisconnectedDisplay) -> CGDirectDisplayID? {
-        resolveUniqueCurrentID(uuid: record.uuid)
-    }
-
-    private func resolveUniqueCurrentID(uuid: String) -> CGDirectDisplayID? {
-        guard isExactControlUUID(uuid) else { return nil }
-        let matches = allDisplaysIncludingDisabled().filter { stableUUID(for: $0) == uuid }
-        guard matches.count == 1 else { return nil }
-        return matches[0]
     }
 
     /// Soft-reconnects a display (disable then re-enable its framebuffer) to force macOS to
@@ -1077,24 +1362,6 @@ extension PhysicalDisplayToggleService {
         return false
     }
 
-    /// Transaction completion is not proof of a disconnect. Require the same UUID to remain
-    /// in the full list while disappearing from the online list within a bounded window.
-    private func verifyDisconnected(uuid displayUUID: String, timeout: TimeInterval = 1.0) async -> Bool {
-        for _ in 0..<max(Int(timeout * 10), 1) {
-            let matches = allDisplaysIncludingDisabled().filter { uuid(for: $0) == displayUUID }
-            if matches.count == 1, let displayID = matches.first,
-               !onlineDisplayIDs().contains(displayID) {
-                return true
-            }
-            do {
-                try await Task.sleep(nanoseconds: 100_000_000)
-            } catch {
-                return false
-            }
-        }
-        return false
-    }
-
     /// Throwaway virtual display held while blinking a portable's sole active display, so
     /// Clamshell Sleep never sees a zero-display moment (see softReconnect). Registered but
     /// deliberately minimal: 1080p, no HiDPI ladder. Stamped with the shared virtual vendor
@@ -1135,19 +1402,24 @@ extension PhysicalDisplayToggleService {
     // MARK: - Reconcile / Wake restore
 
     /// Drops records for displays that are back online (e.g. physically re-plugged, or macOS
-    /// re-enabled them). Called from DisplayManager.refreshDisplays so the UI stays honest.
+    /// re-enabled them), and confirms pending records only from fresh offline truth. Called from
+    /// DisplayManager.refreshDisplays; this topology-event path changes metadata but never a
+    /// display's enabled state.
     func reconcile() {
-        guard !disconnected.isEmpty else { return }
-        var onlineCount: UInt32 = 0
-        CGGetOnlineDisplayList(0, nil, &onlineCount)
-        var onlineIDs = [CGDirectDisplayID](repeating: 0, count: Int(onlineCount))
-        CGGetOnlineDisplayList(onlineCount, &onlineIDs, &onlineCount)
-        let onlineUUIDs = Set(onlineIDs.prefix(Int(onlineCount)).map { uuid(for: $0) })
-        let pending = pendingControlDisconnectUUIDs()
-
-        let before = disconnected.count
-        disconnected.removeAll { onlineUUIDs.contains($0.uuid) && !pending.contains($0.uuid) }
-        if disconnected.count != before { saveDesired() }
+        guard let snapshot = try? connectionStateSnapshot(synchronizePublished: true),
+              !snapshot.envelope.records.isEmpty else { return }
+        let observation = try? connectionObservation(persistenceSnapshot: snapshot)
+        do {
+            guard let result = try connectionPersistence.reconcileTopologyMetadata(
+                snapshot: snapshot,
+                observation: observation
+            ) else { return }
+            disconnected = connectionPersistence.publishedRecords
+            let remainingUUIDs = Set(result.snapshot.envelope.records.map(\.uuid))
+            liveReconnectReservationUUIDs.formIntersection(remainingUUIDs)
+        } catch {
+            disconnected = connectionPersistence.publishedRecords
+        }
     }
 
     /// Sleep guard parked by a softReconnect whose display never verifiably returned (see
@@ -1218,140 +1490,94 @@ extension PhysicalDisplayToggleService {
         }
     }
 
-    /// Called on every display-list refresh. The guard in disconnect() can't stop a physical
-    /// unplug: with the internal disabled via Crisp and the external cable pulled, zero active
-    /// displays remain and macOS does NOT re-enable the disabled one, every screen stays black.
-    /// Re-enable a still-attached disconnected display (built-in first) so the machine always
-    /// has a live screen. The settle delay rides out transient empty display lists during
-    /// wake/replug storms, so a monitor that comes right back keeps the disconnect intact.
+    /// Kept for call-site compatibility only. Topology-event metadata reconciliation belongs to
+    /// `reconcile()`; CLI inventory queries are pure reads, and reconnect stays user initiated.
     func restoreIfNoActiveDisplay() {
-        guard isSupported, !disconnected.isEmpty, !restoreInFlight else { return }
-        guard PhysicalDisplaySafetyPolicy.authorizesEmergencyRecovery(
-            activePhysicalDisplayCount: physicalActiveDisplayCount()
-        ) else { return }
-        restoreInFlight = true
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard let self else { return }
-            defer { self.restoreInFlight = false }
-            guard PhysicalDisplaySafetyPolicy.authorizesEmergencyRecovery(
-                activePhysicalDisplayCount: self.physicalActiveDisplayCount()
-            ) else { return }
-            await self.recoverAnyViewableDisplayEmergencyOnly()
-        }
+        // Intentionally empty. Kept as a call-site-compatible safety boundary.
     }
 
-    /// Last-known display IDs are permitted only after the settled zero-viewable-screen guard.
-    /// Enabling an ID proves only that some screen may be viewable; it does not prove record
-    /// identity. UUID-scoped records are removed only after fresh same-UUID online truth.
-    private func recoverAnyViewableDisplayEmergencyOnly() async {
-        guard PhysicalDisplaySafetyPolicy.authorizesEmergencyRecovery(
-            activePhysicalDisplayCount: physicalActiveDisplayCount()
-        ) else { return }
-        // In the placeholder-display state SLSGetDisplayList can shrink to just the
-        // placeholder. SLS may still honor the last-known ID of attached hardware.
-        let candidates = disconnected
-            .map { record in (record, resolveUniqueCurrentID(for: record) ?? record.displayID) }
-            .sorted { lhs, rhs in
-                let lhsIsBuiltin = CGDisplayIsBuiltin(lhs.1) == 1
-                let rhsIsBuiltin = CGDisplayIsBuiltin(rhs.1) == 1
-                return lhsIsBuiltin == rhsIsBuiltin ? lhs.0.uuid < rhs.0.uuid : lhsIsBuiltin
-            }
-        guard let (record, targetID) = candidates.first else { return }
-        guard PhysicalDisplaySafetyPolicy.authorizesEmergencyRecovery(
-            activePhysicalDisplayCount: physicalActiveDisplayCount()
-        ) else { return }
-        let result = await setEnabled(true, displayID: targetID)
-        guard case .success = result else { return }
-        guard await verifyBackOnline(uuid: record.uuid) else { return }
-        try? removeDisconnectedRecord(uuid: record.uuid)
-    }
-
-    private func uniqueOnlineDisplayIDsByUUID() -> [String: CGDirectDisplayID]? {
-        var onlineCount: UInt32 = 0
-        guard CGGetOnlineDisplayList(0, nil, &onlineCount) == .success else { return nil }
-        guard onlineCount > 0 else { return [:] }
-        var onlineIDs = [CGDirectDisplayID](repeating: 0, count: Int(onlineCount))
-        guard CGGetOnlineDisplayList(onlineCount, &onlineIDs, &onlineCount) == .success else {
-            return nil
-        }
-        let candidates = onlineIDs.prefix(Int(onlineCount)).map {
-            (uuid: stableUUID(for: $0), displayID: $0)
-        }
-        return PhysicalDisplaySafetyPolicy.uniqueExactUUIDDisplayIDs(candidates)
-    }
-
-    private func revalidatedWakeTarget(
-        uuid: String,
-        initialDisplayID: CGDirectDisplayID
-    ) -> CGDirectDisplayID? {
-        guard let freshOnlineByUUID = uniqueOnlineDisplayIDsByUUID(),
-              let freshLiveID = freshOnlineByUUID[uuid] else { return nil }
-        guard initialDisplayID == freshLiveID else { return nil }
-        guard !wouldLeaveNoActiveDisplay(freshLiveID) else { return nil }
-        guard isHardwareBackedPhysicalDisplay(freshLiveID) else { return nil }
-        return freshLiveID
-    }
-
-    /// Re-applies disconnect for displays macOS re-enabled after wake-from-sleep. Called from
-    /// AppDelegate.onWake after WindowServer settles.
+    /// Wake is a hard continuity boundary for persisted display-ID fallback capabilities. It
+    /// never writes display state or invents a pending mutation; fresh exact UUID authority stays.
     func reapplyOnWake() async {
-        guard isSupported, !disconnected.isEmpty else { return }
-        guard let onlineByUUID = uniqueOnlineDisplayIDsByUUID() else { return }
-        let pending = pendingControlDisconnectUUIDs()
-
-        for record in disconnected where !pending.contains(record.uuid) {
-            // Only re-disconnect ones macOS brought back online, and never the last screen.
-            guard let initialLiveID = onlineByUUID[record.uuid] else { continue }
-            guard isHardwareBackedPhysicalDisplay(initialLiveID) else { continue }
-            guard !wouldLeaveNoActiveDisplay(initialLiveID) else { continue }
-            var preparedPending = pendingControlDisconnectUUIDs()
-            preparedPending.insert(record.uuid)
-            do {
-                try persistPendingControlDisconnectUUIDs(preparedPending)
-            } catch {
-                continue
-            }
-            guard !Task.isCancelled else {
-                try? confirmDisconnectedRecord(uuid: record.uuid)
-                return
-            }
-            guard let freshLiveID = revalidatedWakeTarget(
-                uuid: record.uuid,
-                initialDisplayID: initialLiveID
-            ) else {
-                try? confirmDisconnectedRecord(uuid: record.uuid)
-                continue
-            }
-            switch await setEnabledOutcome(false, displayID: freshLiveID) {
-            case .completed:
-                if await verifyDisconnected(uuid: record.uuid) {
-                    try? confirmDisconnectedRecord(uuid: record.uuid)
-                }
-            case .rejectedBeforeDispatch:
-                try? confirmDisconnectedRecord(uuid: record.uuid)
-            case .failedAfterDispatch, .timedOut, .cancelled:
-                // Keep the marker: no wake retry or reconciliation may erase recovery state.
-                break
-            }
+        guard isSupported,
+              let snapshot = try? connectionStateSnapshot(synchronizePublished: true),
+              snapshot.authorizesConnectionMutation else { return }
+        let currentState = snapshot.envelope
+        var records = currentState.records
+        var affectedUUIDs: Set<String> = []
+        for index in records.indices {
+            guard let capability = records[index].recoveryCapability,
+                  [.prepared, .available].contains(capability.state) else { continue }
+            records[index].recoveryCapability = capability.changingState(to: .invalidatedByWake)
+            affectedUUIDs.insert(records[index].uuid)
         }
+        guard !affectedUUIDs.isEmpty else { return }
+        _ = try? persistConnectionState(
+            PersistedConnectionState(
+                records: records,
+                pendingUUIDs: currentState.pendingSet,
+                reconnectReservationUUIDs: currentState.reconnectReservationSet,
+                reconnectPersistenceUncertainUUIDs:
+                    currentState.reconnectPersistenceUncertainSet
+            ),
+            replacing: snapshot,
+            quarantiningUUIDs: affectedUUIDs
+        )
     }
 
     // MARK: - Persistence
 
-    private func saveDesired() {
-        guard let data = try? JSONEncoder().encode(disconnected) else { return }
-        UserDefaults.standard.set(data, forKey: desiredKey)
-    }
-
     private func loadDesired() {
-        guard let data = UserDefaults.standard.data(forKey: desiredKey),
-              let decoded = try? JSONDecoder().decode([DisconnectedDisplay].self, from: data)
-        else { return }
-        disconnected = decoded
-        // By design we do NOT auto-disconnect on launch, restarting the app must never
-        // black out a screen on its own. The loaded list only populates the "Disconnected"
-        // UI so the user can reconnect (or ignore) at their choice. Only the sleep/wake path
-        // re-applies disconnect, via reapplyOnWake().
+        do {
+            let snapshot = try connectionPersistence.snapshot()
+            connectionPersistence.adoptPublishedRecords(from: snapshot)
+            disconnected = connectionPersistence.publishedRecords
+            return
+        } catch let error as DisplayConnectionPersistenceError where error == .corrupt {
+            // Corrupt authoritative bytes are retained and every connection mutation fails closed.
+            return
+        } catch {
+            // A missing authoritative value is the only state eligible for legacy migration.
+        }
+
+        let defaults = UserDefaults.standard
+        let legacyRecords: [DisconnectedDisplay]
+        if let data = defaults.data(forKey: desiredKey) {
+            guard let decoded = try? JSONDecoder().decode(
+                [DisconnectedDisplay].self,
+                from: data
+            ), decoded.allSatisfy({ isExactControlUUID($0.uuid) }),
+            Set(decoded.map(\.uuid)).count == decoded.count else { return }
+            legacyRecords = decoded
+        } else {
+            legacyRecords = []
+        }
+        let recordUUIDs = Set(legacyRecords.map(\.uuid))
+        let legacyPending = Set(
+            defaults.stringArray(forKey: controlPendingDisconnectUUIDsKey) ?? []
+        ).intersection(recordUUIDs)
+        let empty = PersistedConnectionState(
+            records: [],
+            pendingUUIDs: [],
+            reconnectReservationUUIDs: []
+        )
+        let migrated = PersistedConnectionState(
+            records: legacyRecords,
+            pendingUUIDs: legacyPending,
+            reconnectReservationUUIDs: []
+        )
+        guard let result = try? connectionPersistence.replace(
+            oldState: empty,
+            proposedState: migrated,
+            quarantiningUUIDs: recordUUIDs
+        ) else { return }
+        connectionPersistence.adoptPublishedRecords(from: result.snapshot)
+        disconnected = connectionPersistence.publishedRecords
+        if result.disposition == .committedProposed {
+            defaults.removeObject(forKey: desiredKey)
+            defaults.removeObject(forKey: controlPendingDisconnectUUIDsKey)
+        }
+        // Relaunch only restores UI/recovery metadata. No display write occurs until a user
+        // explicitly requests reconnect through the shared coordinator.
     }
 }

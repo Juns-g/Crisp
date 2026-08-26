@@ -68,6 +68,7 @@ struct ReconnectDisplaysSection: View {
     @EnvironmentObject var displayManager: DisplayManager
     @ObservedObject private var service = PhysicalDisplayToggleService.shared
     @State private var busyUUIDs: Set<String> = []
+    @State private var errorMessages: [String: String] = [:]
 
     var body: some View {
         if !service.disconnected.isEmpty {
@@ -83,6 +84,7 @@ struct ReconnectDisplaysSection: View {
                     DisconnectedDisplayRow(
                         record: record,
                         busy: busyUUIDs.contains(record.uuid),
+                        errorMessage: errorMessages[record.uuid],
                         onReconnect: { reconnect(record) }
                     )
                 }
@@ -93,8 +95,12 @@ struct ReconnectDisplaysSection: View {
     private func reconnect(_ record: PhysicalDisplayToggleService.DisconnectedDisplay) {
         guard !busyUUIDs.contains(record.uuid) else { return }
         busyUUIDs.insert(record.uuid)
+        errorMessages[record.uuid] = nil
         Task { @MainActor in
-            _ = await service.reconnect(uuid: record.uuid)
+            let result = await service.reconnect(uuid: record.uuid)
+            if case .failure(let error) = result {
+                errorMessages[record.uuid] = error.description
+            }
             displayManager.refreshDisplays()
             busyUUIDs.remove(record.uuid)
         }
@@ -108,38 +114,46 @@ struct ReconnectDisplaysSection: View {
 private struct DisconnectedDisplayRow: View {
     let record: PhysicalDisplayToggleService.DisconnectedDisplay
     let busy: Bool
+    let errorMessage: String?
     let onReconnect: () -> Void
     @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            // The display is inactive, so dim its icon + name; it brightens as the
-            // row is hovered, cueing that a click brings it back.
+        VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
-                MenuItemIcon(systemName: "rectangle.slash", color: .secondary, active: false)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(record.name).font(.body).lineLimit(1)
-                    Text(verbatim: "\(record.width)×\(record.height)")
-                        .font(.caption2).foregroundColor(.secondary)
+                // The display is inactive, so dim its icon + name; it brightens as the
+                // row is hovered, cueing that a click brings it back.
+                HStack(spacing: 8) {
+                    MenuItemIcon(systemName: "rectangle.slash", color: .secondary, active: false)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(record.name).font(.body).lineLimit(1)
+                        Text(verbatim: "\(record.width)×\(record.height)")
+                            .font(.caption2).foregroundColor(.secondary)
+                    }
+                }
+                .opacity(isHovered ? 1 : 0.6)
+
+                Spacer()
+
+                if busy {
+                    ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
+                } else {
+                    // Liquid-Glass accent capsule; the whole row is the tap target, so
+                    // this reads as the affordance and deepens with the row on hover.
+                    Text("Reconnect")
+                        .font(.caption).fontWeight(.medium)
+                        .foregroundColor(.accentColor)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule().fill(Color.accentColor.opacity(isHovered ? 0.22 : 0.12))
+                        )
                 }
             }
-            .opacity(isHovered ? 1 : 0.6)
-
-            Spacer()
-
-            if busy {
-                ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
-            } else {
-                // Liquid-Glass accent capsule; the whole row is the tap target, so
-                // this reads as the affordance and deepens with the row on hover.
-                Text("Reconnect")
-                    .font(.caption).fontWeight(.medium)
-                    .foregroundColor(.accentColor)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule().fill(Color.accentColor.opacity(isHovered ? 0.22 : 0.12))
-                    )
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption2)
+                    .foregroundColor(.red)
             }
         }
         .padding(.horizontal, 12)

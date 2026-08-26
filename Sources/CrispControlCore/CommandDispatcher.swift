@@ -343,7 +343,7 @@ extension ControlCommandDispatcher {
                 ])
             )
         }
-        guard matches.count == 1, let disconnected = matches.first else {
+        guard matches.count == 1 else {
             throw CommandFailure(
                 code: .ambiguousSelector,
                 message: "duplicate disconnected records make the UUID unsafe to reconnect",
@@ -355,8 +355,6 @@ extension ControlCommandDispatcher {
                 ])
             )
         }
-        try requireReconnectAllowed(disconnected)
-
         do {
             let result = try await service.reconnectDisplay(displayUUID: uuid)
             try Task.checkCancellation()
@@ -388,20 +386,6 @@ extension ControlCommandDispatcher {
             try connectionCapabilityFailure(
                 uuid: display.uuid,
                 message: "physical display disconnect is not allowed now",
-                capability: capability
-            )
-        }
-    }
-
-    private func requireReconnectAllowed(_ display: ControlDisconnectedDisplay) throws {
-        let capability = display.connection
-        guard capability.state == .writable,
-              !capability.connected,
-              capability.reconnectAllowed,
-              capability.platformSupported else {
-            try connectionCapabilityFailure(
-                uuid: display.uuid,
-                message: "physical display reconnect is not allowed now",
                 capability: capability
             )
         }
@@ -448,9 +432,9 @@ extension ControlCommandDispatcher {
     ) -> CommandFailure {
         let isIndeterminate = error.classification == .indeterminate
         let details: JSONValue = .object([
-            "phase": .string(isIndeterminate ? "post_dispatch" : "preflight"),
+            "phase": .string(error.mutationDispatched ? "post_dispatch" : "preflight"),
             "retrySafe": .bool(error.retrySafe),
-            "mutationDispatched": .bool(isIndeterminate),
+            "mutationDispatched": .bool(error.mutationDispatched),
             "outcome": .string(isIndeterminate ? "unknown" : "definite"),
             "command": .string(command),
             "displayUUID": .string(error.displayUUID),

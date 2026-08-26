@@ -276,7 +276,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // touching display state.
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 dm.refreshDisplays()
-                // Re-disconnect any physical displays macOS re-enabled on wake.
+                // Invalidate numeric-ID fallback continuity after wake; this performs no display write.
                 await PhysicalDisplayToggleService.shared.reapplyOnWake()
                 dm.refreshDisplays()
                 try? await Task.sleep(nanoseconds: 500_000_000)

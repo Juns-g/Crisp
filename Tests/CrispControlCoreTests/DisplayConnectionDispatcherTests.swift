@@ -179,6 +179,78 @@ final class DisplayConnectionDispatcherTests: XCTestCase {
         XCTAssertEqual(reconnectCalls, [targetUUID])
     }
 
+    func testExplicitReconnectDelegatesOrphanCapabilityToServiceAndPreservesIndeterminateTruth() async {
+        let service = OrphanReconnectService(
+            disconnected: ControlDisconnectedDisplay(
+                uuid: targetUUID,
+                name: "Orphaned Target",
+                width: 2560,
+                height: 1440,
+                connection: .unsupported(
+                    connected: false,
+                    platformSupported: true,
+                    reason: "a durable reconnect reservation requires authoritative reconciliation"
+                )
+            )
+        )
+        let dispatcher = ControlCommandDispatcher(service: service, appVersion: "test")
+        let request = ControlRequest(
+            requestID: "orphan-reconnect",
+            command: "displays.reconnect",
+            arguments: ["uuid": .string(targetUUID)]
+        )
+
+        let first = await dispatcher.handle(request)
+
+        XCTAssertEqual(first.error?.code, .writeOutcomeIndeterminate)
+        XCTAssertEqual(first.error?.code.exitCode, 5)
+        XCTAssertEqual(first.error?.details?["retrySafe"], .bool(false))
+        XCTAssertEqual(first.error?.details?["mutationDispatched"], .bool(false))
+        XCTAssertEqual(first.error?.details?["displayUUID"], .string(targetUUID))
+        let callsAfterFirstRequest = await service.reconnectCalls
+        XCTAssertEqual(callsAfterFirstRequest, [targetUUID])
+
+        let second = await dispatcher.handle(ControlRequest(
+            requestID: "fresh-reconnect",
+            command: "displays.reconnect",
+            arguments: ["uuid": .string(targetUUID)]
+        ))
+
+        XCTAssertTrue(second.ok)
+        XCTAssertEqual(second.result?["displayUUID"], .string(targetUUID))
+        let callsAfterSecondRequest = await service.reconnectCalls
+        XCTAssertEqual(callsAfterSecondRequest, [targetUUID, targetUUID])
+    }
+
+    func testReconnectMalformedAbsentAndDuplicateRecordsNeverReachService() async {
+        let cases: [(arguments: [String: JSONValue], records: [ControlDisconnectedDisplay])] = [
+            (["uuid": .string("main")], [disconnectedDisplay(uuid: targetUUID, name: "Target")]),
+            (["uuid": .string(targetUUID)], []),
+            (["uuid": .string(targetUUID)], [
+                disconnectedDisplay(uuid: targetUUID, name: "First"),
+                disconnectedDisplay(uuid: targetUUID, name: "Duplicate")
+            ])
+        ]
+
+        for testCase in cases {
+            let service = ConnectionMutationService(
+                disconnectedInventories: [testCase.records]
+            )
+            let response = await ControlCommandDispatcher(
+                service: service,
+                appVersion: "test"
+            ).handle(ControlRequest(
+                requestID: "reconnect-pre-service",
+                command: "displays.reconnect",
+                arguments: testCase.arguments
+            ))
+
+            XCTAssertFalse(response.ok, "\(testCase.arguments)")
+            let reconnectCalls = await service.reconnectCalls
+            XCTAssertEqual(reconnectCalls, [], "\(testCase.arguments)")
+        }
+    }
+
     func testConnectionPreflightAndPostDispatchErrorsRemainDistinct() async {
         let target = onlineDisplay(uuid: targetUUID, name: "Target")
         let preflight = DisplayConnectionMutationError(
@@ -414,6 +486,43 @@ private actor ConnectionMutationService: ControlCommandService {
             verification: .sameUUIDEnumeration
         )
     }
+}
+
+private actor OrphanReconnectService: ControlCommandService {
+    private let disconnected: ControlDisconnectedDisplay
+    private(set) var reconnectCalls: [String] = []
+
+    init(disconnected: ControlDisconnectedDisplay) {
+        self.disconnected = disconnected
+    }
+
+    func displays() async throws -> [ControlDisplay] { [] }
+
+    func disconnectedDisplays() async throws -> [ControlDisconnectedDisplay] {
+        [disconnected]
+    }
+
+    func reconnectDisplay(displayUUID: String) async throws -> DisplayConnectionSetResult {
+        reconnectCalls.append(displayUUID)
+        if reconnectCalls.count == 1 {
+            throw DisplayConnectionMutationError(
+                classification: .indeterminate,
+                displayUUID: displayUUID,
+                requestedConnectionState: .connected,
+                mutationDispatched: false,
+                message: "prior reconnect was reconciled without a display write"
+            )
+        }
+        return DisplayConnectionSetResult(
+            displayUUID: displayUUID,
+            requestedConnectionState: .connected,
+            observedConnectionState: .connected,
+            verification: .sameUUIDEnumeration
+        )
+    }
+
+    func readBrightness(displayUUID: String) async throws -> Double? { nil }
+    func writeBrightness(displayUUID: String, percent: Double) async throws -> Double { percent }
 }
 
 private actor MutationStartedSignal {

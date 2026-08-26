@@ -1,4 +1,4 @@
-public struct HardwareDisplayIdentity: Equatable, Sendable {
+public struct HardwareDisplayIdentity: Codable, Equatable, Sendable {
     public let vendorID: UInt32?
     public let productID: UInt32?
     public let serialNumber: UInt32?
@@ -9,17 +9,23 @@ public struct HardwareDisplayIdentity: Equatable, Sendable {
         self.serialNumber = serialNumber
     }
 
-    fileprivate var isComplete: Bool {
+    var isComplete: Bool {
         guard let vendorID, let productID, let serialNumber else { return false }
         return vendorID != 0 && productID != 0 && serialNumber != 0
     }
 }
 
 public struct HardwareFramebufferIdentityEvidence: Equatable, Sendable {
+    public let registryEntryID: UInt64?
     public let hasEDIDUUID: Bool
     public let identity: HardwareDisplayIdentity?
 
-    public init(hasEDIDUUID: Bool, identity: HardwareDisplayIdentity?) {
+    public init(
+        registryEntryID: UInt64? = nil,
+        hasEDIDUUID: Bool,
+        identity: HardwareDisplayIdentity?
+    ) {
+        self.registryEntryID = registryEntryID
         self.hasEDIDUUID = hasEDIDUUID
         self.identity = identity
     }

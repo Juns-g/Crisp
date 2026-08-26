@@ -27,11 +27,17 @@ private final class CrispControlAppService: ControlCommandService, @unchecked Se
     }
 
     func displays() async throws -> [ControlDisplay] {
-        displayManager.displays.map { display in
+        let displays = displayManager.displays
+        let connectionCapabilities = PhysicalDisplayToggleService.shared
+            .connectionCapabilitiesForControl(displays)
+        return displays.map { display in
             let boost = BrightnessBoostService.shared
             let isVirtual = VirtualDisplayService.shared.isVirtualDisplay(display.displayID)
-            let connection = PhysicalDisplayToggleService.shared.connectionCapabilityForControl(
-                display
+            let connection = connectionCapabilities[display.displayUUID] ?? .unsupported(
+                connected: true,
+                platformSupported: true,
+                reason: "the display was absent from the authoritative capability batch",
+                remediation: "refresh displays before making a connection change"
             )
             let extraBrightness = extraBrightnessCapability(for: display, isVirtual: isVirtual)
             let hdr = hdrCapability(for: display, isVirtual: isVirtual)

@@ -12,10 +12,16 @@ BOOST = ROOT / "Crisp" / "Services" / "BrightnessBoostService.swift"
 FIXTURE = ROOT / "Sources" / "CrispControlTestHost" / "main.swift"
 ROUNDTRIP = ROOT / "scripts" / "test-crispctl-roundtrip.sh"
 PHYSICAL_TOGGLE = ROOT / "Crisp" / "Services" / "PhysicalDisplayToggleService.swift"
+PHYSICAL_TOGGLE_VIEW = ROOT / "Crisp" / "Views" / "PhysicalDisplayToggleView.swift"
 CG_HELPERS = ROOT / "Crisp" / "Services" / "CGHelpers.swift"
 CONTROL_CORE = ROOT / "Sources" / "CrispControlCore"
 CONTROL_CLI = ROOT / "Sources" / "CrispControlCLI"
 PHYSICAL_CLASSIFIER = CONTROL_CORE / "HardwareBackedPhysicalDisplayClassifier.swift"
+DISPLAY_RECOVERY = CONTROL_CORE / "DisplayConnectionRecovery.swift"
+DISPLAY_COORDINATOR = CONTROL_CORE / "DisplayConnectionCoordinator.swift"
+DISPLAY_PERSISTENCE = CONTROL_CORE / "DisplayConnectionPersistence.swift"
+DISPLAY_READ_ONLY = CONTROL_CORE / "DisplayConnectionReadOnlyQueries.swift"
+COMMAND_DISPATCHER = CONTROL_CORE / "CommandDispatcher.swift"
 
 
 class P0AppWiringTests(unittest.TestCase):
@@ -31,7 +37,7 @@ class P0AppWiringTests(unittest.TestCase):
             "func reconnectDisplay",
             "disconnectForControl",
             "reconnectForControl",
-            "connectionCapabilityForControl",
+            "connectionCapabilitiesForControl",
         ):
             self.assertIn(required, host)
         self.assertIn("DisplayConnectionMutationCoordinator", physical)
@@ -48,18 +54,110 @@ class P0AppWiringTests(unittest.TestCase):
         self.assertNotIn("CGBeginDisplayConfiguration", control_plane)
         self.assertEqual(physical.count("SLSConfigureDisplayEnabled(cfg"), 1)
 
-    def test_display_connection_control_never_falls_back_to_last_known_display_id(self):
+    def test_display_list_batches_connection_capabilities_before_mapping(self):
+        host = HOST.read_text()
+        displays = host[
+            host.index("func displays() async throws"):
+            host.index("func disconnectedDisplays() async throws")
+        ]
+
+        self.assertEqual(displays.count("connectionCapabilitiesForControl"), 1)
+        self.assertLess(
+            displays.index("connectionCapabilitiesForControl"),
+            displays.index(".map"),
+        )
+        self.assertNotIn("connectionCapabilityForControl(", displays)
+        self.assertIn("connectionCapabilities[display.displayUUID]", displays)
+
+    def test_explicit_cli_reconnect_delegates_unique_uuid_to_shared_coordinator(self):
+        dispatcher = COMMAND_DISPATCHER.read_text()
+        host = HOST.read_text()
+        reconnect = dispatcher[
+            dispatcher.index("private func reconnectDisplay("):
+            dispatcher.index("private func requireDisconnectAllowed")
+        ]
+        app_service = host[
+            host.index("func reconnectDisplay(displayUUID:"):
+            host.index("func readBrightness(displayUUID:")
+        ]
+
+        self.assertIn("service.disconnectedDisplays()", reconnect)
+        self.assertIn("matches.count == 1", reconnect)
+        self.assertIn("service.reconnectDisplay(displayUUID: uuid)", reconnect)
+        self.assertNotIn("requireReconnectAllowed", reconnect)
+        self.assertLess(
+            reconnect.index("matches.count == 1"),
+            reconnect.index("service.reconnectDisplay(displayUUID: uuid)"),
+        )
+        self.assertIn("reconnectForControl(uuid: displayUUID)", app_service)
+
+    def test_rejected_reconnect_rollback_uses_one_envelope_write_and_no_display_call(self):
         physical = PHYSICAL_TOGGLE.read_text()
+        coordinator = DISPLAY_COORDINATOR.read_text()
+        persistence = DISPLAY_PERSISTENCE.read_text()
+        rollback = physical[
+            physical.index("func rollbackRejectedReconnectBeforeDispatch"):
+            physical.index("func reconcileOrphanedReconnectAttempt")
+        ]
+        completion = coordinator[
+            coordinator.index("private func requireReconnectDispatchCompletion"):
+            coordinator.index("private func cleanAlreadyOnlineRecoveryState")
+        ]
+
+        self.assertIn("RejectedReconnectRollback.proposedState", rollback)
+        self.assertIn(
+            "let snapshot = try connectionStateSnapshot(synchronizePublished: true)",
+            rollback,
+        )
+        self.assertLess(
+            rollback.index("defer { liveReconnectReservationUUIDs.remove(uuid) }"),
+            rollback.index(
+                "let snapshot = try connectionStateSnapshot(synchronizePublished: true)"
+            ),
+        )
+        self.assertIn("persistConnectionState(", rollback)
+        self.assertNotIn("setEnabled", rollback)
+        self.assertNotIn("dispatchConnectionChange", rollback)
+        self.assertEqual(persistence.count("try writeEnvelope(proposedState)"), 1)
+        self.assertEqual(persistence.count("try writeEnvelope(quarantineState)"), 1)
+        self.assertIn("normal success path remains one write", persistence)
+        self.assertNotIn("setEnabled", persistence)
+        self.assertIn("rollbackRejectedReconnectBeforeDispatch", completion)
+        rejected = completion[
+            completion.index("case let .rejectedBeforeDispatch"):
+            completion.index("case let .failedAfterDispatch")
+        ]
+        self.assertNotIn("releaseReconnectReservation", rejected)
+        self.assertNotIn("markReconnectIndeterminate", rejected)
+
+    def test_display_connection_fallback_is_persisted_capability_scoped_and_enable_only(self):
+        physical = PHYSICAL_TOGGLE.read_text()
+        core = "".join(path.read_text() for path in CONTROL_CORE.glob("*.swift"))
         control = physical[
             physical.index("func dispatchConnectionChange"):
-            physical.index("private func resolveControlDisplayIDs")
+            physical.index("private func controlAllDisplayIDs")
         ]
-        self.assertIn("resolveControlDisplayIDs", control)
-        self.assertIn("finalMatches", control)
-        self.assertIn("finalMatches.count == 1", control)
-        self.assertLess(control.index("finalMatches"), control.index("setEnabledOutcome"))
+        for required in (
+            "DisplayConnectionRecoveryCapability",
+            "bootSessionID",
+            "loginSessionID",
+            "wakeSessionID",
+            "topologyFingerprint",
+            "case available",
+            "case invalidatedByWake",
+            "case consumed",
+            "case indeterminate",
+        ):
+            self.assertIn(required, core)
+        self.assertIn("consumeRecoveryCapability", physical)
+        self.assertIn("case .oneShotRecovery", control)
+        self.assertIn("requestedState == .connected", control)
+        self.assertIn("request.displayID", control)
+        self.assertLess(control.index("case .oneShotRecovery"), control.index("setEnabledOutcome"))
         self.assertNotIn("record.displayID", control)
         self.assertNotIn("?? record.displayID", control)
+        self.assertNotIn("SLSGetDisplayForUUID", physical)
+        self.assertNotIn("CGDisplayGetDisplayIDFromUUID", physical)
 
     def test_display_connection_requires_positive_hardware_backing_proof(self):
         physical = PHYSICAL_TOGGLE.read_text()
@@ -115,7 +213,7 @@ class P0AppWiringTests(unittest.TestCase):
         self.assertNotIn("return nil", enumeration_loop)
 
         capability = physical[
-            physical.index("func connectionCapabilityForControl"):
+            physical.index("func connectionCapabilitiesForControl"):
             physical.index("func disconnectedDisplaysForControl")
         ]
         self.assertIn("unsupportedConnectionCapability", capability)
@@ -129,7 +227,8 @@ class P0AppWiringTests(unittest.TestCase):
         self.assertIn("hardwareBackedPhysicalUUIDs", observation)
         self.assertIn("unsafePhysicalMutationUUIDs", observation)
         self.assertIn("virtualUUIDs: unsafePhysicalMutationUUIDs", observation)
-        self.assertIn("isHardwareBackedPhysicalDisplay", observation)
+        self.assertIn("connectionCandidate", observation)
+        self.assertIn("candidate.isHardwareBackedPhysical", observation)
 
         active_count = physical[
             physical.index("private func physicalActiveDisplayCount"):
@@ -149,79 +248,44 @@ class P0AppWiringTests(unittest.TestCase):
         physical = PHYSICAL_TOGGLE.read_text()
         reconnect = physical[
             physical.index("func reconnect(uuid:"):
-            physical.index("/// Finds the current CGDirectDisplayID")
+            physical.index("/// Soft-reconnects a display")
         ]
-        self.assertIn("resolveUniqueCurrentID", reconnect)
-        self.assertIn("guard let targetID", reconnect)
-        self.assertNotIn("record.displayID", reconnect)
-        self.assertNotIn("??", reconnect)
-        self.assertIn("verifyBackOnline(uuid: uuid)", reconnect)
-        self.assertIn("removeDisconnectedRecord(uuid: uuid)", reconnect)
-        self.assertLess(
-            reconnect.index("verifyBackOnline(uuid: uuid)"),
-            reconnect.index("removeDisconnectedRecord(uuid: uuid)"),
-        )
+        self.assertIn("reconnectForControl(uuid: uuid)", reconnect)
+        self.assertIn("DisplayConnectionMutationError", reconnect)
+        self.assertNotIn("setEnabled", reconnect)
+        self.assertNotIn("resolveUniqueCurrentID", reconnect)
         self.assertNotIn("disconnected.removeAll", reconnect)
 
     def test_gui_disconnect_requires_fresh_unique_exact_uuid_before_state_or_dispatch(self):
         physical = PHYSICAL_TOGGLE.read_text()
         disconnect = physical[
             physical.index("func disconnect(_ display:"):
-            physical.index("private func restorePreparedDisconnect")
+            physical.index("func reconnect(uuid:")
+        ]
+        control = physical[
+            physical.index("func disconnectForControl"):
+            physical.index("func reconnectForControl")
         ]
 
-        stable_guard = "guard let exactUUID = stableUUID(for: display.displayID) else {"
-        initial_resolution = "resolveUniqueCurrentID(uuid: exactUUID)"
-        final_resolution = "resolveUniqueCurrentID(uuid: exactUUID)"
-        persistence = "persistPendingControlDisconnectUUIDs(preparedPending)"
-        dispatch = "setEnabledOutcome(false, displayID: finalDisplayID)"
-
-        self.assertIn(stable_guard, disconnect)
-        self.assertIn("return .failure(.displayNotFound)", disconnect)
-        self.assertNotIn("uuid: display.displayUUID", disconnect)
-        self.assertIn("uuid: exactUUID", disconnect)
-        self.assertEqual(disconnect.count(initial_resolution), 2)
-        self.assertIn("initialDisplayID == display.displayID", disconnect)
-        self.assertIn("finalDisplayID == display.displayID", disconnect)
-        self.assertLess(disconnect.index(stable_guard), disconnect.index(persistence))
-        self.assertLess(disconnect.index(initial_resolution), disconnect.index(persistence))
-        self.assertLess(disconnect.index(persistence), disconnect.rindex(final_resolution))
-        self.assertLess(disconnect.rindex(final_resolution), disconnect.rindex(
-            "isHardwareBackedPhysicalDisplay(finalDisplayID)"
-        ))
-        self.assertLess(
-            disconnect.rindex("isHardwareBackedPhysicalDisplay(finalDisplayID)"),
-            disconnect.rindex("wouldLeaveNoActiveDisplay(finalDisplayID)"),
-        )
-        self.assertLess(disconnect.rindex("wouldLeaveNoActiveDisplay(finalDisplayID)"),
-                        disconnect.index(dispatch))
-        self.assertEqual(disconnect.count(dispatch), 1)
+        self.assertIn("disconnectForControl(display)", disconnect)
+        self.assertIn("DisplayConnectionMutationError", disconnect)
+        self.assertNotIn("setEnabled", disconnect)
+        self.assertIn("displayID: display.displayID", control)
+        self.assertIn("DisplayConnectionMutationCoordinator", control)
 
     def test_gui_reconnect_rejects_non_exact_and_uses_stable_only_resolver(self):
         physical = PHYSICAL_TOGGLE.read_text()
+        view = PHYSICAL_TOGGLE_VIEW.read_text()
         reconnect = physical[
             physical.index("func reconnect(uuid:"):
-            physical.index("/// Finds the current CGDirectDisplayID")
-        ]
-        resolver = physical[
-            physical.index("private func resolveUniqueCurrentID(for record:"):
             physical.index("/// Soft-reconnects a display")
         ]
-        exact_helper = physical[
-            physical.index("private func isExactControlUUID"):
-            physical.index("// MARK: - Automation control adapter")
-        ]
 
-        exact_guard = "guard isExactControlUUID(uuid) else {"
-        self.assertIn(exact_guard, reconnect)
-        self.assertIn("ControlRequest.isExactDisplayUUID(value)", exact_helper)
-        self.assertLess(reconnect.index(exact_guard), reconnect.index("disconnected.first"))
-        self.assertLess(reconnect.index(exact_guard), reconnect.index("setEnabled(true"))
-        self.assertIn("resolveUniqueCurrentID(uuid: record.uuid)", resolver)
-        self.assertIn("guard isExactControlUUID(uuid) else { return nil }", resolver)
-        self.assertIn("stableUUID(for: $0) == uuid", resolver)
-        self.assertNotIn("{ uuid(for: $0)", resolver)
-        self.assertNotIn("?? record.displayID", resolver)
+        self.assertIn("reconnectForControl(uuid: uuid)", reconnect)
+        self.assertNotIn("setEnabled", reconnect)
+        self.assertIn("if case .failure(let error) = result", view)
+        self.assertIn("errorMessage", view)
+        self.assertNotIn("_ = await service.reconnect", view)
 
     def test_active_physical_enumeration_failure_cannot_authorize_recovery(self):
         physical = PHYSICAL_TOGGLE.read_text()
@@ -243,155 +307,241 @@ class P0AppWiringTests(unittest.TestCase):
         self.assertIn("return 0", active_count)
         self.assertIn("PhysicalDisplaySafetyPolicy.shouldRefuseDisconnect", would_leave)
         self.assertNotIn("?? 0", would_leave)
-        self.assertGreaterEqual(
-            restore.count("PhysicalDisplaySafetyPolicy.authorizesEmergencyRecovery"),
-            4,
-        )
+        self.assertNotIn("setEnabled", restore)
         self.assertNotIn("physicalActiveDisplayCount() == 0", restore)
 
-    def test_gui_reconnect_and_wake_reapply_reprove_hardware_and_unique_identity(self):
+    def test_gui_reconnect_reproves_hardware_and_wake_invalidates_recovery(self):
         physical = PHYSICAL_TOGGLE.read_text()
-        reconnect = physical[
-            physical.index("func reconnect(uuid:"):
-            physical.index("/// Finds the current CGDirectDisplayID")
+        dispatch = physical[
+            physical.index("func dispatchConnectionChange"):
+            physical.index("private func controlAllDisplayIDs")
         ]
         wake = physical[
-            physical.index("private func uniqueOnlineDisplayIDsByUUID"):
+            physical.index("func reapplyOnWake"):
             physical.index("// MARK: - Persistence")
         ]
 
-        self.assertIn("resolveUniqueCurrentID", reconnect)
-        self.assertIn("isHardwareBackedPhysicalDisplay(targetID)", reconnect)
-        self.assertIn(".hardwareBackingUnproven", reconnect)
-        self.assertRegex(
-            reconnect,
-            r"guard isHardwareBackedPhysicalDisplay\(targetID\) else \{\s*"
-            r"return \.failure\(\.hardwareBackingUnproven\)\s*\}\s*"
-            r"let result = await setEnabled\(true, displayID: targetID\)",
-        )
-        self.assertLess(
-            reconnect.index("isHardwareBackedPhysicalDisplay(targetID)"),
-            reconnect.index("setEnabled(true, displayID: targetID)"),
-        )
-        self.assertLess(
-            reconnect.index("setEnabled(true, displayID: targetID)"),
-            reconnect.index("removeDisconnectedRecord(uuid: uuid)"),
-        )
+        self.assertIn("DisplayConnectionRecoveryResolver", dispatch)
+        self.assertIn("authorizesExactDisconnect", dispatch)
+        self.assertIn("authorizesConsumedRecoveryDispatch", dispatch)
+        self.assertLess(dispatch.index("DisplayConnectionRecoveryResolver"),
+                        dispatch.index("setEnabledOutcome"))
 
-        self.assertIn("uniqueOnlineDisplayIDsByUUID", wake)
-        self.assertIn("private func revalidatedWakeTarget", wake)
-        self.assertIn("stableUUID(for:", wake)
-        self.assertIn("PhysicalDisplaySafetyPolicy.uniqueExactUUIDDisplayIDs", wake)
-        self.assertNotIn("Dictionary(uniqueKeysWithValues", wake)
-        self.assertIn("guard initialDisplayID == freshLiveID", wake)
-        self.assertGreaterEqual(wake.count("isHardwareBackedPhysicalDisplay"), 2)
         self.assertIn(
-            "guard isHardwareBackedPhysicalDisplay(initialLiveID) else { continue }",
+            "let snapshot = try? connectionStateSnapshot(synchronizePublished: true)",
             wake,
         )
-        self.assertIn(
-            "guard isHardwareBackedPhysicalDisplay(freshLiveID) else { return nil }",
-            wake,
-        )
-        self.assertRegex(
-            wake,
-            r"guard let freshLiveID = revalidatedWakeTarget\(\s*"
-            r"uuid: record\.uuid,\s*initialDisplayID: initialLiveID\s*\) else \{\s*"
-            r"try\? confirmDisconnectedRecord\(uuid: record\.uuid\)\s*continue\s*\}",
-        )
-        final_proof = wake.rindex("isHardwareBackedPhysicalDisplay(freshLiveID)")
-        dispatch = wake.index("setEnabledOutcome(false, displayID: freshLiveID)")
-        self.assertLess(final_proof, dispatch)
-        self.assertNotIn("removeDisconnectedRecord", wake)
+        self.assertIn("changingState(to: .invalidatedByWake)", wake)
+        self.assertIn("quarantiningUUIDs: affectedUUIDs", wake)
+        self.assertNotIn("markRecoveryCapabilityIndeterminate", wake)
+        self.assertNotIn("pendingControlDisconnectUUIDs", wake)
+        self.assertNotIn("setEnabledOutcome", wake)
+        self.assertNotIn("SLSConfigureDisplayEnabled", wake)
 
-    def test_last_known_id_fallback_is_zero_screen_emergency_only(self):
+    def test_wake_continuity_uses_public_mach_sleep_offset_clock(self):
+        physical = PHYSICAL_TOGGLE.read_text()
+        wake_token = physical[
+            physical.index("private func currentWakeSessionID"):
+            physical.index("private func sysctlString")
+        ]
+
+        self.assertEqual(wake_token.count("mach_continuous_time()"), 2)
+        self.assertIn("mach_absolute_time()", wake_token)
+        self.assertIn("mach_timebase_info", wake_token)
+        self.assertIn("DisplayConnectionMachSleepOffsetToken.make", wake_token)
+        self.assertNotIn("kern.waketime", physical)
+        self.assertNotIn("IOPMGetLastWakeTime", physical)
+
+    def test_read_only_refresh_never_auto_enables_a_recovery_record(self):
         physical = PHYSICAL_TOGGLE.read_text()
         restore = physical[
             physical.index("func restoreIfNoActiveDisplay()"):
-            physical.index("func reapplyOnWake()")
+            physical.index("func reapplyOnWake")
         ]
-        emergency_name = "recoverAnyViewableDisplayEmergencyOnly"
-        emergency = physical[
-            physical.index(f"private func {emergency_name}"):
-            physical.index("func reapplyOnWake()")
-        ]
-        restore_function = restore[:restore.index(f"private func {emergency_name}")]
+        self.assertNotIn("setEnabled", restore)
+        self.assertNotIn("record.displayID", restore)
+        self.assertNotIn("recoverAnyViewableDisplayEmergencyOnly", physical)
+        self.assertNotIn("?? record.displayID", physical)
 
-        self.assertEqual(physical.count(f"{emergency_name}()"), 2)
-        self.assertEqual(physical.count("?? record.displayID"), 1)
-        self.assertIn("?? record.displayID", emergency)
-        recovery_guard = "PhysicalDisplaySafetyPolicy.authorizesEmergencyRecovery"
-        self.assertEqual(emergency.count(recovery_guard), 2)
-        self.assertNotIn("physicalActiveDisplayCount() == 0", emergency)
-        self.assertIn("setEnabled(true", emergency)
-        self.assertNotIn("reconnect(uuid:", emergency)
-        self.assertNotIn("Result<Void, ToggleError>", emergency)
-        self.assertIn(
-            "guard await verifyBackOnline(uuid: record.uuid) else { return }",
-            emergency,
-        )
-        self.assertIn("try? removeDisconnectedRecord(uuid: record.uuid)", emergency)
-        self.assertEqual(emergency.count("removeDisconnectedRecord(uuid: record.uuid)"), 1)
-        self.assertNotIn("confirmDisconnectedRecord", emergency)
-        self.assertLess(
-            emergency.index("guard await verifyBackOnline(uuid: record.uuid) else { return }"),
-            emergency.index("try? removeDisconnectedRecord(uuid: record.uuid)"),
-        )
-        self.assertLess(
-            restore_function.rindex(recovery_guard),
-            restore_function.index(f"{emergency_name}()"),
-        )
-
-    def test_emergency_recovery_dispatches_only_first_stale_id_per_invocation(self):
+    def test_orphan_reconnect_reconciliation_is_explicit_readback_only_and_process_owned(self):
         physical = PHYSICAL_TOGGLE.read_text()
-        emergency = physical[
-            physical.index("private func recoverAnyViewableDisplayEmergencyOnly"):
-            physical.index("private func uniqueOnlineDisplayIDsByUUID")
+        coordinator = DISPLAY_COORDINATOR.read_text()
+        view = PHYSICAL_TOGGLE_VIEW.read_text()
+
+        adapter = physical[
+            physical.index("func reserveReconnect"):
+            physical.index("func dispatchConnectionChange")
         ]
-        dispatch = "let result = await setEnabled(true, displayID: targetID)"
-        exact_zero_guard = "PhysicalDisplaySafetyPolicy.authorizesEmergencyRecovery"
+        orphan = adapter[
+            adapter.index("func reconcileOrphanedReconnectAttempt"):
+            adapter.index("private func changeRecoveryCapabilityState")
+        ]
+        explicit_reconnect = coordinator[
+            coordinator.index("public func reconnect(uuid:"):
+            coordinator.index("private func reconnectDispatchPlan")
+        ]
+        for required in (
+            "liveReconnectReservationUUIDs",
+            "DisplayConnectionRecoveryResolver.orphanedReconnectResolution",
+            "connectionObservation()",
+            "nextReservations.remove(uuid)",
+            "persistConnectionState",
+        ):
+            self.assertIn(required, physical)
+        self.assertIn("reconcileOrphanedReconnectAttempt", explicit_reconnect)
+        self.assertIn("fresh explicit user decision", explicit_reconnect)
+        self.assertNotIn("dispatchConnectionChange", orphan)
+        self.assertNotIn("setEnabled", orphan)
+        self.assertLess(orphan.index("persistConnectionState"), orphan.index("return .reconciled"))
 
-        self.assertIn(".sorted { lhs, rhs in", emergency)
-        self.assertIn(
-            "guard let (record, targetID) = candidates.first else { return }",
-            emergency,
+        read_only_sections = (
+            physical[
+                physical.index("func disconnectedDisplaysForControl"):
+                physical.index("func disconnectForControl")
+            ],
+            physical[
+                physical.index("func reconcile()"):
+                physical.index("func recoverStrandedSoftReconnect")
+            ],
+            physical[physical.index("private func loadDesired"):],
         )
-        self.assertNotIn("for (record, targetID) in candidates", emergency)
-        self.assertEqual(emergency.count(dispatch), 1)
-        self.assertLess(emergency.rindex(exact_zero_guard), emergency.index(dispatch))
-        self.assertIn("guard case .success = result else { return }", emergency)
-        self.assertIn(
-            "guard await verifyBackOnline(uuid: record.uuid) else { return }",
-            emergency,
-        )
-        self.assertLess(
-            emergency.index("guard case .success = result else { return }"),
-            emergency.index("guard await verifyBackOnline(uuid: record.uuid) else { return }"),
-        )
-        self.assertLess(
-            emergency.index("guard await verifyBackOnline(uuid: record.uuid) else { return }"),
-            emergency.index("try? removeDisconnectedRecord(uuid: record.uuid)"),
-        )
+        for section in read_only_sections:
+            self.assertNotIn("reconcileOrphanedReconnectAttempt", section)
+            self.assertNotIn("dispatchConnectionChange", section)
 
-    def test_existing_disconnect_retains_recovery_state_for_indeterminate_windowserver_call(self):
+        gui_reconnect = view[
+            view.index("private func reconnect("):
+            view.index("private struct DisconnectedDisplayRow")
+        ]
+        self.assertNotIn("Task.sleep", gui_reconnect)
+        self.assertNotIn("errorMessages[record.uuid] = nil", gui_reconnect.split("Task {", 1)[1])
+
+    def test_quarantine_reconciliation_is_explicit_readback_only_and_precedes_dispatch(self):
         physical = PHYSICAL_TOGGLE.read_text()
-        disconnect = physical[
+        coordinator = DISPLAY_COORDINATOR.read_text()
+        persistence = DISPLAY_PERSISTENCE.read_text()
+        reconnect = coordinator[
+            coordinator.index("public func reconnect(uuid:"):
+            coordinator.index("private func reconcileQuarantineIfNeeded")
+        ]
+        quarantine_flow = coordinator[
+            coordinator.index("private func reconcileQuarantineIfNeeded"):
+            coordinator.index("private func reconnectDispatchPlan")
+        ]
+        quarantine = physical[
+            physical.index("func reconcileQuarantinedReconnectAttempt"):
+            physical.index("private func changeRecoveryCapabilityState")
+        ]
+
+        self.assertLess(
+            reconnect.index("reconcileQuarantineIfNeeded"),
+            reconnect.index("DisplayConnectionRecoveryResolver.reconnectResolution"),
+        )
+        self.assertLess(
+            reconnect.index("reconcileQuarantineIfNeeded"),
+            reconnect.index("reserveReconnect"),
+        )
+        self.assertLess(
+            reconnect.index("reconcileQuarantineIfNeeded"),
+            reconnect.index("dispatchConnectionChange"),
+        )
+        self.assertIn("reconnectPersistenceUncertainUUIDs.contains(uuid)", quarantine_flow)
+        self.assertIn("try await adapter.reconcileQuarantinedReconnectAttempt", quarantine_flow)
+        self.assertIn("finishQuarantinedReconnectAttempt", quarantine_flow)
+        self.assertIn("mutationDispatched: false", quarantine_flow)
+        self.assertIn("explicit user decision is required", quarantine_flow)
+        already_online = quarantine_flow[
+            quarantine_flow.index("case .alreadyOnline:"):
+            quarantine_flow.index("case .liveAttempt:")
+        ]
+        self.assertIn("adapter.connectionObservation()", already_online)
+        self.assertIn(
+            "DisplayConnectionRecoveryResolver.uniqueOnlineHardwareCandidate",
+            already_online,
+        )
+        self.assertIn("recoveryStateIsAbsent", already_online)
+        self.assertGreaterEqual(already_online.count("try Task.checkCancellation()"), 2)
+        self.assertLess(
+            already_online.index("try Task.checkCancellation()"),
+            already_online.index("adapter.connectionObservation()"),
+        )
+        self.assertLess(
+            already_online.index("recoveryStateIsAbsent"),
+            already_online.rindex("try Task.checkCancellation()"),
+        )
+        self.assertLess(
+            already_online.rindex("try Task.checkCancellation()"),
+            already_online.index("return success"),
+        )
+        self.assertLess(
+            already_online.index("adapter.connectionObservation()"),
+            already_online.index("return success"),
+        )
+        self.assertLess(
+            already_online.index(
+                "DisplayConnectionRecoveryResolver.uniqueOnlineHardwareCandidate"
+            ),
+            already_online.index("return success"),
+        )
+
+        self.assertEqual(quarantine.count("connectionStateSnapshot("), 1)
+        self.assertEqual(quarantine.count("connectionObservation("), 1)
+        self.assertIn("liveQuarantineReconciliationUUIDs", quarantine)
+        self.assertIn("snapshot.authority == .durable", quarantine)
+        self.assertIn("connectionPersistence.reconcileQuarantinedReconnect", quarantine)
+        self.assertIn("result.writeResult.disposition == .committedProposed", quarantine)
+        self.assertNotIn("dispatchConnectionChange", quarantine)
+        self.assertNotIn("setEnabled", quarantine)
+        self.assertNotIn("SLSConfigureDisplayEnabled", quarantine)
+
+        authority = persistence[
+            persistence.index("public var authorizesConnectionMutation"):
+            persistence.index("public enum ConnectionPersistenceDisposition")
+        ]
+        self.assertIn(
+            "authority == .durable && envelope.reconnectPersistenceUncertainSet.isEmpty",
+            authority,
+        )
+
+        for section in (
+            physical[
+                physical.index("func connectionCapabilitiesForControl"):
+                physical.index("func disconnectForControl")
+            ],
+            physical[
+                physical.index("func reconcile()"):
+                physical.index("func recoverStrandedSoftReconnect")
+            ],
+            physical[
+                physical.index("func reapplyOnWake"):
+                physical.index("// MARK: - Persistence")
+            ],
+        ):
+            self.assertNotIn("reconcileQuarantinedReconnectAttempt", section)
+            self.assertNotIn("dispatchConnectionChange", section)
+
+    def test_shared_disconnect_retains_recovery_state_for_indeterminate_windowserver_call(self):
+        physical = PHYSICAL_TOGGLE.read_text()
+        adapter = physical[
+            physical.index("func retainDisconnectedRecord"):
+            physical.index("private func controlAllDisplayIDs")
+        ]
+        gui_disconnect = physical[
             physical.index("func disconnect(_ display:"):
             physical.index("func reconnect(uuid:")
         ]
-        self.assertIn("persistPendingControlDisconnectUUIDs", disconnect)
-        self.assertIn("setEnabledOutcome(false", disconnect)
-        self.assertIn("verifyDisconnected", disconnect)
-        self.assertIn("outcomeIndeterminate", disconnect)
+        self.assertIn("persistConnectionState", adapter)
+        self.assertIn("markRecoveryCapabilityIndeterminate", adapter)
+        self.assertIn("disconnectForControl(display)", gui_disconnect)
         self.assertLess(
-            disconnect.index("persistPendingControlDisconnectUUIDs"),
-            disconnect.index("setEnabledOutcome(false"),
+            adapter.index("persistConnectionState"),
+            adapter.index("func dispatchConnectionChange"),
         )
 
     def test_indeterminate_disconnect_keeps_uuid_scoped_recovery_record(self):
         physical = PHYSICAL_TOGGLE.read_text()
         self.assertIn("controlPendingDisconnectUUIDs", physical)
-        self.assertIn("pendingControlDisconnectUUIDs", physical)
+        self.assertIn("currentState.pendingSet", physical)
         self.assertIn("func confirmDisconnectedRecord", physical)
 
         inventory = physical[
@@ -399,34 +549,94 @@ class P0AppWiringTests(unittest.TestCase):
             physical.index("func disconnectForControl")
         ]
         self.assertIn("func disconnectedDisplaysForControl() throws", inventory)
-        self.assertIn("pendingControlDisconnectUUIDs", inventory)
-        self.assertIn("confirmDisconnectedRecord", inventory)
-        self.assertNotIn("observation = nil", inventory)
-        self.assertNotIn("?? false", inventory)
+        self.assertIn("DisplayConnectionReadOnlyQueries.disconnectedDisplays", inventory)
+        self.assertNotIn("confirmDisconnectedRecord", inventory)
+        self.assertNotIn("removeDisconnectedRecord", inventory)
+        self.assertNotIn("persistConnectionState", inventory)
 
         reconcile = physical[
             physical.index("func reconcile()"):
             physical.index("func recoverStrandedSoftReconnect")
         ]
-        self.assertIn("pendingControlDisconnectUUIDs", reconcile)
-        self.assertIn("!pending.contains", reconcile)
+        self.assertIn("connectionObservation", reconcile)
+        self.assertIn("reconcileTopologyMetadata", reconcile)
+        self.assertNotIn("setEnabled", reconcile)
 
         wake = physical[
             physical.index("func reapplyOnWake"):
             physical.index("// MARK: - Persistence")
         ]
-        self.assertIn("pendingControlDisconnectUUIDs", wake)
-        self.assertIn("!pending.contains", wake)
-        self.assertIn("persistPendingControlDisconnectUUIDs", wake)
-        self.assertIn("setEnabledOutcome(false", wake)
-        self.assertIn("confirmDisconnectedRecord", wake)
+        self.assertIn("changingState(to: .invalidatedByWake)", wake)
+        self.assertNotIn("markRecoveryCapabilityIndeterminate", wake)
+        self.assertNotIn("pendingControlDisconnectUUIDs", wake)
+        self.assertNotIn("setEnabledOutcome", wake)
+
+        mark_indeterminate = physical[
+            physical.index("func markRecoveryCapabilityIndeterminate"):
+            physical.index("func removeDisconnectedRecord")
+        ]
+        self.assertIn("currentState.pendingSet", mark_indeterminate)
+        self.assertIn("persistConnectionState", mark_indeterminate)
 
         capability = physical[
-            physical.index("func connectionCapabilityForControl"):
+            physical.index("func connectionCapabilitiesForControl"):
             physical.index("func disconnectedDisplaysForControl")
         ]
-        self.assertIn("pendingControlDisconnectUUIDs", capability)
-        self.assertIn("disconnect outcome is indeterminate", capability)
+        self.assertIn("DisplayConnectionReadOnlyQueries.connectedCapabilities", capability)
+        self.assertNotIn("removeDisconnectedRecord", capability)
+        self.assertNotIn("persistConnectionState", capability)
+        self.assertIn("disconnect outcome is indeterminate", DISPLAY_READ_ONLY.read_text())
+
+    def test_old_records_have_no_fallback_authority_but_online_truth_can_clean_them(self):
+        physical = PHYSICAL_TOGGLE.read_text()
+        recovery = DISPLAY_RECOVERY.read_text()
+        record = recovery[
+            recovery.index("struct DisplayConnectionPersistedRecord"):
+            recovery.index("struct DisplayConnectionPersistenceEnvelope")
+        ]
+        reconcile = physical[
+            physical.index("func reconcile()"):
+            physical.index("func recoverStrandedSoftReconnect")
+        ]
+
+        self.assertIn("recoveryCapability", record)
+        self.assertIn("DisplayConnectionRecoveryCapability?", record)
+        self.assertIn(
+            "typealias DisconnectedDisplay = DisplayConnectionPersistedRecord",
+            physical,
+        )
+        self.assertIn("connectionObservation", reconcile)
+        self.assertIn("reconcileTopologyMetadata", reconcile)
+        self.assertNotIn("setEnabled", reconcile)
+
+    def test_recovery_record_and_pending_marker_use_one_authoritative_envelope(self):
+        physical = PHYSICAL_TOGGLE.read_text()
+        recovery = DISPLAY_RECOVERY.read_text()
+        self.assertIn("struct DisplayConnectionPersistenceEnvelope", recovery)
+        self.assertIn(
+            "typealias PersistedConnectionState = DisplayConnectionPersistenceEnvelope",
+            physical,
+        )
+        self.assertIn("connectionRecoveryStateKey", physical)
+        persistence = physical[
+            physical.index("func persistConnectionState"):
+            physical.index("func pendingSoftReconnectUUIDs")
+        ]
+        self.assertIn("connectionPersistence.replace", persistence)
+        self.assertIn("oldState: oldSnapshot.envelope", persistence)
+        self.assertIn("result.disposition == .committedProposed", persistence)
+        boundary = DISPLAY_PERSISTENCE.read_text()
+        self.assertIn("func snapshot()", boundary)
+        self.assertIn("func replace(", boundary)
+        self.assertIn("decodeOneRead()", boundary)
+
+        remove = physical[
+            physical.index("func removeDisconnectedRecord"):
+            physical.index("func dispatchConnectionChange")
+        ]
+        self.assertIn("persistConnectionState", remove)
+        self.assertNotIn("persistDisconnectedForControl", remove)
+        self.assertNotIn("persistPendingControlDisconnectUUIDs", remove)
 
     def test_automation_host_wires_p0_to_existing_app_services(self):
         text = HOST.read_text()
