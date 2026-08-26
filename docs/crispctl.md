@@ -99,12 +99,22 @@ The safe per-write sequence is:
 
 Connection writes fail closed unless the existing platform gate proves Apple
 Silicon and macOS 13 or later and the target has positive hardware-backed
-physical proof: a built-in panel or an external display with an IOKit
-`IODisplayConnect` service. Crisp virtual displays, third-party virtual
-displays, placeholders, and unknown or unprovable targets are excluded and
-cannot count as the other viewable display. Disconnect must leave another
-positively proven active physical viewable display. This does not equate DDC
-support with physicality. A transaction return alone is not proof. Success
+physical proof: a built-in panel; an external display whose nonzero CoreGraphics
+service conforms to IOKit `IODisplayConnect`; or an external display whose
+nonzero CoreGraphics vendor, product, and serial identity has exactly one equal
+`IOMobileFramebuffer` `DisplayAttributes.ProductAttributes` identity among the
+complete registry snapshot's entries that publish a non-empty `EDID UUID`.
+EDID UUID presence only scopes the external framebuffer candidates; its value or
+contents are never parsed or compared as identity proof. Any EDID-bearing
+candidate with a partial, zero, or missing identity fails the entire proof, as
+do zero or duplicate exact matches. Non-EDID built-in and inactive framebuffer
+entries are not external identity candidates. Crisp
+virtual displays, third-party virtual displays, placeholders, and unknown or
+unprovable targets are excluded and cannot count as the other viewable display.
+Disconnect must leave another positively proven active physical viewable
+display. DDC support, display name, dimensions, IOKit `Location`, EDID prefix or
+contents, traversal order, and vendor/product without serial are not proof. A
+transaction return alone is not proof. Success
 requires bounded same-UUID enumeration:
 disconnect proves the UUID offline while its intentional record remains;
 reconnect proves it online and then proves the intentional record absent.

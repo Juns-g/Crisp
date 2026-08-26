@@ -70,12 +70,49 @@ class P0AppWiringTests(unittest.TestCase):
             '@_silgen_name("CGDisplayIOServicePort")',
             "IOObjectConformsTo",
             '"IODisplayConnect"',
+            'IOServiceMatching("IOMobileFramebuffer")',
+            '"EDID UUID"',
+            '"DisplayAttributes"',
+            '"ProductAttributes"',
+            '"LegacyManufacturerID"',
+            '"ProductID"',
+            '"SerialNumber"',
+            "CGDisplayVendorNumber",
+            "CGDisplayModelNumber",
+            "CGDisplaySerialNumber",
             "HardwareBackedPhysicalDisplayEvidence",
+            "HardwareDisplayIdentity",
+            "HardwareFramebufferIdentityEvidence",
             "func isHardwareBackedPhysicalDisplay",
         ):
             self.assertIn(required, physical)
         self.assertNotIn("ddc", classifier.lower())
-        self.assertNotIn("vendor", classifier.lower())
+        self.assertIn("HardwareFramebufferIdentityMatcher.hasUniqueExactMatch", classifier)
+        self.assertIn("framebufferSnapshot.filter(\\.hasEDIDUUID)", classifier)
+        self.assertIn("candidates.allSatisfy", classifier)
+        self.assertIn("coreGraphicsIdentity:", physical)
+        self.assertIn("framebufferSnapshot:", physical)
+        self.assertNotIn("hasUniqueFramebufferIdentityMatch: true", physical)
+        self.assertNotIn("hasEDIDUUID: true", physical)
+
+        snapshot = physical[
+            physical.index("private func framebufferSnapshotForPhysicalProof"):
+            physical.index("private func uint32PhysicalProofValue")
+        ]
+        self.assertIn("while service != 0", snapshot)
+        self.assertIn(
+            "snapshot.append(framebufferIdentityEvidenceForPhysicalProof(service))",
+            snapshot,
+        )
+        self.assertIn('"EDID UUID" as CFString', snapshot)
+        self.assertIn("hasEDIDUUID: edidUUID?.isEmpty == false", snapshot)
+        self.assertIn("identity: framebufferIdentityForPhysicalProof(service)", snapshot)
+        self.assertNotIn("guard let identity else", snapshot)
+        enumeration_loop = snapshot[
+            snapshot.index("while service != 0"):
+            snapshot.index("return snapshot")
+        ]
+        self.assertNotIn("return nil", enumeration_loop)
 
         capability = physical[
             physical.index("func connectionCapabilityForControl"):

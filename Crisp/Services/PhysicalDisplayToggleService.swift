@@ -217,12 +217,91 @@ final class PhysicalDisplayToggleService: ObservableObject, DisplayConnectionMut
         let hasIOServicePort = servicePort != 0 && servicePort != MACH_PORT_NULL
         let conformsToDisplayConnect = hasIOServicePort
             && IOObjectConformsTo(servicePort, "IODisplayConnect") != 0
+        let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
+        let isKnownVirtual = VirtualDisplayService.shared.isVirtualDisplay(displayID)
+        let needsFramebufferFallback = !isBuiltin
+            && !isKnownVirtual
+            && !conformsToDisplayConnect
+        let coreGraphicsIdentity = needsFramebufferFallback
+            ? HardwareDisplayIdentity(
+                vendorID: CGDisplayVendorNumber(displayID),
+                productID: CGDisplayModelNumber(displayID),
+                serialNumber: CGDisplaySerialNumber(displayID)
+            )
+            : nil
+        let framebufferSnapshot = needsFramebufferFallback
+            ? framebufferSnapshotForPhysicalProof()
+            : nil
         return HardwareBackedPhysicalDisplayEvidence(
-            isBuiltin: CGDisplayIsBuiltin(displayID) != 0,
-            isKnownVirtual: VirtualDisplayService.shared.isVirtualDisplay(displayID),
+            isBuiltin: isBuiltin,
+            isKnownVirtual: isKnownVirtual,
             hasIOServicePort: hasIOServicePort,
-            ioServiceConformsToDisplayConnect: conformsToDisplayConnect
+            ioServiceConformsToDisplayConnect: conformsToDisplayConnect,
+            coreGraphicsIdentity: coreGraphicsIdentity,
+            framebufferSnapshot: framebufferSnapshot
         )
+    }
+
+    /// Keep every enumerated framebuffer so Core can fail closed over all EDID-backed candidates.
+    private func framebufferSnapshotForPhysicalProof(
+    ) -> [HardwareFramebufferIdentityEvidence]? {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(
+            kIOMainPortDefault,
+            IOServiceMatching("IOMobileFramebuffer"),
+            &iterator
+        ) == KERN_SUCCESS else { return nil }
+        defer { IOObjectRelease(iterator) }
+
+        var snapshot: [HardwareFramebufferIdentityEvidence] = []
+        var service = IOIteratorNext(iterator)
+        while service != 0 {
+            snapshot.append(framebufferIdentityEvidenceForPhysicalProof(service))
+            IOObjectRelease(service)
+            service = IOIteratorNext(iterator)
+        }
+        return snapshot
+    }
+
+    private func framebufferIdentityEvidenceForPhysicalProof(
+        _ service: io_service_t
+    ) -> HardwareFramebufferIdentityEvidence {
+        let edidUUID = IORegistryEntryCreateCFProperty(
+            service,
+            "EDID UUID" as CFString,
+            kCFAllocatorDefault,
+            0
+        )?.takeRetainedValue() as? String
+        return HardwareFramebufferIdentityEvidence(
+            hasEDIDUUID: edidUUID?.isEmpty == false,
+            identity: framebufferIdentityForPhysicalProof(service)
+        )
+    }
+
+    private func framebufferIdentityForPhysicalProof(
+        _ service: io_service_t
+    ) -> HardwareDisplayIdentity? {
+        guard let displayAttributes = IORegistryEntryCreateCFProperty(
+            service,
+            "DisplayAttributes" as CFString,
+            kCFAllocatorDefault,
+            0
+        )?.takeRetainedValue() as? [String: Any],
+        let productAttributes = displayAttributes["ProductAttributes"] as? [String: Any]
+        else { return nil }
+
+        return HardwareDisplayIdentity(
+            vendorID: uint32PhysicalProofValue(productAttributes["LegacyManufacturerID"]),
+            productID: uint32PhysicalProofValue(productAttributes["ProductID"]),
+            serialNumber: uint32PhysicalProofValue(productAttributes["SerialNumber"])
+        )
+    }
+
+    private func uint32PhysicalProofValue(_ value: Any?) -> UInt32? {
+        guard let number = value as? NSNumber else { return nil }
+        let signedValue = number.int64Value
+        guard signedValue >= 0, signedValue <= Int64(UInt32.max) else { return nil }
+        return UInt32(signedValue)
     }
 
     func isHardwareBackedPhysicalDisplay(_ displayID: CGDirectDisplayID) -> Bool {

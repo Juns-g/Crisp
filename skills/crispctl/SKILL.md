@@ -165,11 +165,20 @@ Use only `--json` responses for automation. Follow this procedure:
   warnings, and remediation text as real constraints rather than success.
 - Connection capability must prove Apple Silicon/macOS 13+ support, a stable
   UUID, and positive hardware-backed physical proof. A built-in panel is
-  positive proof; an external requires an IOKit `IODisplayConnect` service.
-  Crisp virtual, third-party virtual, placeholder, and unknown/unprovable
-  displays do not count. Disconnect must also prove that it will not remove the
-  last active physical viewable display. Any failed gate stops before mutation;
-  do not bypass it with another display tool.
+  positive proof; an external requires either a nonzero CoreGraphics service
+  that conforms to IOKit `IODisplayConnect`, or exactly one complete and equal
+  vendor/product/serial match in `IOMobileFramebuffer`
+  `DisplayAttributes.ProductAttributes` among entries publishing a non-empty
+  `EDID UUID`. EDID UUID presence only scopes external framebuffer candidates;
+  its value or contents are not identity proof. Any EDID-bearing incomplete or
+  zero identity, and zero or duplicate exact matches, fail closed. Non-EDID
+  built-in and inactive entries are ignored as candidates. DDC support, display
+  name, dimensions, IOKit `Location`, EDID prefix or contents, traversal order,
+  and vendor/product without serial are not proof. Crisp virtual, third-party
+  virtual, placeholder, and unknown/unprovable displays do not count.
+  Disconnect must also prove that it will not remove the last active physical
+  viewable display. Any failed gate stops before mutation; do not bypass it with
+  another display tool.
 - A `write_outcome_indeterminate` response means an in-flight hardware callback
   may still apply; do not retry it automatically. There is no automatic retry.
   Read back the selected display,
