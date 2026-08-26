@@ -55,7 +55,14 @@ BOOSTED_SET="$("$CLI" brightness set fixture-built-in 125 --json --no-start --so
 HDR_GET="$("$CLI" hdr get AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA --json --no-start --socket "$SOCKET")"
 HDR_SET="$("$CLI" hdr set AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA off --json --no-start --socket "$SOCKET")"
 GET_ALL="$("$CLI" brightness get-all --json --no-start --socket "$SOCKET")"
-SET_ALL="$("$CLI" brightness set-all 60 --json --no-start --socket "$SOCKET")"
+if STRICT_SET_ALL="$("$CLI" brightness set-all 60 --json --no-start --socket "$SOCKET")"; then
+    echo "strict set-all unexpectedly accepted a display without a restore snapshot" >&2
+    exit 1
+else
+    STRICT_SET_ALL_EXIT=$?
+fi
+STRICT_SET_ALL_BUILTIN="$("$CLI" brightness get fixture-built-in --json --no-start --socket "$SOCKET")"
+SET_ALL="$("$CLI" brightness set-all 60 --allow-unrestorable --json --no-start --socket "$SOCKET")"
 DISCONNECTED_BEFORE="$("$CLI" displays disconnected --json --no-start --socket "$SOCKET")"
 DISCONNECT="$("$CLI" displays disconnect "$EXTERNAL_UUID" --json --no-start --socket "$SOCKET")"
 DISCONNECTED_AFTER="$("$CLI" displays disconnected --json --no-start --socket "$SOCKET")"
@@ -74,7 +81,10 @@ jq -e '.ok and .result.logicalPercent == 125 and .result.hardwareReadbackPercent
 jq -e '.ok and .result.enabled' <<<"$HDR_GET" >/dev/null
 jq -e '.ok and (.result.enabled | not) and .result.verification == "verified"' <<<"$HDR_SET" >/dev/null
 jq -e '.ok and .result.displays[0].displayUUID == "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" and .result.displays[1].displayUUID == "fixture-built-in"' <<<"$GET_ALL" >/dev/null
-jq -e '.ok and .result.appliedUUIDs == ["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", "fixture-built-in"] and (.result.outcomes | length) == 2' <<<"$SET_ALL" >/dev/null
+[ "$STRICT_SET_ALL_EXIT" -eq 4 ]
+jq -e '(.ok | not) and .error.code == "batch_preflight_failed" and .error.details.restoreMode == "strict" and .error.details.missingRestoreSnapshotUUIDs == ["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"]' <<<"$STRICT_SET_ALL" >/dev/null
+jq -e '.ok and .result.logicalPercent == 125' <<<"$STRICT_SET_ALL_BUILTIN" >/dev/null
+jq -e '.ok and .result.appliedUUIDs == ["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", "fixture-built-in"] and .result.restoreMode == "allow_unrestorable" and (.result.restoreSnapshotsComplete | not) and .result.manualRestorationUUIDs == ["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"] and .result.outcomes[0].status == "written_unverified" and .result.outcomes[1].status == "written_verified"' <<<"$SET_ALL" >/dev/null
 jq -e '.ok and .result.displays == []' <<<"$DISCONNECTED_BEFORE" >/dev/null
 jq -e '.ok and .result.displayUUID == "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" and .result.requestedConnectionState == "disconnected" and .result.observedConnectionState == "disconnected" and .result.verification == "same_uuid_enumeration"' <<<"$DISCONNECT" >/dev/null
 jq -e '.ok and (.result.displays | length) == 1 and .result.displays[0].uuid == "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" and (.result.displays[0].connection.connected | not) and .result.displays[0].connection.reconnectAllowed' <<<"$DISCONNECTED_AFTER" >/dev/null

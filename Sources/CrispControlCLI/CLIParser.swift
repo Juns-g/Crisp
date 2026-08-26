@@ -32,11 +32,18 @@ public struct CLIParser: Sendable {
     public func parse(_ arguments: [String]) throws -> CLIInvocation {
         let options = try parseOptions(arguments)
         let parsed = try parseCommand(options.positional)
+        var requestArguments = parsed.arguments
+        if options.allowUnrestorable {
+            guard parsed.command == "brightness.set-all" else {
+                throw CLIParseError.invalid("--allow-unrestorable is only valid with brightness set-all")
+            }
+            requestArguments["allowUnrestorable"] = .bool(true)
+        }
         return CLIInvocation(
             request: ControlRequest(
                 requestID: requestID(),
                 command: parsed.command,
-                arguments: parsed.arguments
+                arguments: requestArguments
             ),
             noStart: options.noStart,
             socketPath: options.socketPath
@@ -46,12 +53,14 @@ public struct CLIParser: Sendable {
     private func parseOptions(_ arguments: [String]) throws -> ParsedOptions {
         var positional: [String] = []
         var noStart = false
+        var allowUnrestorable = false
         var socketPath = ControlSocket.defaultPath
         var index = 0
         while index < arguments.count {
             switch arguments[index] {
             case "--json": break
             case "--no-start": noStart = true
+            case "--allow-unrestorable": allowUnrestorable = true
             case "--socket":
                 index += 1
                 guard index < arguments.count, !arguments[index].hasPrefix("--") else {
@@ -64,7 +73,12 @@ public struct CLIParser: Sendable {
             }
             index += 1
         }
-        return ParsedOptions(positional: positional, noStart: noStart, socketPath: socketPath)
+        return ParsedOptions(
+            positional: positional,
+            noStart: noStart,
+            allowUnrestorable: allowUnrestorable,
+            socketPath: socketPath
+        )
     }
 
     private func parseCommand(_ positional: [String]) throws -> ParsedCommand {
@@ -163,6 +177,7 @@ public struct CLIParser: Sendable {
 private struct ParsedOptions {
     let positional: [String]
     let noStart: Bool
+    let allowUnrestorable: Bool
     let socketPath: String
 }
 
@@ -189,9 +204,14 @@ Usage:
   crispctl brightness get <selector> --json [--no-start]
   crispctl brightness set <selector> <percent> --json [--no-start]
   crispctl brightness get-all --json [--no-start]
-  crispctl brightness set-all <percent> --json [--no-start]
+  crispctl brightness set-all <percent> --json [--allow-unrestorable] [--no-start]
   crispctl extra-brightness get <selector> --json [--no-start]
   crispctl extra-brightness set <selector> on|off --json [--no-start]
   crispctl hdr get <selector> --json [--no-start]
   crispctl hdr set <selector> on|off --json [--no-start]
+
+Options:
+  --allow-unrestorable  For brightness set-all only: allow writes without a readable
+                        pre-write restore snapshot. Such displays may be unverified
+                        and require manual restoration.
 """

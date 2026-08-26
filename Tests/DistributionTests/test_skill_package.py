@@ -57,6 +57,7 @@ class CrispctlSkillPackageTests(unittest.TestCase):
 
         for required in (
             "--json",
+            "--allow-unrestorable",
             "UUID",
             "capabilities",
             "ambiguous",
@@ -98,6 +99,7 @@ class CrispctlSkillPackageTests(unittest.TestCase):
             "capability collapse",
             "item results",
             "warnings",
+            "manualrestorationuuids",
         ):
             self.assertIn(phrase, lower)
         self.assertRegex(lower, r"only `?retrysafe:true`? members")
@@ -242,11 +244,14 @@ class DistributionDocumentationTests(unittest.TestCase):
             "logicalPercent", "hardwareReadbackPercent", "hardwareRange", "logicalRange",
             "app_state_verified", "settling", "batch_partial_failure",
             "same_logical_percent_per_display", "appliedFactor", "factorVerification",
+            "written_verified", "written_unverified", "manualRestorationUUIDs",
         ):
             self.assertIn(schema_term, docs)
 
         batch_docs = docs[docs.index("`brightness get-all`"):docs.index("## Response contract")]
-        for member_field in ("`attempted`", "`outcome`", "`verification`", "`code`", "`retrySafe`"):
+        for member_field in (
+            "`attempted`", "`outcome`", "`status`", "`verification`", "`code`", "`retrySafe`",
+        ):
             self.assertIn(member_field, batch_docs)
 
         for headroom_term in ("appliedFactor", "factorVerification", "app_state"):
@@ -267,6 +272,16 @@ class DistributionDocumentationTests(unittest.TestCase):
             self.assertIn("extra-brightness", page)
             self.assertIn("brightness set-all", page)
             self.assertIn(p1p2, page)
+
+    def test_set_all_override_docs_preserve_strict_default_and_manual_restore_truth(self):
+        for path in (README, CRISPCTL_DOCS, SKILL):
+            with self.subTest(path=path):
+                text = " ".join(path.read_text().split()).lower()
+                self.assertIn("--allow-unrestorable", text)
+                self.assertIn("strict", text)
+                self.assertRegex(text, r"no (?:display is changed|changes|writes)")
+                self.assertIn("manual restoration", text)
+                self.assertIn("non-atomic", text)
 
     def test_extra_brightness_cleanup_only_off_exception_is_fail_closed(self):
         for path in (SKILL, CRISPCTL_DOCS):

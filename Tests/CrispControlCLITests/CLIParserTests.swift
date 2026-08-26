@@ -53,6 +53,20 @@ final class CLIParserTests: XCTestCase {
         XCTAssertEqual(invocation.socketPath, "/tmp/test.sock")
     }
 
+    func testAllowUnrestorableIsExplicitAndScopedToBrightnessSetAll() throws {
+        let strict = try parse(["brightness", "set-all", "50", "--json"])
+        let override = try parse([
+            "brightness", "set-all", "50", "--allow-unrestorable", "--json"
+        ])
+
+        XCTAssertNil(strict.request.arguments["allowUnrestorable"])
+        XCTAssertEqual(override.request.arguments["allowUnrestorable"], .bool(true))
+        XCTAssertThrowsError(try parse(["brightness", "get-all", "--allow-unrestorable", "--json"]))
+        XCTAssertThrowsError(try parse(["status", "--allow-unrestorable", "--json"]))
+        XCTAssertTrue(crispctlHelp.contains("brightness set-all <percent> --json [--allow-unrestorable]"))
+        XCTAssertTrue(crispctlHelp.contains("require manual restoration"))
+    }
+
     func testMalformedCommandsFailBeforeTransport() {
         XCTAssertThrowsError(try parse(["brightness", "set", "main", "NaN", "--json"]))
         XCTAssertThrowsError(try parse(["displays", "get", "--json"]))

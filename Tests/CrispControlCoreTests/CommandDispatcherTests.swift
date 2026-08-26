@@ -736,6 +736,141 @@ final class CommandDispatcherTests: XCTestCase {
     }
 }
 
+final class BrightnessBatchOverrideTests: XCTestCase {
+    func testStrictDefaultRejectsUnreadableRestoreSnapshotWithoutWrites() async throws {
+        let service = BatchControlService(
+            displays: [.physicalB, .physicalA],
+            preWriteSnapshotUnavailableUUIDs: ["uuid-b"]
+        )
+        let response = await ControlCommandDispatcher(service: service, appVersion: "1.5.0").handle(
+            ControlRequest(
+                requestID: "strict-unreadable", command: "brightness.set-all",
+                arguments: ["percent": .number(50)]
+            )
+        )
+
+        XCTAssertEqual(response.error?.code, .batchPreflightFailed)
+        XCTAssertEqual(response.error?.details?["restoreMode"], .string("strict"))
+        XCTAssertEqual(
+            response.error?.details?["missingRestoreSnapshotUUIDs"], .array([.string("uuid-b")])
+        )
+        XCTAssertEqual(response.error?.details?["manualRestorationRequired"], .bool(false))
+        XCTAssertEqual(response.error?.details?["outcomes"]?[0]?["status"], .string("not_attempted"))
+        XCTAssertEqual(response.error?.details?["outcomes"]?[1]?["status"], .string("failed"))
+        let writes = await service.writes
+        XCTAssertEqual(writes.map(\.0), [])
+    }
+
+    func testOverrideReturnsDeterministicPerDisplayStatusesAndManualRestoreTruth() async throws {
+        let service = BatchControlService(
+            displays: [.physicalE, .physicalC, .physicalA, .physicalD, .physicalB],
+            writeFailures: [
+                "uuid-c": .failed("backend rejected write"),
+                "uuid-d": .indeterminate("callback remains in flight")
+            ],
+            preWriteSnapshotUnavailableUUIDs: ["uuid-b"]
+        )
+        let response = await ControlCommandDispatcher(service: service, appVersion: "1.5.0").handle(
+            ControlRequest(
+                requestID: "override-categories", command: "brightness.set-all",
+                arguments: ["percent": .number(50), "allowUnrestorable": .bool(true)]
+            )
+        )
+
+        XCTAssertEqual(response.error?.code, .batchPartialFailure)
+        let details = response.error?.details
+        XCTAssertEqual(details?["restoreMode"], .string("allow_unrestorable"))
+        XCTAssertEqual(details?["restoreSnapshotsComplete"], .bool(false))
+        XCTAssertEqual(details?["missingRestoreSnapshotUUIDs"], .array([.string("uuid-b")]))
+        XCTAssertEqual(details?["manualRestorationRequired"], .bool(true))
+        XCTAssertEqual(details?["manualRestorationUUIDs"], .array([.string("uuid-b")]))
+        XCTAssertEqual(details?["outcomes"]?[0]?["status"], .string("written_verified"))
+        XCTAssertEqual(details?["outcomes"]?[1]?["status"], .string("written_verified"))
+        XCTAssertEqual(details?["outcomes"]?[1]?["verification"], .string("approximate"))
+        XCTAssertEqual(details?["outcomes"]?[1]?["originalPercent"], .null)
+        XCTAssertEqual(details?["outcomes"]?[1]?["manualRestorationRequired"], .bool(true))
+        XCTAssertNotEqual(details?["outcomes"]?[1]?["warnings"], .array([]))
+        XCTAssertEqual(details?["outcomes"]?[2]?["status"], .string("failed"))
+        XCTAssertEqual(details?["outcomes"]?[3]?["status"], .string("write_indeterminate"))
+        XCTAssertEqual(details?["outcomes"]?[4]?["status"], .string("not_attempted"))
+        XCTAssertEqual(details?["outcomes"]?[4]?["attempted"], .bool(false))
+        XCTAssertEqual(details?["retrySafe"], .bool(false))
+        let writes = await service.writes
+        XCTAssertEqual(writes.map(\.0), ["uuid-a", "uuid-b", "uuid-c", "uuid-d"])
+    }
+
+    func testOverrideRejectsNilPostWriteReadbackForReadbackCapableDisplay() async throws {
+        let service = BatchControlService(
+            displays: [.physicalB],
+            preWriteSnapshotUnavailableUUIDs: ["uuid-b"],
+            postWriteReadbackNilUUIDs: ["uuid-b"]
+        )
+        let response = await ControlCommandDispatcher(service: service, appVersion: "1.5.0").handle(
+            ControlRequest(
+                requestID: "override-nil-post-write-readback", command: "brightness.set-all",
+                arguments: ["percent": .number(50), "allowUnrestorable": .bool(true)]
+            )
+        )
+
+        XCTAssertFalse(response.ok)
+        XCTAssertNil(response.result)
+        XCTAssertEqual(response.error?.code, .batchPartialFailure)
+        let outcome = response.error?.details?["outcomes"]?[0]
+        XCTAssertEqual(outcome?["status"], .string("failed"))
+        XCTAssertNotEqual(outcome?["status"], .string("written_unverified"))
+        XCTAssertEqual(outcome?["code"], .string("write_verification_failed"))
+        XCTAssertEqual(outcome?["manualRestorationRequired"], .bool(true))
+        let writes = await service.writes
+        XCTAssertEqual(writes.map(\.0), ["uuid-b"])
+    }
+
+    func testOverrideRejectsPostWriteReadErrorForReadbackCapableDisplay() async throws {
+        let service = BatchControlService(
+            displays: [.physicalB],
+            preWriteSnapshotUnavailableUUIDs: ["uuid-b"],
+            postWriteReadbackFailures: ["uuid-b": "post-write read-back failed"]
+        )
+        let response = await ControlCommandDispatcher(service: service, appVersion: "1.5.0").handle(
+            ControlRequest(
+                requestID: "override-failed-post-write-readback", command: "brightness.set-all",
+                arguments: ["percent": .number(50), "allowUnrestorable": .bool(true)]
+            )
+        )
+
+        XCTAssertFalse(response.ok)
+        XCTAssertNil(response.result)
+        XCTAssertEqual(response.error?.code, .batchPartialFailure)
+        let outcome = response.error?.details?["outcomes"]?[0]
+        XCTAssertEqual(outcome?["status"], .string("failed"))
+        XCTAssertNotEqual(outcome?["status"], .string("written_unverified"))
+        XCTAssertEqual(outcome?["code"], .string("internal_error"))
+        XCTAssertEqual(outcome?["manualRestorationRequired"], .bool(true))
+        let writes = await service.writes
+        XCTAssertEqual(writes.map(\.0), ["uuid-b"])
+    }
+
+    func testOverridePreservesKnownReadbackUnavailableAsWrittenUnverified() async throws {
+        let service = BatchControlService(
+            displays: [.softwareExternal],
+            preWriteSnapshotUnavailableUUIDs: ["uuid-software"]
+        )
+        let response = await ControlCommandDispatcher(service: service, appVersion: "1.5.0").handle(
+            ControlRequest(
+                requestID: "override-known-unverifiable", command: "brightness.set-all",
+                arguments: ["percent": .number(50), "allowUnrestorable": .bool(true)]
+            )
+        )
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.result?["outcomes"]?[0]?["status"], .string("written_unverified"))
+        XCTAssertEqual(response.result?["outcomes"]?[0]?["verification"], .string("unavailable"))
+        XCTAssertEqual(response.result?["outcomes"]?[0]?["manualRestorationRequired"], .bool(true))
+        XCTAssertEqual(response.result?["outcomes"]?[0]?["readbackPercent"], .null)
+        let writes = await service.writes
+        XCTAssertEqual(writes.map(\.0), ["uuid-software"])
+    }
+}
+
 private final class ManualMonotonicClock: @unchecked Sendable {
     private let lock = NSLock()
     private var value: TimeInterval
@@ -898,18 +1033,44 @@ private actor BatchControlService: ControlCommandService {
 
     let inventory: [ControlDisplay]
     let writeFailures: [String: WriteFailure]
+    let preWriteSnapshotUnavailableUUIDs: Set<String>
+    let postWriteReadbackNilUUIDs: Set<String>
+    let postWriteReadbackFailures: [String: String]
     var values: [String: Double]
+    var brightnessReadCounts: [String: Int] = [:]
     var writes: [(String, Double)] = []
 
-    init(displays: [ControlDisplay], writeFailures: [String: WriteFailure] = [:]) {
+    init(
+        displays: [ControlDisplay],
+        writeFailures: [String: WriteFailure] = [:],
+        preWriteSnapshotUnavailableUUIDs: Set<String> = [],
+        postWriteReadbackNilUUIDs: Set<String> = [],
+        postWriteReadbackFailures: [String: String] = [:]
+    ) {
         inventory = displays
         self.writeFailures = writeFailures
+        self.preWriteSnapshotUnavailableUUIDs = preWriteSnapshotUnavailableUUIDs
+        self.postWriteReadbackNilUUIDs = postWriteReadbackNilUUIDs
+        self.postWriteReadbackFailures = postWriteReadbackFailures
         values = Dictionary(uniqueKeysWithValues: displays.map { ($0.uuid, $0.brightnessPercent ?? 42) })
     }
 
     func displays() async throws -> [ControlDisplay] { inventory }
 
-    func readBrightness(displayUUID: String) async throws -> Double? { values[displayUUID] }
+    func readBrightness(displayUUID: String) async throws -> Double? {
+        let readCount = brightnessReadCounts[displayUUID, default: 0]
+        brightnessReadCounts[displayUUID] = readCount + 1
+        if readCount == 0, preWriteSnapshotUnavailableUUIDs.contains(displayUUID) {
+            return nil
+        }
+        if readCount > 0, let message = postWriteReadbackFailures[displayUUID] {
+            throw ControlServiceError.readFailed(message)
+        }
+        if readCount > 0, postWriteReadbackNilUUIDs.contains(displayUUID) {
+            return nil
+        }
+        return values[displayUUID]
+    }
 
     func writeBrightness(displayUUID: String, percent: Double) async throws -> Double {
         writes.append((displayUUID, percent))
@@ -1164,6 +1325,20 @@ private extension ControlDisplay {
             state: .writable, backend: .ddc,
             range: ControlRange(min: 0, max: 100, precision: 1), readback: .approximate
         ), brightnessPercent: 50
+    )
+    static let physicalD = ControlDisplay(
+        uuid: "uuid-d", name: "D", isMain: false, isBuiltin: false,
+        brightness: BrightnessCapability(
+            state: .writable, backend: .ddc,
+            range: ControlRange(min: 0, max: 100, precision: 1), readback: .approximate
+        ), brightnessPercent: 55
+    )
+    static let physicalE = ControlDisplay(
+        uuid: "uuid-e", name: "E", isMain: false, isBuiltin: false,
+        brightness: BrightnessCapability(
+            state: .writable, backend: .ddc,
+            range: ControlRange(min: 0, max: 100, precision: 1), readback: .approximate
+        ), brightnessPercent: 60
     )
     static let virtual = ControlDisplay(
         uuid: "uuid-virtual", name: "Virtual", isMain: false, isBuiltin: false, isVirtual: true,

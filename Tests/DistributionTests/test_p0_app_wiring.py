@@ -698,6 +698,10 @@ class P0AppWiringTests(unittest.TestCase):
                 "#!/bin/sh\n"
                 'printf \'%s\\n\' "$*" >> "$CLI_LOG"\n'
                 "printf '{}\\n'\n"
+                'case " $* " in\n'
+                '  *" brightness set-all "*" --allow-unrestorable "*) ;;\n'
+                '  *" brightness set-all "*) exit 4 ;;\n'
+                "esac\n"
                 "CLI\n"
                 'chmod 755 "$FAKE_BIN_PATH/crisp-control-test-host" "$FAKE_BIN_PATH/crispctl"\n',
             )

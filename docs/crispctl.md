@@ -56,7 +56,7 @@ crispctl displays reconnect <uuid> --json [--no-start]
 crispctl brightness get <selector> --json [--no-start]
 crispctl brightness set <selector> <percent> --json [--no-start]
 crispctl brightness get-all --json [--no-start]
-crispctl brightness set-all <percent> --json [--no-start]
+crispctl brightness set-all <percent> --json [--allow-unrestorable] [--no-start]
 crispctl extra-brightness get <selector> --json [--no-start]
 crispctl extra-brightness set <selector> on|off --json [--no-start]
 crispctl hdr get <selector> --json [--no-start]
@@ -179,20 +179,39 @@ and no automatic retry rules.
 `brightness get-all` and `brightness set-all` target every connected
 non-virtual physical display in UUID order. Their semantics are
 `same_logical_percent_per_display`: 125 means logical 125 on each display, not a
-normalized fraction, so preflight fails without any write if even one target's
-dynamic maximum is lower. Hardware writes are not atomic and are never rolled
-back. A partial execution returns `batch_partial_failure`, ordered per-display
+normalized fraction. Strict mode is the default and requires both a writable
+live range and a readable pre-write restore snapshot from every target. If one
+target is outside its dynamic range or has no readable snapshot, preflight
+returns `batch_preflight_failed`, reports the rejecting member as `failed`,
+reports the other members as `not_attempted`, and makes no writes.
+
+`--allow-unrestorable` is the only override. It maps to the additive protocol
+argument `allowUnrestorable: true` and must be deliberately supplied for that
+exact command; it is never inferred. It accepts a target whose snapshot read
+explicitly returns unavailable, but it does not bypass capability/range checks,
+snapshot errors, deadlines, or cancellation. This mode is non-atomic and is not
+a restorable transaction: hardware writes remain sequential, `atomic` is false,
+`rollbackAttempted` is false, and Crisp cannot supply an original value for a
+missing-snapshot display. The result reports `restoreMode`,
+`restoreSnapshotsComplete`, `missingRestoreSnapshotUUIDs`,
+`manualRestorationRequired`, and `manualRestorationUUIDs`; warnings identify
+each attempted display for which manual restoration is required.
+
+A partial execution returns `batch_partial_failure`, ordered per-display
 outcomes, `appliedUUIDs`, `failedUUIDs`, `indeterminateUUIDs`, and
-`notAttemptedUUIDs`. Each outcome says whether it was attempted and carries its
-own `attempted`, `outcome`, `verification`, `code`, and `retrySafe` fields; a
-successful member uses `code: null`, while a member that was not attempted is
-explicitly classified. The aggregate is `retrySafe: false`. The batch's
-internal deadline returns accumulated results before the server deadline, so
-only the in-flight member is indeterminate and later members are not attempted.
-Do not retry successful or indeterminate members. Only a `retrySafe: true`
-member may be reconsidered after reconciliation and a fresh authorized
-decision; there is no automatic retry. Empty
-physical inventory returns `empty_physical_inventory`.
+`notAttemptedUUIDs`. Each outcome retains the compatible `attempted`, `outcome`,
+`verification`, `code`, and `retrySafe` fields and adds a deterministic `status`:
+`written_verified`, `written_unverified`, `failed`, or `not_attempted`.
+`write_indeterminate` remains a separate stronger safety state. Outcomes also
+report `restoreSnapshotAvailable`, `manualRestorationRequired`, and `warnings`.
+A successful member uses `code: null`; an unverified write uses
+`verification: unavailable` and an explicit warning. The aggregate is
+`retrySafe: false`. The batch's internal deadline returns accumulated results
+before the server deadline, so only the in-flight member is indeterminate and
+later members are not attempted. Do not retry successful or indeterminate
+members. Only a `retrySafe: true` member may be reconsidered after reconciliation
+and a fresh authorized decision; there is no automatic retry. Empty physical
+inventory returns `empty_physical_inventory`.
 
 ## Response contract
 
@@ -221,9 +240,13 @@ and the requested selector/target: an in-flight macOS or DDC callback may still
 apply after the CLI times out, so callers must read current state and must not
 automatically repeat the write.
 
-These fields and commands are additive protocol-v1 extensions. Older v1
-display payloads decode with defaults for the new capability fields; existing
-field names, types, and exit categories remain unchanged.
+These fields, commands, the optional `allowUnrestorable` request argument, and
+the batch status/restore fields are additive protocol-v1 extensions. Omission or
+`false` means strict mode. An older v1 app that does not know the option remains
+strict, which is safe; callers that requested the override must require returned
+`restoreMode: allow_unrestorable` before treating it as honored. Older v1 display
+payloads decode with defaults for the new capability fields; existing field
+names, types, and exit categories remain unchanged.
 
 All mutating commands (`brightness set`, `brightness set-all`,
 `extra-brightness set`, `hdr set`, `displays disconnect`, and

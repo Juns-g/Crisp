@@ -484,18 +484,22 @@ extension ControlCommandDispatcher {
     private func performBrightnessSet(
         display: ControlDisplay,
         requested: Double,
-        originalSnapshot: BrightnessReadSnapshot? = nil
+        originalSnapshot: BrightnessReadSnapshot? = nil,
+        allowUnrestorable: Bool = false
     ) async throws -> JSONValue {
         let capability = display.brightness
-        let original = if let originalSnapshot {
-            originalSnapshot
+        let original: BrightnessReadSnapshot?
+        if let originalSnapshot {
+            original = originalSnapshot
+        } else if allowUnrestorable {
+            original = nil
         } else {
-            try await service.readBrightnessState(displayUUID: display.uuid)
+            original = try await service.readBrightnessState(displayUUID: display.uuid)
         }
         let applied = try await service.writeBrightness(displayUUID: display.uuid, percent: requested)
         try Task.checkCancellation()
-        let readback: BrightnessReadSnapshot?
-        let verification: String
+        var readback: BrightnessReadSnapshot?
+        var verification = "unavailable"
         var warnings: [JSONValue] = []
 
         if capability.readback == .unavailable {
@@ -521,31 +525,39 @@ extension ControlCommandDispatcher {
             }
         } else {
             readback = try await service.readBrightnessState(displayUUID: display.uuid)
-            guard let readback else {
-                throw CommandFailure(code: .writeVerificationFailed,
-                                     message: "brightness write completed but read-back failed")
+            guard let verifiedReadback = readback else {
+                throw CommandFailure(
+                    code: .writeVerificationFailed,
+                    message: "brightness write completed but read-back failed"
+                )
             }
             let tolerance = max(capability.range.precision * 2, 0.25)
-            guard abs(readback.logicalPercent - applied) <= tolerance else {
+            guard abs(verifiedReadback.logicalPercent - applied) <= tolerance else {
                 throw CommandFailure(
                     code: .writeVerificationFailed,
                     message: "brightness read-back did not match the applied value",
                     details: .object([
                         "requestedPercent": .number(requested),
                         "appliedPercent": .number(applied),
-                        "readbackPercent": .number(readback.logicalPercent),
+                        "readbackPercent": .number(verifiedReadback.logicalPercent),
                         "tolerance": .number(tolerance)
                     ])
                 )
             }
             if requested > capability.hardwareRange.max {
                 verification = "app_state_verified"
-                warnings.append(.string("logical EDR state is verified in Crisp; hardware read-back covers only 0...100"))
+                warnings.append(.string(
+                    "logical EDR state is verified in Crisp; hardware read-back covers only 0...100"
+                ))
             } else {
                 verification = capability.readback == .authoritative ? "verified" : "approximate"
             }
         }
         try Task.checkCancellation()
+
+        if allowUnrestorable {
+            warnings.append(.string("no readable pre-write restore snapshot is available; restore manually"))
+        }
 
         return .object([
             "displayUUID": .string(display.uuid),
@@ -622,23 +634,31 @@ extension ControlCommandDispatcher {
         guard case let .number(requested)? = request.arguments["percent"], requested.isFinite else {
             throw CommandFailure(code: .invalidArguments, message: "brightness percent must be a number")
         }
+        guard let restoreMode = request.brightnessBatchRestoreMode else {
+            throw CommandFailure(code: .invalidArguments,
+                                 message: "allowUnrestorable must be a boolean when provided")
+        }
         let commandDeadline = BatchDeadline(
             timeout: batchExecutionTimeout, now: batchMonotonicNow
         )
         let displays = try await batchDisplays(deadline: commandDeadline)
-        let snapshots = try await batchSnapshots(
+        let preflight = try await batchSnapshots(
             displays: displays,
             requested: requested,
+            restoreMode: restoreMode,
             deadline: commandDeadline
         )
 
         let execution = await executeBatch(
             displays: displays,
-            snapshots: snapshots,
+            preflight: preflight,
             requested: requested,
             deadline: commandDeadline
         )
-        return try execution.response(requested: requested)
+        return try execution.response(
+            requested: requested, restoreMode: restoreMode,
+            missingRestoreSnapshotUUIDs: preflight.missingRestoreSnapshotUUIDs
+        )
     }
 
     private func batchPreflightDeadlineFailure(
@@ -692,6 +712,7 @@ extension ControlCommandDispatcher {
         display: ControlDisplay,
         requested: Double,
         originalSnapshot: BrightnessReadSnapshot?,
+        allowUnrestorable: Bool,
         timeout: TimeInterval
     ) async -> BatchMemberOutcome {
         let race = BatchMemberRace()
@@ -699,7 +720,8 @@ extension ControlCommandDispatcher {
             let outcome: BatchMemberOutcome
             do {
                 outcome = .success(try await performBrightnessSet(
-                    display: display, requested: requested, originalSnapshot: originalSnapshot
+                    display: display, requested: requested,
+                    originalSnapshot: originalSnapshot, allowUnrestorable: allowUnrestorable
                 ))
             } catch let error as ControlServiceError {
                 switch error {
@@ -746,7 +768,7 @@ extension ControlCommandDispatcher {
         let operation = Task {
             do {
                 guard let snapshot = try await service.readBrightnessState(displayUUID: displayUUID) else {
-                    await race.resolve(.failed("brightness snapshot unavailable"))
+                    await race.resolve(.unavailable("brightness snapshot unavailable"))
                     return
                 }
                 await race.resolve(.success(snapshot))
@@ -892,8 +914,9 @@ private extension ControlCommandDispatcher {
     func batchSnapshots(
         displays: [ControlDisplay],
         requested: Double,
+        restoreMode: BrightnessBatchRestoreMode,
         deadline: BatchDeadline
-    ) async throws -> [String: BrightnessReadSnapshot] {
+    ) async throws -> BatchPreflightResult {
         var preflight = BatchPreflightAccumulator()
         for display in displays {
             guard display.brightness.accepts(requested) else {
@@ -906,15 +929,18 @@ private extension ControlCommandDispatcher {
                 continue
             }
             let snapshot = await performBatchSnapshot(displayUUID: display.uuid, timeout: remaining)
-            preflight.record(snapshot, display: display, beforeDeadline: deadline.remaining > 0)
+            preflight.record(
+                snapshot, display: display, restoreMode: restoreMode,
+                beforeDeadline: deadline.remaining > 0
+            )
         }
-        if let failure = preflight.failure(displays: displays) { throw failure }
-        return preflight.snapshots
+        if let failure = preflight.failure(displays: displays, restoreMode: restoreMode) { throw failure }
+        return preflight.result
     }
 
     func executeBatch(
         displays: [ControlDisplay],
-        snapshots: [String: BrightnessReadSnapshot],
+        preflight: BatchPreflightResult,
         requested: Double,
         deadline: BatchDeadline
     ) async -> BatchExecutionAccumulator {
@@ -923,7 +949,8 @@ private extension ControlCommandDispatcher {
             if Task.isCancelled {
                 execution.appendNotAttempted(
                     displays.dropFirst(index),
-                    message: "batch execution wait was cancelled before this member"
+                    message: "batch execution wait was cancelled before this member",
+                    missingRestoreSnapshotUUIDs: preflight.missingRestoreSnapshotUUIDSet
                 )
                 break
             }
@@ -931,14 +958,16 @@ private extension ControlCommandDispatcher {
             if remaining <= 0 {
                 execution.appendNotAttempted(
                     displays.dropFirst(index),
-                    message: "batch execution deadline elapsed before this member"
+                    message: "batch execution deadline elapsed before this member",
+                    missingRestoreSnapshotUUIDs: preflight.missingRestoreSnapshotUUIDSet
                 )
                 break
             }
             let member = await performBatchMember(
                 display: display,
                 requested: requested,
-                originalSnapshot: snapshots[display.uuid],
+                originalSnapshot: preflight.snapshots[display.uuid],
+                allowUnrestorable: preflight.missingRestoreSnapshotUUIDSet.contains(display.uuid),
                 timeout: remaining
             )
             let classifiedMember: BatchMemberOutcome = if deadline.isExpired {
@@ -949,10 +978,15 @@ private extension ControlCommandDispatcher {
             } else {
                 member
             }
-            if execution.record(classifiedMember, display: display) {
+            if execution.record(
+                classifiedMember,
+                display: display,
+                missingRestoreSnapshot: preflight.missingRestoreSnapshotUUIDSet.contains(display.uuid)
+            ) {
                 execution.appendNotAttempted(
                     displays.dropFirst(index + 1),
-                    message: "batch stopped after an indeterminate member"
+                    message: "batch stopped after an indeterminate member",
+                    missingRestoreSnapshotUUIDs: preflight.missingRestoreSnapshotUUIDSet
                 )
                 break
             }
@@ -979,10 +1013,16 @@ private extension ControlDisplay {
 
 private struct BatchPreflightAccumulator {
     var snapshots: [String: BrightnessReadSnapshot] = [:]
+    private(set) var missingRestoreSnapshotUUIDs: [String] = []
     private var failures: [JSONValue] = []
     private var failedUUIDs: [JSONValue] = []
     private var failedUUIDSet: Set<String> = []
+    private var missingRestoreSnapshotUUIDSet: Set<String> = []
     private var cancelled = false
+
+    var result: BatchPreflightResult {
+        BatchPreflightResult(snapshots: snapshots, missingRestoreSnapshotUUIDs: missingRestoreSnapshotUUIDs)
+    }
 
     mutating func rejectCapability(display: ControlDisplay, requested: Double) {
         reject(display: display, details: [
@@ -1007,12 +1047,19 @@ private struct BatchPreflightAccumulator {
     mutating func record(
         _ outcome: BatchSnapshotOutcome,
         display: ControlDisplay,
+        restoreMode: BrightnessBatchRestoreMode,
         beforeDeadline: Bool
     ) {
         switch outcome {
         case let .success(snapshot) where beforeDeadline:
             snapshots[display.uuid] = snapshot
         case .success:
+            reject(display: display, reason: "batch snapshot deadline elapsed")
+        case let .unavailable(reason) where beforeDeadline:
+            recordMissingRestoreSnapshot(display.uuid)
+            if restoreMode == .strict { reject(display: display, reason: reason) }
+        case .unavailable:
+            recordMissingRestoreSnapshot(display.uuid)
             reject(display: display, reason: "batch snapshot deadline elapsed")
         case let .failed(reason), let .timedOut(reason):
             reject(display: display, reason: reason)
@@ -1021,14 +1068,19 @@ private struct BatchPreflightAccumulator {
         }
     }
 
-    func failure(displays: [ControlDisplay]) -> CommandFailure? {
+    func failure(displays: [ControlDisplay], restoreMode: BrightnessBatchRestoreMode) -> CommandFailure? {
         guard !failures.isEmpty else { return nil }
         let outcomes = displays.map { display in
-            JSONValue.object([
+            return JSONValue.object([
                 "displayUUID": .string(display.uuid),
                 "ok": .bool(false),
                 "attempted": .bool(false),
                 "outcome": .string(failedUUIDSet.contains(display.uuid) ? "preflight_failed" : "not_attempted"),
+                "status": .string(
+                    failedUUIDSet.contains(display.uuid)
+                        ? BrightnessBatchDisplayStatus.failed.rawValue
+                        : BrightnessBatchDisplayStatus.notAttempted.rawValue
+                ),
                 "verification": .string("unavailable"),
                 "code": .string(ControlErrorCode.batchPreflightFailed.rawValue),
                 "retrySafe": .bool(true)
@@ -1041,11 +1093,21 @@ private struct BatchPreflightAccumulator {
                 "retrySafe": .bool(true),
                 "phase": .string("snapshot"),
                 "cancelled": .bool(cancelled),
+                "restoreMode": .string(restoreMode.rawValue),
+                "missingRestoreSnapshotUUIDs": .array(
+                    missingRestoreSnapshotUUIDs.map(JSONValue.string)
+                ),
+                "manualRestorationRequired": .bool(false),
                 "failedUUIDs": .array(failedUUIDs),
                 "failures": .array(failures),
                 "outcomes": .array(outcomes)
             ])
         )
+    }
+
+    private mutating func recordMissingRestoreSnapshot(_ uuid: String) {
+        guard missingRestoreSnapshotUUIDSet.insert(uuid).inserted else { return }
+        missingRestoreSnapshotUUIDs.append(uuid)
     }
 
     private mutating func reject(display: ControlDisplay, details: [String: JSONValue]) {
@@ -1055,29 +1117,50 @@ private struct BatchPreflightAccumulator {
     }
 }
 
+private struct BatchPreflightResult {
+    let snapshots: [String: BrightnessReadSnapshot]
+    let missingRestoreSnapshotUUIDs: [String]
+    var missingRestoreSnapshotUUIDSet: Set<String> { Set(missingRestoreSnapshotUUIDs) }
+}
+
 private struct BatchExecutionAccumulator {
     private var outcomes: [JSONValue] = []
     private var appliedUUIDs: [JSONValue] = []
     private var failedUUIDs: [JSONValue] = []
     private var indeterminateUUIDs: [JSONValue] = []
     private var notAttemptedUUIDs: [JSONValue] = []
+    private var manualRestorationUUIDs: [JSONValue] = []
 
     /// Returns true when later members must not be attempted.
-    mutating func record(_ member: BatchMemberOutcome, display: ControlDisplay) -> Bool {
+    mutating func record(
+        _ member: BatchMemberOutcome, display: ControlDisplay, missingRestoreSnapshot: Bool
+    ) -> Bool {
         switch member {
         case let .success(value):
             guard case var .object(fields) = value else { return false }
+            let status: BrightnessBatchDisplayStatus = fields["verification"] == .string("unavailable")
+                ? .writtenUnverified : .writtenVerified
             fields["ok"] = .bool(true)
             fields["attempted"] = .bool(true)
             fields["outcome"] = .string("applied")
+            fields["status"] = .string(status.rawValue)
             fields["code"] = .null
             fields["retrySafe"] = .bool(false)
+            fields["restoreSnapshotAvailable"] = .bool(!missingRestoreSnapshot)
+            fields["manualRestorationRequired"] = .bool(missingRestoreSnapshot)
             outcomes.append(.object(fields))
             appliedUUIDs.append(.string(display.uuid))
+            if missingRestoreSnapshot { manualRestorationUUIDs.append(.string(display.uuid)) }
             return false
         case let .failed(code, message):
             failedUUIDs.append(.string(display.uuid))
-            outcomes.append(failedOutcome(display: display, code: code, message: message))
+            outcomes.append(failedOutcome(
+                display: display,
+                code: code,
+                message: message,
+                missingRestoreSnapshot: missingRestoreSnapshot
+            ))
+            if missingRestoreSnapshot { manualRestorationUUIDs.append(.string(display.uuid)) }
             return false
         case let .indeterminate(message):
             failedUUIDs.append(.string(display.uuid))
@@ -1086,41 +1169,72 @@ private struct BatchExecutionAccumulator {
                 display: display,
                 code: .writeOutcomeIndeterminate,
                 message: message,
-                outcome: "indeterminate"
+                outcome: "indeterminate",
+                status: .writeIndeterminate,
+                missingRestoreSnapshot: missingRestoreSnapshot
             ))
+            if missingRestoreSnapshot { manualRestorationUUIDs.append(.string(display.uuid)) }
             return true
         }
     }
 
     mutating func appendNotAttempted(
         _ displays: ArraySlice<ControlDisplay>,
-        message: String
+        message: String,
+        missingRestoreSnapshotUUIDs: Set<String>
     ) {
         for display in displays {
+            let missingRestoreSnapshot = missingRestoreSnapshotUUIDs.contains(display.uuid)
             notAttemptedUUIDs.append(.string(display.uuid))
             outcomes.append(.object([
                 "displayUUID": .string(display.uuid),
                 "ok": .bool(false),
                 "attempted": .bool(false),
                 "outcome": .string("not_attempted"),
+                "status": .string(BrightnessBatchDisplayStatus.notAttempted.rawValue),
                 "verification": .string("unavailable"),
                 "code": .string(ControlErrorCode.batchPartialFailure.rawValue),
                 "message": .string(message),
-                "retrySafe": .bool(true)
+                "retrySafe": .bool(true),
+                "restoreSnapshotAvailable": .bool(!missingRestoreSnapshot),
+                "manualRestorationRequired": .bool(false),
+                "warnings": .array(missingRestoreSnapshot ? [
+                    .string("no readable pre-write restore snapshot is available; no write was attempted")
+                ] : [])
             ]))
         }
     }
 
-    func response(requested: Double) throws -> JSONValue {
+    func response(
+        requested: Double,
+        restoreMode: BrightnessBatchRestoreMode,
+        missingRestoreSnapshotUUIDs: [String]
+    ) throws -> JSONValue {
+        var warnings: [JSONValue] = missingRestoreSnapshotUUIDs.isEmpty ? [] : [.string(
+            "override accepted one or more displays without a readable pre-write restore snapshot"
+        )]
+        if !manualRestorationUUIDs.isEmpty {
+            warnings.append(.string("manual restoration is required for UUIDs in manualRestorationUUIDs"))
+        }
         let summary: [String: JSONValue] = [
             "semantics": .string("same_logical_percent_per_display"),
             "requestedPercent": .number(requested),
+            "atomic": .bool(false),
+            "rollbackAttempted": .bool(false),
+            "restoreMode": .string(restoreMode.rawValue),
+            "restoreSnapshotsComplete": .bool(missingRestoreSnapshotUUIDs.isEmpty),
+            "missingRestoreSnapshotUUIDs": .array(
+                missingRestoreSnapshotUUIDs.map(JSONValue.string)
+            ),
+            "manualRestorationRequired": .bool(!manualRestorationUUIDs.isEmpty),
+            "manualRestorationUUIDs": .array(manualRestorationUUIDs),
             "outcomes": .array(outcomes),
             "appliedUUIDs": .array(appliedUUIDs),
             "failedUUIDs": .array(failedUUIDs),
             "indeterminateUUIDs": .array(indeterminateUUIDs),
             "notAttemptedUUIDs": .array(notAttemptedUUIDs),
-            "retrySafe": .bool(false)
+            "retrySafe": .bool(false),
+            "warnings": .array(warnings)
         ]
         guard failedUUIDs.isEmpty, notAttemptedUUIDs.isEmpty else {
             throw CommandFailure(
@@ -1137,17 +1251,25 @@ private struct BatchExecutionAccumulator {
         display: ControlDisplay,
         code: ControlErrorCode,
         message: String,
-        outcome: String = "failed"
+        outcome: String = "failed",
+        status: BrightnessBatchDisplayStatus = .failed,
+        missingRestoreSnapshot: Bool
     ) -> JSONValue {
         .object([
             "displayUUID": .string(display.uuid),
             "ok": .bool(false),
             "attempted": .bool(true),
             "outcome": .string(outcome),
+            "status": .string(status.rawValue),
             "verification": .string("unavailable"),
             "code": .string(code.rawValue),
             "message": .string(message),
-            "retrySafe": .bool(false)
+            "retrySafe": .bool(false),
+            "restoreSnapshotAvailable": .bool(!missingRestoreSnapshot),
+            "manualRestorationRequired": .bool(missingRestoreSnapshot),
+            "warnings": .array(missingRestoreSnapshot ? [
+                .string("no readable pre-write restore snapshot is available; restore this display manually")
+            ] : [])
         ])
     }
 }
@@ -1226,6 +1348,7 @@ private actor BatchMemberRace {
 
 private enum BatchSnapshotOutcome: Sendable {
     case success(BrightnessReadSnapshot)
+    case unavailable(String)
     case failed(String)
     case timedOut(String)
     case cancelled(String)

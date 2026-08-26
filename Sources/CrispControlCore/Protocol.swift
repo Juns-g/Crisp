@@ -94,6 +94,17 @@ public struct ControlRequest: Codable, Equatable, Sendable {
 
     public var isMutating: Bool { mutationKind != nil }
 
+    /// Missing means the request supplied an invalid option type. Older v1
+    /// clients omit the additive argument and therefore remain strict.
+    public var brightnessBatchRestoreMode: BrightnessBatchRestoreMode? {
+        guard command == "brightness.set-all" else { return nil }
+        switch arguments["allowUnrestorable"] {
+        case nil, .bool(false): return .strict
+        case .bool(true): return .allowUnrestorable
+        default: return nil
+        }
+    }
+
     public var exactDisplayConnectionUUID: String? {
         guard mutationKind == .displayConnection,
               case let .string(uuid)? = arguments["uuid"],
@@ -120,6 +131,19 @@ public enum ControlMutationKind: String, Codable, Equatable, Sendable {
     /// Conservative fallback for a future set-shaped command omitted from the
     /// explicit inventory: timeout safety must fail closed until CI classifies it.
     case unknown
+}
+
+public enum BrightnessBatchRestoreMode: String, Codable, Equatable, Sendable {
+    case strict
+    case allowUnrestorable = "allow_unrestorable"
+}
+
+public enum BrightnessBatchDisplayStatus: String, Codable, Equatable, Sendable {
+    case writtenVerified = "written_verified"
+    case writtenUnverified = "written_unverified"
+    case failed
+    case writeIndeterminate = "write_indeterminate"
+    case notAttempted = "not_attempted"
 }
 
 public enum ControlCommandInventory {

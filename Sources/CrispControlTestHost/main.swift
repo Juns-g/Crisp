@@ -115,8 +115,11 @@ private actor FixtureService: ControlCommandService {
 
     func readBrightnessState(displayUUID: String) async throws -> BrightnessReadSnapshot? {
         guard let logical = brightness[displayUUID] else { return nil }
-        let hardware = displayUUID == fixtureExternalUUID ? nil : min(logical, 100)
-        return BrightnessReadSnapshot(logicalPercent: logical, hardwareReadbackPercent: hardware)
+        guard displayUUID != fixtureExternalUUID else { return nil }
+        return BrightnessReadSnapshot(
+            logicalPercent: logical,
+            hardwareReadbackPercent: min(logical, 100)
+        )
     }
 
     func writeBrightness(displayUUID: String, percent: Double) async throws -> Double {

@@ -162,6 +162,33 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(response.error?.details?["command"], .string("future-display.set"))
     }
 
+    func testBrightnessBatchRestoreOverrideIsAnAdditiveV1RequestOption() throws {
+        let strict = ControlRequest(
+            requestID: "strict",
+            command: "brightness.set-all",
+            arguments: ["percent": .number(50)]
+        )
+        let override = ControlRequest(
+            requestID: "override",
+            command: "brightness.set-all",
+            arguments: ["percent": .number(50), "allowUnrestorable": .bool(true)]
+        )
+        let invalid = ControlRequest(
+            requestID: "invalid",
+            command: "brightness.set-all",
+            arguments: ["percent": .number(50), "allowUnrestorable": .string("true")]
+        )
+
+        XCTAssertEqual(strict.brightnessBatchRestoreMode, .strict)
+        XCTAssertEqual(override.brightnessBatchRestoreMode, .allowUnrestorable)
+        XCTAssertNil(invalid.brightnessBatchRestoreMode)
+        let data = try ControlJSON.encoder.encode(override)
+        let decoded = try ControlJSON.decoder.decode(ControlRequest.self, from: data)
+        XCTAssertEqual(decoded.protocolVersion, 1)
+        XCTAssertEqual(decoded.brightnessBatchRestoreMode, .allowUnrestorable)
+        XCTAssertEqual(crispControlProtocolVersion, 1)
+    }
+
     func testDisplayConnectionTimeoutsCarryExactUUIDCommandStateAndNoRetryTruth() {
         let uuid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
         let cases: [(String, [String: JSONValue], String)] = [

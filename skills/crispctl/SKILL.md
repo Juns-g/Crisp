@@ -131,7 +131,12 @@ Use only `--json` responses for automation. Follow this procedure:
 6. Batch reads/writes use `"${CRISPCTL}" brightness get-all --json` and
    `"${CRISPCTL}" brightness set-all <percent> --json`. The percent is the same
    logical value per display, not a normalized fraction.
-   Batch writes are non-atomic: hardware members cannot be rolled back safely.
+   The set-all default is strict: every target must have a readable pre-write
+   restore snapshot or no display is changed. Never add `--allow-unrestorable`
+   implicitly. Use it only when the human explicitly authorizes that exact
+   override after accepting the listed missing-snapshot UUIDs, unverified writes,
+   and manual restoration. Batch writes are non-atomic: hardware members cannot
+   be rolled back safely, including in override mode.
 7. Physical connection discovery uses
    `"${CRISPCTL}" displays disconnected --json`. Disconnect uses
    `"${CRISPCTL}" displays disconnect <uuid> --json` only after a fresh
@@ -192,6 +197,14 @@ Use only `--json` responses for automation. Follow this procedure:
   Read every affected UUID. Only `retrySafe:true` members may be reconsidered,
   and only after reconciliation plus a fresh user decision; never retry them
   automatically.
+- Treat `--allow-unrestorable` as a separate, human-deliberate authorization,
+  not a fallback after strict preflight failure. It does not bypass capability,
+  range, snapshot-error, timeout, or cancellation gates. Require returned
+  `restoreMode: allow_unrestorable`, inspect each member's `status` and
+  `warnings`, and report every `manualRestorationUUIDs` entry. A missing restore
+  snapshot means Crisp cannot supply the original value; the user must restore
+  that display manually. Never describe this non-atomic mode as a restorable
+  transaction.
 - Do not infer success from exit status alone. Parse the single JSON value on
   stdout and require `ok: true`; for batch responses also parse item results,
   verification, warnings, and each member's retry safety.
@@ -211,6 +224,11 @@ For a successful brightness write, inspect `verification`, `readbackPercent`,
 hardware-authoritative proof of EDR output. If the outcome is indeterminate, the only
 safe verification is a separate read followed by a fresh user decision; an
 automatic retry is forbidden.
+
+For `brightness set-all`, also inspect `status`, `restoreSnapshotAvailable`,
+`manualRestorationRequired`, aggregate `missingRestoreSnapshotUUIDs`, and
+`manualRestorationUUIDs`. `written_unverified` is not verified success; surface
+its warnings and manual-restoration requirement to the user.
 
 For successful display connection writes, require the exact `displayUUID`, the
 authorized `requestedConnectionState`, matching `observedConnectionState`,

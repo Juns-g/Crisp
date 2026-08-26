@@ -106,6 +106,12 @@ systems; this is source availability, not a Crisp 1.5.0 release claim.
 | Extra Brightness / live EDR range | `extra-brightness get`, `extra-brightness set` |
 | Explicit external HDR toggle | `hdr get`, `hdr set` |
 
+`brightness set-all` remains strict by default: every target must provide a
+readable pre-write restore snapshot or the command makes no changes. A human who
+explicitly accepts an unrestorable/write-only target and manual restoration can
+opt in with `--allow-unrestorable`. That mode is still non-atomic, performs no
+rollback, and reports unverified writes and manual-restoration UUIDs separately.
+
 Every connection write requires explicit authorization, fresh capability or
 disconnected inventory, and the exact same UUID. Disconnect accepts only a UUID
 copied unchanged from a fresh `displays list`/capabilities response; reconnect
