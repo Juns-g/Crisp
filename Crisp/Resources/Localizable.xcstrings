@@ -717,12 +717,32 @@
         }
       }
     },
+    "Display cannot be proven to be hardware-backed physical." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认该显示器为硬件支持的物理显示器。"
+          }
+        }
+      }
+    },
     "Display configuration failed (CGError %@)." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示器配置失败（CGError %@）。"
+          }
+        }
+      }
+    },
+    "Display configuration may still complete; refresh before deciding again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示器配置仍有可能完成；请刷新后再作决定。"
           }
         }
       }
