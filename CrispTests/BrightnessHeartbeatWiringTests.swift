@@ -93,78 +93,131 @@ private enum SwiftSource {
         throw ParseError.malformedBody(name)
     }
 
-    private static func removingComments(from source: String) -> String {
-        let chars = Array(source)
+    private enum CommentRemovalMode {
+        case code
+        case string
+        case lineComment
+        case blockComment
+        case multilineString
+    }
+
+    private struct CommentRemovalState {
         var result: [Character] = []
         var index = 0
-        // 0 code, 1 string, 2 line comment, 3 block comment, 4 multiline string
-        var mode = 0
+        var mode: CommentRemovalMode = .code
         var blockDepth = 0
-        while index < chars.count {
-            let character = chars[index]
-            let next = index + 1 < chars.count ? chars[index + 1] : "\0"
-            let third = index + 2 < chars.count ? chars[index + 2] : "\0"
-            switch mode {
-            case 0:
-                if character == "\"", next == "\"", third == "\"" {
-                    mode = 4
-                    result.append(contentsOf: [" ", " ", " "])
-                    index += 3
-                } else if character == "\"" {
-                    mode = 1
-                    result.append(" ")
-                    index += 1
-                } else if character == "/", next == "/" {
-                    mode = 2
-                    result.append(contentsOf: [" ", " "])
-                    index += 2
-                } else if character == "/", next == "*" {
-                    mode = 3
-                    blockDepth = 1
-                    result.append(contentsOf: [" ", " "])
-                    index += 2
-                } else {
-                    result.append(character)
-                    index += 1
-                }
-            case 1:
-                if character == "\\", index + 1 < chars.count {
-                    result.append(contentsOf: [" ", " "])
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    if character == "\"" { mode = 0 }
-                    index += 1
-                }
-            case 2:
-                result.append(character == "\n" ? "\n" : " ")
-                if character == "\n" { mode = 0 }
-                index += 1
-            case 3:
-                if character == "/", next == "*" {
-                    blockDepth += 1
-                    result.append(contentsOf: [" ", " "])
-                    index += 2
-                } else if character == "*", next == "/" {
-                    blockDepth -= 1
-                    result.append(contentsOf: [" ", " "])
-                    index += 2
-                    if blockDepth == 0 { mode = 0 }
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-            default:
-                if character == "\"", next == "\"", third == "\"" {
-                    result.append(contentsOf: [" ", " ", " "])
-                    index += 3
-                    mode = 0
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
+    }
+
+    private static func removingComments(from source: String) -> String {
+        let chars = Array(source)
+        var state = CommentRemovalState()
+        while state.index < chars.count {
+            let character = chars[state.index]
+            let hasNext = state.index + 1 < chars.count
+            let next = hasNext ? chars[state.index + 1] : "\0"
+            let third = state.index + 2 < chars.count ? chars[state.index + 2] : "\0"
+            switch state.mode {
+            case .code:
+                consumeCode(character, next: next, third: third, state: &state)
+            case .string:
+                consumeString(character, hasNext: hasNext, state: &state)
+            case .lineComment:
+                consumeLineComment(character, state: &state)
+            case .blockComment:
+                consumeBlockComment(character, next: next, state: &state)
+            case .multilineString:
+                consumeMultilineString(character, next: next, third: third, state: &state)
             }
         }
-        return String(result)
+        return String(state.result)
+    }
+
+    private static func consumeCode(
+        _ character: Character,
+        next: Character,
+        third: Character,
+        state: inout CommentRemovalState
+    ) {
+        if character == "\"", next == "\"", third == "\"" {
+            state.mode = .multilineString
+            state.result.append(contentsOf: [" ", " ", " "])
+            state.index += 3
+        } else if character == "\"" {
+            state.mode = .string
+            state.result.append(" ")
+            state.index += 1
+        } else if character == "/", next == "/" {
+            state.mode = .lineComment
+            state.result.append(contentsOf: [" ", " "])
+            state.index += 2
+        } else if character == "/", next == "*" {
+            state.mode = .blockComment
+            state.blockDepth = 1
+            state.result.append(contentsOf: [" ", " "])
+            state.index += 2
+        } else {
+            state.result.append(character)
+            state.index += 1
+        }
+    }
+
+    private static func consumeString(
+        _ character: Character,
+        hasNext: Bool,
+        state: inout CommentRemovalState
+    ) {
+        if character == "\\", hasNext {
+            state.result.append(contentsOf: [" ", " "])
+            state.index += 2
+        } else {
+            state.result.append(character == "\n" ? "\n" : " ")
+            if character == "\"" { state.mode = .code }
+            state.index += 1
+        }
+    }
+
+    private static func consumeLineComment(
+        _ character: Character,
+        state: inout CommentRemovalState
+    ) {
+        state.result.append(character == "\n" ? "\n" : " ")
+        if character == "\n" { state.mode = .code }
+        state.index += 1
+    }
+
+    private static func consumeBlockComment(
+        _ character: Character,
+        next: Character,
+        state: inout CommentRemovalState
+    ) {
+        if character == "/", next == "*" {
+            state.blockDepth += 1
+            state.result.append(contentsOf: [" ", " "])
+            state.index += 2
+        } else if character == "*", next == "/" {
+            state.blockDepth -= 1
+            state.result.append(contentsOf: [" ", " "])
+            state.index += 2
+            if state.blockDepth == 0 { state.mode = .code }
+        } else {
+            state.result.append(character == "\n" ? "\n" : " ")
+            state.index += 1
+        }
+    }
+
+    private static func consumeMultilineString(
+        _ character: Character,
+        next: Character,
+        third: Character,
+        state: inout CommentRemovalState
+    ) {
+        if character == "\"", next == "\"", third == "\"" {
+            state.result.append(contentsOf: [" ", " ", " "])
+            state.index += 3
+            state.mode = .code
+        } else {
+            state.result.append(character == "\n" ? "\n" : " ")
+            state.index += 1
+        }
     }
 }
