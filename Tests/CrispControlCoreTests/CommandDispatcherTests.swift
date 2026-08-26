@@ -799,6 +799,55 @@ final class BrightnessBatchOverrideTests: XCTestCase {
         XCTAssertEqual(writes.map(\.0), ["uuid-a", "uuid-b", "uuid-c", "uuid-d"])
     }
 
+    func testOverrideCancellationAfterUnrestorableWriteIsIndeterminateWithoutRetry() async {
+        let gate = BatchMemberBoundaryGate()
+        let service = BatchControlService(
+            displays: [.physicalB, .physicalA], preWriteSnapshotUnavailableUUIDs: ["uuid-a"],
+            postWriteAction: { await gate.pause() })
+        let request = Self.batchOverrideRequest("override-post-write-cancellation")
+        let task = Task { await ControlCommandDispatcher(service: service, appVersion: "1.5.0").handle(request) }
+        await gate.waitUntilPaused()
+        task.cancel()
+        await gate.resume()
+        assertUnrestorableIndeterminate(await task.value, writtenUUIDs: (await service.writes).map(\.0))
+    }
+
+    func testOverrideDeadlineAfterUnrestorableWriteIsIndeterminateWithoutRetry() async {
+        let clock = ManualMonotonicClock(now: 1_000)
+        let service = BatchControlService(
+            displays: [.physicalB, .physicalA], preWriteSnapshotUnavailableUUIDs: ["uuid-a"],
+            postWriteAction: { clock.advance(by: 6) })
+        let dispatcher = ControlCommandDispatcher(
+            service: service, appVersion: "1.5.0", batchExecutionTimeout: 5,
+            batchMonotonicNow: clock.now)
+        let response = await dispatcher.handle(Self.batchOverrideRequest("override-post-write-deadline"))
+        assertUnrestorableIndeterminate(response, writtenUUIDs: (await service.writes).map(\.0))
+    }
+
+    private static func batchOverrideRequest(_ requestID: String) -> ControlRequest {
+        ControlRequest(requestID: requestID, command: "brightness.set-all",
+                       arguments: ["percent": .number(50), "allowUnrestorable": .bool(true)])
+    }
+
+    private func assertUnrestorableIndeterminate(_ response: ControlResponse, writtenUUIDs: [String]) {
+        XCTAssertEqual(response.error?.code, .batchPartialFailure)
+        let details = response.error?.details
+        XCTAssertEqual(
+            [details?["retrySafe"], details?["manualRestorationUUIDs"], details?["notAttemptedUUIDs"]],
+            [.bool(false), .array([.string("uuid-a")]), .array([.string("uuid-b")])])
+        let outcomes = details?["outcomes"]
+        XCTAssertEqual(
+            [outcomes?[0]?["displayUUID"], outcomes?[0]?["attempted"], outcomes?[0]?["status"],
+             outcomes?[0]?["code"], outcomes?[0]?["retrySafe"],
+             outcomes?[0]?["restoreSnapshotAvailable"], outcomes?[0]?["manualRestorationRequired"]],
+            [.string("uuid-a"), .bool(true), .string("write_indeterminate"),
+             .string("write_outcome_indeterminate"), .bool(false), .bool(false), .bool(true)])
+        XCTAssertEqual(
+            [outcomes?[1]?["displayUUID"], outcomes?[1]?["status"], outcomes?[1]?["attempted"]],
+            [.string("uuid-b"), .string("not_attempted"), .bool(false)])
+        XCTAssertEqual(writtenUUIDs, ["uuid-a"])
+    }
+
     func testOverrideRejectsNilPostWriteReadbackForReadbackCapableDisplay() async throws {
         let service = BatchControlService(
             displays: [.physicalB],
@@ -1036,6 +1085,7 @@ private actor BatchControlService: ControlCommandService {
     let preWriteSnapshotUnavailableUUIDs: Set<String>
     let postWriteReadbackNilUUIDs: Set<String>
     let postWriteReadbackFailures: [String: String]
+    let postWriteAction: (@Sendable () async -> Void)?
     var values: [String: Double]
     var brightnessReadCounts: [String: Int] = [:]
     var writes: [(String, Double)] = []
@@ -1045,13 +1095,15 @@ private actor BatchControlService: ControlCommandService {
         writeFailures: [String: WriteFailure] = [:],
         preWriteSnapshotUnavailableUUIDs: Set<String> = [],
         postWriteReadbackNilUUIDs: Set<String> = [],
-        postWriteReadbackFailures: [String: String] = [:]
+        postWriteReadbackFailures: [String: String] = [:],
+        postWriteAction: (@Sendable () async -> Void)? = nil
     ) {
         inventory = displays
         self.writeFailures = writeFailures
         self.preWriteSnapshotUnavailableUUIDs = preWriteSnapshotUnavailableUUIDs
         self.postWriteReadbackNilUUIDs = postWriteReadbackNilUUIDs
         self.postWriteReadbackFailures = postWriteReadbackFailures
+        self.postWriteAction = postWriteAction
         values = Dictionary(uniqueKeysWithValues: displays.map { ($0.uuid, $0.brightnessPercent ?? 42) })
     }
 
@@ -1081,6 +1133,7 @@ private actor BatchControlService: ControlCommandService {
             }
         }
         values[displayUUID] = percent
+        if let postWriteAction { await postWriteAction() }
         return percent
     }
 }
