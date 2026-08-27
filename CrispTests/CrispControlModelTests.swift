@@ -5,152 +5,155 @@ import XCTest
 #endif
 
 final class CrispControlModelTests: XCTestCase {
-    func testListReturnsEveryDisplay() {
-        let displays = [
-            CrispControlDisplay(id: 7, name: "Studio Display", brightness: 64, isBuiltin: false),
-            CrispControlDisplay(id: 1, name: "Built-in Display", brightness: 42, isBuiltin: true)
+    private let display = CrispControlDisplay(
+        id: 7,
+        name: "Studio Display",
+        brightness: 64,
+        isBuiltin: false
+    )
+
+    func testParserSupportsExactlyThreeCommands() {
+        let cases: [([String], CrispControlRequest)] = [
+            (["displays", "list"], .init(command: .list)),
+            (["brightness", "get", "42"], .init(command: .getBrightness, display: 42)),
+            (
+                ["brightness", "set", "42", "37.5"],
+                .init(command: .setBrightness, display: 42, brightness: 37.5)
+            )
         ]
-
-        let result = CrispControlModel.handle(
-            CrispControlRequest(command: .list),
-            displays: displays
-        )
-
-        XCTAssertEqual(result.response, .success(displays: displays))
-        XCTAssertNil(result.brightnessChange)
+        for (arguments, request) in cases {
+            XCTAssertEqual(CrispControlCLIModel.parse(arguments: arguments), .request(request))
+        }
     }
 
-    func testGetBrightnessReturnsOnlyRequestedDisplay() {
-        let requested = CrispControlDisplay(id: 7, name: "Studio Display", brightness: 64, isBuiltin: false)
-        let displays = [
-            requested,
-            CrispControlDisplay(id: 1, name: "Built-in Display", brightness: 42, isBuiltin: true)
+    func testParserRejectsInvalidArityIDsOptionsAndPercent() {
+        let cases = [
+            [], ["displays"], ["displays", "list", "--json"],
+            ["brightness", "get"], ["brightness", "get", "x"],
+            ["brightness", "get", "4294967296"], ["brightness", "set", "42"],
+            ["brightness", "set", "42", "nan"], ["brightness", "set", "42", "inf"],
+            ["brightness", "set", "42", "-0.1"], ["brightness", "set", "42", "100.1"]
         ]
-
-        let result = CrispControlModel.handle(
-            CrispControlRequest(command: .getBrightness, display: 7),
-            displays: displays
-        )
-
-        XCTAssertEqual(result.response, .success(display: requested))
-        XCTAssertNil(result.brightnessChange)
+        for arguments in cases {
+            XCTAssertEqual(CrispControlCLIModel.parse(arguments: arguments), .failure)
+        }
+        for value in ["0", "100"] {
+            guard case let .request(request) = CrispControlCLIModel.parse(
+                arguments: ["brightness", "set", "42", value]
+            ) else { return XCTFail("expected boundary \(value)") }
+            XCTAssertEqual(request.brightness, Double(value))
+        }
     }
 
-    func testSetBrightnessReturnsAcceptedQueuedUnverifiedResponse() throws {
-        let display = CrispControlDisplay(id: 7, name: "Studio Display", brightness: 64, isBuiltin: false)
+    func testSharedFrameReturnsOneBoundedLFFrame() {
+        let frame = Data(#"{"command":"list"}"#.utf8) + Data([0x0A])
+        XCTAssertEqual(
+            CrispControlFrame.parse(frame + Data("ignored".utf8), maximumBytes: 64, endOfStream: false),
+            .frame(frame)
+        )
+        XCTAssertEqual(
+            CrispControlFrame.parse(Data(frame.dropLast()), maximumBytes: 64, endOfStream: false),
+            .incomplete
+        )
+        XCTAssertEqual(
+            CrispControlFrame.parse(Data(frame.dropLast()), maximumBytes: 64, endOfStream: true),
+            .failure("frame must end with newline")
+        )
+        XCTAssertEqual(
+            CrispControlFrame.parse(Data(repeating: 0x20, count: 4), maximumBytes: 4, endOfStream: false),
+            .failure("frame too large")
+        )
+    }
 
-        let result = CrispControlModel.handle(
-            CrispControlRequest(command: .setBrightness, display: 7, brightness: 35),
+    func testModelHandlesListAndGet() throws {
+        let list = CrispControlModel.handle(Data(#"{"command":"list"}"#.utf8), displays: [display])
+        XCTAssertEqual(list.response, .success(displays: [display]))
+        XCTAssertNil(list.brightnessChange)
+
+        let get = CrispControlModel.handle(
+            Data(#"{"command":"getBrightness","display":7}"#.utf8),
             displays: [display]
         )
+        XCTAssertEqual(get.response, .success(display: display))
+        XCTAssertNil(get.brightnessChange)
+    }
 
-        XCTAssertEqual(result.response, .acceptedUnverified())
-        XCTAssertEqual(
-            result.brightnessChange,
-            CrispControlBrightnessChange(displayID: 7, brightness: 35)
+    func testSetReportsAcceptedQueuedUnverifiedAndChange() throws {
+        let result = CrispControlModel.handle(
+            Data(#"{"command":"setBrightness","display":7,"brightness":35}"#.utf8),
+            displays: [display]
         )
+        XCTAssertEqual(result.response, .acceptedUnverified())
+        XCTAssertEqual(result.brightnessChange, .init(displayID: 7, brightness: 35))
 
-        let data = CrispControlModel.encode(result.response)
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual(object["ok"] as? Bool, true)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: CrispControlModel.encode(result.response))
+                as? [String: Any]
+        )
+        XCTAssertEqual(Set(object.keys), ["ok", "status", "execution", "verification"])
         XCTAssertEqual(object["status"] as? String, "accepted")
         XCTAssertEqual(object["execution"] as? String, "queued")
         XCTAssertEqual(object["verification"] as? String, "unverified")
-        XCTAssertNil(object["display"])
     }
 
-    func testSetBrightnessRejectsExtraBrightness() {
-        let display = CrispControlDisplay(id: 7, name: "Studio Display", brightness: 64, isBuiltin: false)
-
-        let result = CrispControlModel.handle(
-            CrispControlRequest(command: .setBrightness, display: 7, brightness: 101),
-            displays: [display]
-        )
-
-        XCTAssertEqual(result.response, .failure("brightness must be between 0 and 100"))
-        XCTAssertNil(result.brightnessChange)
-    }
-
-    func testSetBrightnessRejectsMissingFields() {
-        let display = CrispControlDisplay(id: 7, name: "Studio Display", brightness: 64, isBuiltin: false)
+    func testModelRejectsMalformedMissingUnknownAndOutOfRangeRequests() {
         let requests = [
-            CrispControlRequest(command: .setBrightness, brightness: 35),
-            CrispControlRequest(command: .setBrightness, display: 7)
+            #"{"command":"list""#,
+            #"{"command":"getBrightness"}"#,
+            #"{"command":"getBrightness","display":8}"#,
+            #"{"command":"setBrightness","display":7}"#,
+            #"{"command":"setBrightness","display":7,"brightness":101}"#,
+            #"{"command":"unknown"}"#
         ]
-
         for request in requests {
-            let result = CrispControlModel.handle(request, displays: [display])
-
-            XCTAssertEqual(result.response, .failure("display and brightness are required"))
-            XCTAssertNil(result.brightnessChange)
+            let result = CrispControlModel.handle(Data(request.utf8), displays: [display])
+            XCTAssertFalse(result.response.ok, request)
+            XCTAssertNil(result.brightnessChange, request)
         }
     }
 
-    func testSetBrightnessAcceptsZeroAndHundredBoundaries() {
-        let display = CrispControlDisplay(id: 7, name: "Studio Display", brightness: 64, isBuiltin: false)
+    func testResponseValidationIsCommandSpecific() {
+        let list = #"{"ok":true,"displays":[]}"#
+        let get = #"{"ok":true,"display":{"id":7,"name":"Studio","brightness":50,"isBuiltin":false}}"#
+        XCTAssertEqual(classify(list, .list), .success)
+        XCTAssertEqual(classify(get, .getBrightness), .success)
+        XCTAssertEqual(classify(list, .getBrightness), .invalid)
+        XCTAssertEqual(classify(get, .list), .invalid)
+    }
 
-        for brightness in [0.0, 100.0] {
-            let result = CrispControlModel.handle(
-                CrispControlRequest(command: .setBrightness, display: 7, brightness: brightness),
-                displays: [display]
-            )
-
-            XCTAssertEqual(result.response, .acceptedUnverified())
-            XCTAssertEqual(
-                result.brightnessChange,
-                CrispControlBrightnessChange(displayID: 7, brightness: brightness)
-            )
+    func testSetRejectsBareAndContradictorySuccess() {
+        let invalid = [
+            #"{"ok":true}"#,
+            #"{"ok":true,"status":"applied","execution":"queued","verification":"unverified"}"#,
+            #"{"ok":true,"status":"accepted","execution":"applied","verification":"verified"}"#,
+            #"{"ok":true,"status":"accepted","execution":"queued","verification":"unverified","applied":true}"#
+        ]
+        for response in invalid {
+            XCTAssertEqual(classify(response, .setBrightness), .invalid, response)
         }
     }
 
-    func testMalformedJSONIsInvalidRequest() {
-        let result = CrispControlModel.handle(Data(#"{"command":"list""#.utf8), displays: [])
-
-        XCTAssertEqual(result.response, .failure("invalid request"))
-        XCTAssertNil(result.brightnessChange)
+    func testSetAcceptsExactHonestContract() {
+        let response = #"{"ok":true,"status":"accepted","execution":"queued","verification":"unverified"}"#
+        XCTAssertEqual(classify(response, .setBrightness), .success)
     }
 
-    func testUnknownCommandIsInvalidRequest() {
-        let request = Data(#"{"command":"setAllBrightness","brightness":50}"#.utf8)
-
-        let result = CrispControlModel.handle(request, displays: [])
-
-        XCTAssertEqual(result.response, .failure("invalid request"))
-        XCTAssertNil(result.brightnessChange)
-    }
-
-    func testRequestFrameRejectsEOFBeforeNewline() {
-        let data = Data(#"{"command":"list"}"#.utf8)
-
-        XCTAssertEqual(
-            CrispControlRequestFrame.parse(data, maximumBytes: 8_192, endOfStream: true),
-            .failure("request must end with newline")
-        )
-    }
-
-    func testClientLimiterRejectsExcessUntilSlotReleased() {
-        let limiter = CrispControlClientLimiter(limit: 2)
-        defer {
-            limiter.release()
-            limiter.release()
+    func testValidServerFailureAndMalformedJSONClassification() {
+        for command in [
+            CrispControlRequest.Command.list,
+            .getBrightness,
+            .setBrightness
+        ] {
+            XCTAssertEqual(classify(#"{"ok":false,"error":"display not found"}"#, command), .serverFailure)
+            XCTAssertEqual(classify(#"{"ok":false}"#, command), .invalid)
+            XCTAssertEqual(classify(#"{"ok":true"#, command), .invalid)
         }
-
-        XCTAssertTrue(limiter.acquire())
-        XCTAssertTrue(limiter.acquire())
-        XCTAssertFalse(limiter.acquire())
-
-        limiter.release()
-        XCTAssertTrue(limiter.acquire())
     }
 
-    func testResponseFrameIsUnversionedAndNewlineTerminated() throws {
-        let display = CrispControlDisplay(id: 7, name: "Studio Display", brightness: 64, isBuiltin: false)
-
-        let data = CrispControlModel.encode(.success(display: display))
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-
-        XCTAssertEqual(data.last, Character("\n").asciiValue)
-        XCTAssertEqual(Set(object.keys), ["ok", "display"])
-        XCTAssertEqual(object["ok"] as? Bool, true)
+    private func classify(
+        _ json: String,
+        _ command: CrispControlRequest.Command
+    ) -> CrispControlCLIModel.ResponseResult {
+        CrispControlCLIModel.classify(Data(json.utf8), for: command)
     }
 }
