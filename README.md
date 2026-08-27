@@ -101,6 +101,8 @@ Crisp must already be running. Display selectors are numeric runtime IDs from `d
 
 The current public Crisp 1.5.0 release, normal DMG, and Homebrew cask do not include `crispctl`. Separately assembled local test packages are not public releases.
 
+AI agents can follow the minimal workflow in [`skills/crispctl/SKILL.md`](skills/crispctl/SKILL.md).
+
 ## Building
 
 ```sh
