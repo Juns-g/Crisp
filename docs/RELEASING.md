@@ -35,17 +35,25 @@ would also work for most people, but the app dragged out of it would then
 need an online check with Apple on first launch.
 
 Both `codesign` and `stapler staple` rewrite the DMG, so they run before the
-`sha256` the Homebrew cask pins. Hashing first would publish a checksum that
-fails every `brew install`. The `spctl` call at the end of that block is a
-gate rather than a log: under `set -e`, a DMG Gatekeeper would reject aborts
-the release instead of shipping.
+DMG is hashed and uploaded; the Homebrew cask pins the `sha256` of the
+uploaded file. The `spctl` call at the end of that block is a gate rather
+than a log: under `set -e`, a DMG Gatekeeper would reject aborts the release
+instead of shipping.
 
-## Homebrew tap
+## Homebrew
 
-`release.sh` bumps `version` and `sha256` in `didriksg/homebrew-tap`
-automatically. `auto_updates true` is already in the cask as of 1.5.0, so
-`brew upgrade` reconciles against the on-disk version instead of
-reinstalling over an app that updated itself. Nothing to do per release.
+The cask lives in homebrew/cask (`Casks/c/crisp.rb`, added in
+Homebrew/homebrew-cask#283611). Homebrew's autobump job runs every three
+hours, sees the new GitHub release through livecheck, and opens and merges
+the version bump itself. Nothing to do per release. If a release is still
+missing from `brew info --cask crisp` after a day, open the bump by hand:
+`brew bump-cask-pr crisp --version X.Y.Z`. `auto_updates true` is in the
+cask, so `brew upgrade` reconciles against the on-disk version instead of
+reinstalling over an app that updated itself.
+
+The old tap (`didriksg/homebrew-tap`) only carries a `tap_migrations.json`
+entry now; installs from it move to the main cask on their next
+`brew upgrade`.
 
 ## The signing key
 

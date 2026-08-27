@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # Crisp release script: builds a signed universal DMG with the Command Line
-# Tools only (no Xcode), and optionally publishes the GitHub release and bumps
-# the Homebrew tap. Default is a dry run: it builds and verifies the DMG but
-# publishes nothing. Pass --publish to actually release.
+# Tools only (no Xcode), and optionally publishes the GitHub release. Default
+# is a dry run: it builds and verifies the DMG but publishes nothing. Pass
+# --publish to actually release.
 #
 # Usage:
 #   ./scripts/release.sh v1.0.4 notes.md            # dry run: build DMG only
-#   ./scripts/release.sh v1.0.4 notes.md --publish  # build + release + tap
+#   ./scripts/release.sh v1.0.4 notes.md --publish  # build + release
 #
 # notes.md is the release body (required for --publish; optional for dry run).
 
@@ -24,8 +24,6 @@ cd "$ROOT"
 BUILD="$ROOT/build"
 APP="$BUILD/Crisp.app"
 DMG="$ROOT/Crisp.dmg"
-TAP_REPO="didriksg/homebrew-tap"
-TAP_CASK="Casks/crisp.rb"
 
 # A real release must ship complete translations; the dry run (CI on every PR)
 # skips this so adding an English string doesn't block contributors — the
@@ -218,16 +216,8 @@ cp "$DMG" "$APPCAST_STAGE/Crisp.dmg"
   --link "https://github.com/didriksg/Crisp/releases" \
   -o "$ROOT/docs/appcast.xml" "$APPCAST_STAGE"
 
-echo "==> Bumping Homebrew tap…"
-SHA_FILE=$(gh api "repos/$TAP_REPO/contents/$TAP_CASK" --jq '.sha')
-gh api "repos/$TAP_REPO/contents/$TAP_CASK" --jq '.content' | base64 -d \
-  | sed -e "s/version \"[^\"]*\"/version \"${VERSION}\"/" \
-        -e "s/sha256 \"[^\"]*\"/sha256 \"${SHA}\"/" > "$BUILD/crisp.rb"
-gh api -X PUT "repos/$TAP_REPO/contents/$TAP_CASK" \
-  -f message="crisp ${VERSION}" \
-  -f content="$(base64 -i "$BUILD/crisp.rb")" \
-  -f sha="$SHA_FILE" --jq '.commit.sha' >/dev/null
-
-echo "==> Released ${TAG} and updated the tap."
+echo "==> Released ${TAG}."
 echo "==> ACTION REQUIRED: commit and push docs/appcast.xml (+ project.yml bump)."
 echo "    In-app updates go live only once GitHub Pages serves the new appcast."
+echo "    homebrew/cask picks the release up by autobump (runs every 3 hours);"
+echo "    if it hasn't after a day: brew bump-cask-pr crisp --version ${VERSION}"

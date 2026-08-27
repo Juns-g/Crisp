@@ -30,10 +30,12 @@ https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 ## Install
 
 ```sh
-brew install --cask didriksg/tap/crisp
+brew install --cask crisp
 ```
 
 Or download [`Crisp.dmg`](https://github.com/didriksg/Crisp/releases/latest/download/Crisp.dmg) and drag Crisp to Applications. Every release is signed and notarized by Apple, so it opens with a normal double-click.
+
+Installed from `didriksg/tap` earlier? `brew upgrade` moves you to the main cask by itself; `brew untap didriksg/tap` afterwards is optional cleanup.
 
 ## Features
 
