@@ -62,6 +62,8 @@ targets:
       - path: Crisp/Models/VariableRefreshModes.swift
       - path: Crisp/Models/KeyboardShortcut.swift
       - path: Crisp/Models/DisplayPreset.swift
+      - path: Crisp/Models/CrispControlModel.swift
+      - path: Crisp/Services/CrispControlClientLimiter.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.crisp.tests

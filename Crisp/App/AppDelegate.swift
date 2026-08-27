@@ -18,6 +18,7 @@ final class MenuPanel: NSPanel {
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private static let log = Logger(subsystem: "com.crisp.app", category: "app")
     private var wakeObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
     /// Debounces panel re-anchoring across the storm of screen-param changes a
@@ -38,6 +39,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let _defaultsMigrated = AppDelegate.migrateLegacyDefaultsNamespace()
 
     let displayManager = DisplayManager()
+    private lazy var controlServer = CrispControlServer(displayManager: displayManager)
     private var statusItem: NSStatusItem?
     /// Drives the menu-bar Keep Awake indicator (keep-awake indicator).
     private var keepAwakeCancellable: AnyCancellable?
@@ -84,6 +86,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             exit(0)
         }
         // The descriptor stays open for the app's lifetime to hold the lock.
+
+        do {
+            try controlServer.start()
+        } catch {
+            Self.log.error("Could not start local control socket: \(error.localizedDescription, privacy: .public)")
+        }
 
         // Start intercepting brightness keys to route them to the display under the cursor,
         // but only if Accessibility is already granted. Creating the tap (tapCreate) is what
@@ -231,6 +239,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        controlServer.stop()
         if let obs = wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
         }
