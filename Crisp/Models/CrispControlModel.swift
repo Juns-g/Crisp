@@ -112,14 +112,59 @@ enum CrispControlModel {
 }
 enum CrispControlCLIModel {
     static let usage = "usage: crispctl displays list | crispctl brightness get <display-id> | "
-        + "crispctl brightness set <display-id> <percent>"
+        + "crispctl brightness set <display-id> <percent> | crispctl help"
+
+    /// The full reference, for a person at a terminal and for an agent that reads it
+    /// before acting. Kept in the shared model so the app and the CLI cannot drift.
+    static let help = """
+        crispctl: control a running Crisp from the command line.
+
+        Crisp must be running on this Mac under the same user. crispctl talks to it
+        over a local Unix socket (mode 0600 in the per-user temp dir) and never
+        launches the app. Source builds only for now; the DMG and the Homebrew cask
+        do not ship crispctl.
+
+        Commands
+          crispctl displays list
+              Every online display: id, name, brightness (0-100), isBuiltin.
+          crispctl brightness get <display-id>
+              Current brightness of one display.
+          crispctl brightness set <display-id> <percent>
+              Set brightness, 0-100. Same path as the panel slider: hardware (DDC)
+              or software dimming as Crisp decided for that display, and it clears
+              the active preset. The reply means Crisp accepted the request, not
+              that the panel was read back; run brightness get to confirm.
+          crispctl help
+              This text. Also --help and -h.
+
+        Display ids
+          Runtime ids from displays list. They can change after an unplug or a
+          wake, so list first, then act.
+
+        Output
+          One JSON object per call. Success: {"ok":true,...}. Failure:
+          {"ok":false,"error":"..."}. Later versions may add fields; ignore
+          what you do not know. Crisp's own refusals come back on stdout,
+          crispctl's own errors (no socket, bad arguments) go to stderr.
+
+        Exit codes
+          0  ok
+          1  could not reach Crisp: not running, socket missing, another user,
+             or an unreadable reply
+          2  bad arguments
+          3  Crisp refused the request: unknown display, value out of range
+        """
 
     enum ParseResult: Equatable {
         case request(CrispControlRequest)
+        case help
         case failure
     }
     enum ResponseResult: Equatable { case success, serverFailure, invalid }
     static func parse(arguments: [String]) -> ParseResult {
+        if arguments.isEmpty || arguments == ["help"] || arguments == ["--help"] || arguments == ["-h"] {
+            return .help
+        }
         if arguments == ["displays", "list"] {
             return .request(.init(command: .list))
         }
