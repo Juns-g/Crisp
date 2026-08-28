@@ -5,7 +5,17 @@ final class CrispControlModelTests: XCTestCase {
         id: 7,
         name: "Studio Display",
         brightness: 64,
-        isBuiltin: false
+        isBuiltin: false,
+        uuid: "37D8832A-2D66-02CA-B9F7-8F30A301B230",
+        resolution: CrispControlResolution(
+            logicalWidth: 2560,
+            logicalHeight: 1440,
+            pixelWidth: 5120,
+            pixelHeight: 2880,
+            refreshRate: 60,
+            isHiDPI: true
+        ),
+        brightnessBackend: .ddc
     )
 
     func testParserSupportsExactlyThreeCommands() {
@@ -78,12 +88,85 @@ final class CrispControlModelTests: XCTestCase {
         XCTAssertEqual(list.response, .success(displays: [display]))
         XCTAssertNil(list.brightnessChange)
 
+        let listJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: CrispControlModel.encode(list.response))
+                as? [String: Any]
+        )
+        let listedDisplay = try XCTUnwrap((listJSON["displays"] as? [[String: Any]])?.first)
+        XCTAssertEqual(listedDisplay["uuid"] as? String, display.uuid)
+        XCTAssertEqual(listedDisplay["brightnessBackend"] as? String, "ddc")
+        XCTAssertEqual((listedDisplay["resolution"] as? [String: Any])?["logicalWidth"] as? Int, 2560)
+
         let get = CrispControlModel.handle(
             Data(#"{"command":"getBrightness","display":7}"#.utf8),
             displays: [display]
         )
         XCTAssertEqual(get.response, .success(display: display))
         XCTAssertNil(get.brightnessChange)
+
+        let getJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: CrispControlModel.encode(get.response))
+                as? [String: Any]
+        )
+        let returnedDisplay = try XCTUnwrap(getJSON["display"] as? [String: Any])
+        XCTAssertEqual(returnedDisplay["uuid"] as? String, display.uuid)
+        XCTAssertEqual(returnedDisplay["brightnessBackend"] as? String, "ddc")
+        XCTAssertEqual((returnedDisplay["resolution"] as? [String: Any])?["pixelWidth"] as? Int, 5120)
+    }
+
+    func testDisplayMetadataAllowsMissingCurrentResolutionAndLegacyResponses() throws {
+        let displayWithoutMode = CrispControlDisplay(
+            id: 8,
+            name: "Projector",
+            brightness: 50,
+            isBuiltin: false,
+            uuid: "stable-projector",
+            resolution: nil,
+            brightnessBackend: .unknown
+        )
+        let encoded = CrispControlModel.encode(.success(displays: [displayWithoutMode]))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let encodedDisplay = try XCTUnwrap((json["displays"] as? [[String: Any]])?.first)
+        XCTAssertNil(encodedDisplay["resolution"])
+
+        let legacy = #"{"ok":true,"display":{"id":7,"name":"Studio Display","brightness":64,"isBuiltin":false}}"#
+        let decoded = try JSONDecoder().decode(CrispControlResponse.self, from: Data(legacy.utf8))
+        XCTAssertNil(decoded.display?.uuid)
+        XCTAssertNil(decoded.display?.resolution)
+        XCTAssertNil(decoded.display?.brightnessBackend)
+    }
+
+    func testBrightnessBackendClassifierCoversCurrentRouting() {
+        XCTAssertEqual(
+            CrispControlModel.brightnessBackend(
+                isBuiltin: true, hdrSoftwareDimming: false, ddcAvailable: nil
+            ),
+            .builtin
+        )
+        XCTAssertEqual(
+            CrispControlModel.brightnessBackend(
+                isBuiltin: false, hdrSoftwareDimming: false, ddcAvailable: true
+            ),
+            .ddc
+        )
+        XCTAssertEqual(
+            CrispControlModel.brightnessBackend(
+                isBuiltin: false, hdrSoftwareDimming: false, ddcAvailable: false
+            ),
+            .software
+        )
+        XCTAssertEqual(
+            CrispControlModel.brightnessBackend(
+                isBuiltin: false, hdrSoftwareDimming: true, ddcAvailable: true
+            ),
+            .software
+        )
+        XCTAssertEqual(
+            CrispControlModel.brightnessBackend(
+                isBuiltin: false, hdrSoftwareDimming: false, ddcAvailable: nil
+            ),
+            .unknown
+        )
     }
 
     func testSetEncodesOnlyOKAndCreatesRequestedBrightnessChange() {

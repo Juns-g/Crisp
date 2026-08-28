@@ -80,10 +80,25 @@ final class CrispControlServer {
     }
 
     private func response(to request: Data) async -> Data {
-        let displays = displayManager.displays.map {
-            CrispControlDisplay(
-                id: $0.displayID, name: $0.name,
-                brightness: min($0.brightness, 100), isBuiltin: $0.isBuiltin
+        let displays = displayManager.displays.map { display in
+            let resolution = display.currentDisplayMode.map { mode in
+                CrispControlResolution(
+                    logicalWidth: mode.width,
+                    logicalHeight: mode.height,
+                    pixelWidth: mode.pixelWidth,
+                    pixelHeight: mode.pixelHeight,
+                    refreshRate: mode.refreshRate,
+                    isHiDPI: mode.isHiDPI
+                )
+            }
+            return CrispControlDisplay(
+                id: display.displayID,
+                name: display.name,
+                brightness: min(display.brightness, 100),
+                isBuiltin: display.isBuiltin,
+                uuid: display.displayUUID,
+                resolution: resolution,
+                brightnessBackend: BrightnessService.shared.brightnessBackend(for: display)
             )
         }
         let result = CrispControlModel.handle(request, displays: displays)

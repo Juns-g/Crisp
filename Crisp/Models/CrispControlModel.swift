@@ -4,11 +4,46 @@ enum CrispControlSocket {
     static let path = FileManager.default.temporaryDirectory
         .appendingPathComponent("crispctl.sock").path
 }
+struct CrispControlResolution: Codable, Equatable {
+    let logicalWidth: Int
+    let logicalHeight: Int
+    let pixelWidth: Int
+    let pixelHeight: Int
+    let refreshRate: Double
+    let isHiDPI: Bool
+}
+enum CrispControlBrightnessBackend: String, Codable, Equatable {
+    case builtin
+    case ddc
+    case software
+    case unknown
+}
 struct CrispControlDisplay: Codable, Equatable {
     let id: UInt32
     let name: String
     let brightness: Double
     let isBuiltin: Bool
+    let uuid: String?
+    let resolution: CrispControlResolution?
+    let brightnessBackend: CrispControlBrightnessBackend?
+
+    init(
+        id: UInt32,
+        name: String,
+        brightness: Double,
+        isBuiltin: Bool,
+        uuid: String? = nil,
+        resolution: CrispControlResolution? = nil,
+        brightnessBackend: CrispControlBrightnessBackend? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.brightness = brightness
+        self.isBuiltin = isBuiltin
+        self.uuid = uuid
+        self.resolution = resolution
+        self.brightnessBackend = brightnessBackend
+    }
 }
 struct CrispControlRequest: Codable, Equatable {
     enum Command: String, Codable {
@@ -69,6 +104,20 @@ struct CrispControlBrightnessChange: Equatable {
     let brightness: Double
 }
 enum CrispControlModel {
+    static func brightnessBackend(
+        isBuiltin: Bool,
+        hdrSoftwareDimming: Bool,
+        ddcAvailable: Bool?
+    ) -> CrispControlBrightnessBackend {
+        if isBuiltin { return .builtin }
+        if hdrSoftwareDimming { return .software }
+        switch ddcAvailable {
+        case true: return .ddc
+        case false: return .software
+        case nil: return .unknown
+        }
+    }
+
     static func encode<T: Encodable>(_ value: T, sorted: Bool = false) throws -> Data {
         let encoder = JSONEncoder()
         if sorted { encoder.outputFormatting = .sortedKeys }
@@ -126,7 +175,8 @@ enum CrispControlCLIModel {
 
         Commands
           crispctl displays list
-              Every online display: id, name, brightness (0-100), isBuiltin.
+              Every online display: id, name, brightness (0-100), isBuiltin,
+              plus uuid, current resolution, and brightnessBackend metadata.
           crispctl brightness get <display-id>
               Current brightness of one display.
           crispctl brightness set <display-id> <percent>
@@ -138,14 +188,18 @@ enum CrispControlCLIModel {
               This text. Also --help and -h.
 
         Display ids
-          Runtime ids from displays list. They can change after an unplug or a
-          wake, so list first, then act.
+          UUID is stable across reconnects and identifies the display. Commands
+          still require the numeric runtime id, which can change after an unplug
+          or a wake, so run a fresh displays list before acting.
 
         Output
           One JSON object per call. Success: {"ok":true,...}. Failure:
           {"ok":false,"error":"..."}. Later versions may add fields; ignore
           what you do not know. Crisp's own refusals come back on stdout,
           crispctl's own errors (no socket, bad arguments) go to stderr.
+          brightnessBackend is Crisp's current route: builtin, ddc, software,
+          or unknown while external DDC availability is undetermined. An HDR
+          software-dimming override reports software.
 
         Exit codes
           0  ok
