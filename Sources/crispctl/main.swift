@@ -95,6 +95,9 @@ private func fail(_ message: String, code: Int32) -> Never {
 let request: CrispControlRequest
 switch CrispControlCLIModel.parse(arguments: Array(CommandLine.arguments.dropFirst())) {
 case let .request(value): request = value
+case .help:
+    print(CrispControlCLIModel.help)
+    Darwin.exit(EXIT_SUCCESS)
 case .failure: fail(CrispControlCLIModel.usage, code: 2)
 }
 do {

@@ -22,9 +22,21 @@ final class CrispControlModelTests: XCTestCase {
         }
     }
 
+    func testParserReturnsHelpForNoArgumentsAndHelpFlags() {
+        for arguments in [[], ["help"], ["--help"], ["-h"]] {
+            XCTAssertEqual(CrispControlCLIModel.parse(arguments: arguments), .help, "\(arguments)")
+        }
+        // The reference must name every command it documents, and the usage line must
+        // point at it, so a wrong invocation still leads to the full text.
+        for command in ["displays list", "brightness get", "brightness set", "crispctl help"] {
+            XCTAssertTrue(CrispControlCLIModel.help.contains(command), command)
+        }
+        XCTAssertTrue(CrispControlCLIModel.usage.contains("crispctl help"))
+    }
+
     func testParserRejectsInvalidArityIDsOptionsAndPercent() {
         let cases = [
-            [], ["displays"], ["displays", "list", "--json"],
+            ["help", "me"], ["displays"], ["displays", "list", "--json"],
             ["brightness", "get"], ["brightness", "get", "x"],
             ["brightness", "get", "4294967296"], ["brightness", "set", "42"],
             ["brightness", "set", "42", "nan"], ["brightness", "set", "42", "inf"],
