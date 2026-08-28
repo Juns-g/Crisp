@@ -92,16 +92,20 @@ To keep Keep Awake off on company Macs, push a configuration profile for the `co
 Source builds include a minimal `crispctl` target:
 
 ```sh
+xcodegen generate && xcodebuild -scheme crispctl -configuration Release
+```
+
+It supports exactly three commands:
+
+```sh
 crispctl displays list
 crispctl brightness get <display-id>
 crispctl brightness set <display-id> <percent>
 ```
 
-Crisp must already be running. Display selectors are numeric runtime IDs from `displays list`, and output is JSON by default (there is no `--json` option). A successful `brightness set` means the request was accepted and queued, not synchronously applied or verified; it is not retried automatically.
+Crisp must already be running. Display selectors are numeric runtime IDs from `displays list`, and output is JSON by default. `brightness set` is a manual change like using the slider and clears the active preset. A successful request means the change was accepted and queued, not independently verified; it is not retried automatically.
 
-The current public Crisp 1.5.0 release, normal DMG, and Homebrew cask do not include `crispctl`. Separately assembled local test packages are not public releases.
-
-AI agents can follow the minimal workflow in [`skills/crispctl/SKILL.md`](skills/crispctl/SKILL.md).
+The current public Crisp 1.5.0 release, normal DMG, and Homebrew cask do not include `crispctl`.
 
 ## Building
 

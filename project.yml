@@ -89,6 +89,7 @@ schemes:
     build:
       targets:
         Crisp: all
+        crispctl: all
     test:
       targets:
         - CrispTests

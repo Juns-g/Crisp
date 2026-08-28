@@ -1,9 +1,5 @@
 import XCTest
 
-#if canImport(CrispPureModels)
-@testable import CrispPureModels
-#endif
-
 final class CrispControlModelTests: XCTestCase {
     private let display = CrispControlDisplay(
         id: 7,
@@ -78,22 +74,17 @@ final class CrispControlModelTests: XCTestCase {
         XCTAssertNil(get.brightnessChange)
     }
 
-    func testSetReportsAcceptedQueuedUnverifiedAndChange() throws {
+    func testSetEncodesOnlyOKAndCreatesRequestedBrightnessChange() {
         let result = CrispControlModel.handle(
             Data(#"{"command":"setBrightness","display":7,"brightness":35}"#.utf8),
             displays: [display]
         )
-        XCTAssertEqual(result.response, .acceptedUnverified())
+        XCTAssertEqual(result.response, .success())
         XCTAssertEqual(result.brightnessChange, .init(displayID: 7, brightness: 35))
-
-        let object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: CrispControlModel.encode(result.response))
-                as? [String: Any]
+        XCTAssertEqual(
+            CrispControlModel.encode(result.response),
+            Data(#"{"ok":true}"#.utf8) + Data([0x0A])
         )
-        XCTAssertEqual(Set(object.keys), ["ok", "status", "execution", "verification"])
-        XCTAssertEqual(object["status"] as? String, "accepted")
-        XCTAssertEqual(object["execution"] as? String, "queued")
-        XCTAssertEqual(object["verification"] as? String, "unverified")
     }
 
     func testModelRejectsMalformedMissingUnknownAndOutOfRangeRequests() {
@@ -112,42 +103,34 @@ final class CrispControlModelTests: XCTestCase {
         }
     }
 
-    func testResponseValidationIsCommandSpecific() {
-        let list = #"{"ok":true,"displays":[]}"#
-        let get = #"{"ok":true,"display":{"id":7,"name":"Studio","brightness":50,"isBuiltin":false}}"#
-        XCTAssertEqual(classify(list, .list), .success)
-        XCTAssertEqual(classify(get, .getBrightness), .success)
-        XCTAssertEqual(classify(list, .getBrightness), .invalid)
-        XCTAssertEqual(classify(get, .list), .invalid)
-    }
-
-    func testSetRejectsBareAndContradictorySuccess() {
-        let invalid = [
-            #"{"ok":true}"#,
-            #"{"ok":true,"status":"applied","execution":"queued","verification":"unverified"}"#,
-            #"{"ok":true,"status":"accepted","execution":"applied","verification":"verified"}"#,
-            #"{"ok":true,"status":"accepted","execution":"queued","verification":"unverified","applied":true}"#
-        ]
-        for response in invalid {
-            XCTAssertEqual(classify(response, .setBrightness), .invalid, response)
+    func testBareSuccessIsAcceptedForEveryCommand() {
+        for command in commands {
+            XCTAssertEqual(classify(#"{"ok":true}"#, command), .success)
         }
     }
 
-    func testSetAcceptsExactHonestContract() {
-        let response = #"{"ok":true,"status":"accepted","execution":"queued","verification":"unverified"}"#
-        XCTAssertEqual(classify(response, .setBrightness), .success)
+    func testSuccessfulResponseWithUnknownFutureFieldIsAcceptedForEveryCommand() {
+        let response = #"{"ok":true,"future":{"state":"applied"}}"#
+        for command in commands {
+            XCTAssertEqual(classify(response, command), .success)
+        }
     }
 
-    func testValidServerFailureAndMalformedJSONClassification() {
-        for command in [
-            CrispControlRequest.Command.list,
-            .getBrightness,
-            .setBrightness
-        ] {
+    func testFailedMalformedAndInsufficientResponseClassification() {
+        for command in commands {
             XCTAssertEqual(classify(#"{"ok":false,"error":"display not found"}"#, command), .serverFailure)
+            XCTAssertEqual(
+                classify(#"{"ok":false,"error":"display not found","future":true}"#, command),
+                .serverFailure
+            )
             XCTAssertEqual(classify(#"{"ok":false}"#, command), .invalid)
+            XCTAssertEqual(classify(#"{}"#, command), .invalid)
             XCTAssertEqual(classify(#"{"ok":true"#, command), .invalid)
         }
+    }
+
+    private var commands: [CrispControlRequest.Command] {
+        [.list, .getBrightness, .setBrightness]
     }
 
     private func classify(

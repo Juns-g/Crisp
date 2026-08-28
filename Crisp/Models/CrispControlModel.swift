@@ -43,40 +43,25 @@ enum CrispControlFrame {
     }
 }
 struct CrispControlResponse: Codable, Equatable {
-    enum Status: String, Codable { case accepted }
-    enum Execution: String, Codable { case queued }
-    enum Verification: String, Codable { case unverified }
-
     let ok: Bool
-    let status: Status?
-    let execution: Execution?
-    let verification: Verification?
     let displays: [CrispControlDisplay]?
     let display: CrispControlDisplay?
     let error: String?
 
     init(
         ok: Bool,
-        status: Status? = nil,
-        execution: Execution? = nil,
-        verification: Verification? = nil,
         displays: [CrispControlDisplay]? = nil,
         display: CrispControlDisplay? = nil,
         error: String? = nil
     ) {
         self.ok = ok
-        self.status = status
-        self.execution = execution
-        self.verification = verification
         self.displays = displays
         self.display = display
         self.error = error
     }
+    static func success() -> Self { Self(ok: true) }
     static func success(displays: [CrispControlDisplay]) -> Self { Self(ok: true, displays: displays) }
     static func success(display: CrispControlDisplay) -> Self { Self(ok: true, display: display) }
-    static func acceptedUnverified() -> Self {
-        Self(ok: true, status: .accepted, execution: .queued, verification: .unverified)
-    }
     static func failure(_ error: String) -> Self { Self(ok: false, error: error) }
 }
 struct CrispControlBrightnessChange: Equatable {
@@ -121,7 +106,7 @@ enum CrispControlModel {
             guard displays.contains(where: { $0.id == id }) else {
                 return (.failure("display not found"), nil)
             }
-            return (.acceptedUnverified(), .init(displayID: id, brightness: value))
+            return (.success(), .init(displayID: id, brightness: value))
         }
     }
 }
@@ -149,25 +134,11 @@ enum CrispControlCLIModel {
         }
         return .failure
     }
-    static func classify(_ data: Data, for command: CrispControlRequest.Command) -> ResponseResult {
-        guard
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let response = try? JSONDecoder().decode(CrispControlResponse.self, from: data)
-        else { return .invalid }
-        let keys = Set(object.keys)
-        if !response.ok {
-            return keys == ["ok", "error"] && response.error != nil ? .serverFailure : .invalid
+    static func classify(_ data: Data, for _: CrispControlRequest.Command) -> ResponseResult {
+        guard let response = try? JSONDecoder().decode(CrispControlResponse.self, from: data) else {
+            return .invalid
         }
-        switch command {
-        case .list:
-            return keys == ["ok", "displays"] && response.displays != nil ? .success : .invalid
-        case .getBrightness:
-            return keys == ["ok", "display"] && response.display != nil ? .success : .invalid
-        case .setBrightness:
-            let honest = response.status == .accepted
-                && response.execution == .queued
-                && response.verification == .unverified
-            return keys == ["ok", "status", "execution", "verification"] && honest ? .success : .invalid
-        }
+        if response.ok { return .success }
+        return response.error != nil ? .serverFailure : .invalid
     }
 }
