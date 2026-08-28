@@ -249,12 +249,15 @@ final class BrightnessKeyService: @unchecked Sendable {
         // still flows. Keycodes 144/145 are the brightness media keys. Mirrors MonitorControl's
         // dual-path capture, which is why it keeps working in clamshell where a SYSDEFINED-only tap
         // goes dead. (issue #21)
+        // Third-party keyboards in media-key mode (Logitech MX Keys via Logi Options+) send
+        // the brightness pair as F14/F15 (107/113) with no SYSDEFINED event at all; Apple's own
+        // full-size keyboard prints brightness on those two keys too. (issue #69)
         if type.rawValue == CGEventType.keyDown.rawValue {
             let kc = event.getIntegerValueField(.keyboardEventKeycode)
             switch kc {
-            case 144:
+            case 144, 113:
                 return routeBrightnessPress(up: true, event: event)
-            case 145:
+            case 145, 107:
                 return routeBrightnessPress(up: false, event: event)
             default:
                 return Unmanaged.passRetained(event)
