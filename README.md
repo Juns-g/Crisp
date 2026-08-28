@@ -87,6 +87,26 @@ Thank you to the people chipping in toward keeping Crisp signed and notarized:
 
 To keep Keep Awake off on company Macs, push a configuration profile for the `com.crisp.app` domain with `crisp.disableKeepAwake` set to `true`. Crisp reads it at launch and leaves the row out of Tools. A managed value outranks the user's own preferences, so it cannot be switched back on with `defaults write`.
 
+## Automation
+
+Source builds include a minimal `crispctl` target:
+
+```sh
+xcodegen generate && xcodebuild -scheme crispctl -configuration Release
+```
+
+It supports exactly three commands:
+
+```sh
+crispctl displays list
+crispctl brightness get <display-id>
+crispctl brightness set <display-id> <percent>
+```
+
+Crisp must already be running. Display selectors are numeric runtime IDs from `displays list`, and output is JSON by default. `brightness set` is a manual change like using the slider and clears the active preset. A successful request means the change was accepted and queued, not independently verified; it is not retried automatically.
+
+The current public Crisp 1.5.0 release, normal DMG, and Homebrew cask do not include `crispctl`.
+
 ## Building
 
 ```sh

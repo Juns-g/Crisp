@@ -49,6 +49,18 @@ targets:
         LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
         GENERATE_INFOPLIST_FILE: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  crispctl:
+    type: tool
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/crispctl
+      - path: Crisp/Models/CrispControlModel.swift
+    settings:
+      base:
+        PRODUCT_NAME: crispctl
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
   CrispTests:
     type: bundle.unit-test
     platform: macOS
@@ -62,6 +74,7 @@ targets:
       - path: Crisp/Models/VariableRefreshModes.swift
       - path: Crisp/Models/KeyboardShortcut.swift
       - path: Crisp/Models/DisplayPreset.swift
+      - path: Crisp/Models/CrispControlModel.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.crisp.tests
@@ -76,6 +89,11 @@ schemes:
     build:
       targets:
         Crisp: all
+        crispctl: all
     test:
       targets:
         - CrispTests
+  crispctl:
+    build:
+      targets:
+        crispctl: all
