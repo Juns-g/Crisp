@@ -27,7 +27,7 @@ struct DisconnectDisplayRow: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 7)
+                .padding(.vertical, 3)
                 .menuRowHover(isHovered)
                 .onHover { isHovered = $0 }
                 .contentShape(Rectangle())
@@ -143,7 +143,7 @@ private struct DisconnectedDisplayRow: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.vertical, 3)
         .menuRowHover(isHovered)
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }

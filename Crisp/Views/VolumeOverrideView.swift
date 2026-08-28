@@ -27,7 +27,7 @@ struct VolumeOverrideView: View {
                 .controlSize(.small)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.vertical, 3)
             .menuRowHover(isHovered)
             .onHover { isHovered = $0 }
             .help("Force volume control for a monitor that doesn't report it. Crisp can set the volume but not read the current level.")

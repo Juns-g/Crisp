@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # Crisp release script: builds a signed universal DMG with the Command Line
-# Tools only (no Xcode), and optionally publishes the GitHub release and bumps
-# the Homebrew tap. Default is a dry run: it builds and verifies the DMG but
-# publishes nothing. Pass --publish to actually release.
+# Tools only (no Xcode), and optionally publishes the GitHub release. Default
+# is a dry run: it builds and verifies the DMG but publishes nothing. Pass
+# --publish to actually release.
 #
 # Usage:
 #   ./scripts/release.sh v1.0.4 notes.md            # dry run: build DMG only
-#   ./scripts/release.sh v1.0.4 notes.md --publish  # build + release + tap
+#   ./scripts/release.sh v1.0.4 notes.md --publish  # build + release
 #
 # notes.md is the release body (required for --publish; optional for dry run).
 
@@ -24,8 +24,6 @@ cd "$ROOT"
 BUILD="$ROOT/build"
 APP="$BUILD/Crisp.app"
 DMG="$ROOT/Crisp.dmg"
-TAP_REPO="didriksg/homebrew-tap"
-TAP_CASK="Casks/crisp.rb"
 
 # A real release must ship complete translations; the dry run (CI on every PR)
 # skips this so adding an English string doesn't block contributors — the
@@ -106,7 +104,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>LSUIElement</key><true/>
 	<key>NSHumanReadableCopyright</key><string>Crisp - Free &amp; Open Source</string>
 	<key>NSAppleEventsUsageDescription</key><string>Crisp uses System Events to switch Dark Mode with the system's animated transition.</string>
-	<key>SUFeedURL</key><string>https://didriksg.github.io/Crisp/appcast.xml</string>
+	<key>SUFeedURL</key><string>https://crispmac.app/appcast.xml</string>
 	<key>SUPublicEDKey</key><string>3UT7wZoXDzrAhwCMVS3DoPt2lcya9H/cvlyXliuPuhM=</string>
 	<key>SUEnableAutomaticChecks</key><true/>
 	<key>SUVerifyUpdateBeforeExtraction</key><true/>
@@ -165,6 +163,28 @@ cp -R "$APP" "$STAGE/"; ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
 hdiutil create -volname Crisp -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 
+# Sign, notarize and staple the DMG itself, not just the app inside it. The app
+# is already stapled above, so it runs offline once dragged across, but a
+# downloaded DMG carries the quarantine flag and Gatekeeper assesses the disk
+# image when it is opened. Order matters and all three steps are needed:
+#   - unsigned + ticket  -> "rejected: no usable signature" (a ticket alone is
+#     not enough; spctl has no signature to attach it to)
+#   - signed, no ticket  -> "rejected: Unnotarized Developer ID"
+#   - signed + notarized + stapled -> accepted, and offline, since the ticket
+#     travels in the file instead of needing a lookup with Apple.
+# codesign and stapler each rewrite the DMG, so both must land before the
+# sha256 below: that hash is what the Homebrew cask pins, and a mismatch fails
+# every brew install.
+if [ -n "${CRISP_SIGN_ID:-}" ] && [ -n "${CRISP_NOTARY_PROFILE:-}" ]; then
+  echo "==> Signing the DMG…"
+  codesign --force --timestamp --sign "$CRISP_SIGN_ID" "$DMG"
+  echo "==> Notarizing the DMG…"
+  xcrun notarytool submit "$DMG" --keychain-profile "$CRISP_NOTARY_PROFILE" --wait
+  xcrun stapler staple "$DMG"
+  xcrun stapler validate "$DMG"
+  spctl -a -t open --context context:primary-signature "$DMG"
+fi
+
 SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
 echo "==> Built $DMG"
 echo "    version $(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist"), archs $(lipo -archs "$APP/Contents/MacOS/Crisp"), sha256 $SHA"
@@ -196,16 +216,8 @@ cp "$DMG" "$APPCAST_STAGE/Crisp.dmg"
   --link "https://github.com/didriksg/Crisp/releases" \
   -o "$ROOT/docs/appcast.xml" "$APPCAST_STAGE"
 
-echo "==> Bumping Homebrew tap…"
-SHA_FILE=$(gh api "repos/$TAP_REPO/contents/$TAP_CASK" --jq '.sha')
-gh api "repos/$TAP_REPO/contents/$TAP_CASK" --jq '.content' | base64 -d \
-  | sed -e "s/version \"[^\"]*\"/version \"${VERSION}\"/" \
-        -e "s/sha256 \"[^\"]*\"/sha256 \"${SHA}\"/" > "$BUILD/crisp.rb"
-gh api -X PUT "repos/$TAP_REPO/contents/$TAP_CASK" \
-  -f message="crisp ${VERSION}" \
-  -f content="$(base64 -i "$BUILD/crisp.rb")" \
-  -f sha="$SHA_FILE" --jq '.commit.sha' >/dev/null
-
-echo "==> Released ${TAG} and updated the tap."
+echo "==> Released ${TAG}."
 echo "==> ACTION REQUIRED: commit and push docs/appcast.xml (+ project.yml bump)."
 echo "    In-app updates go live only once GitHub Pages serves the new appcast."
+echo "    homebrew/cask picks the release up by autobump (runs every 3 hours);"
+echo "    if it hasn't after a day: brew bump-cask-pr crisp --version ${VERSION}"

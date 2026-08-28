@@ -650,7 +650,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         blocks.append(toolshead)
         let toolsA = block("toolsA", isOpen: { state.showTools }) {
             VStack(alignment: .leading, spacing: 0) {
-                KeepAwakeRow()
+                if !KeepAwakeService.isDisabledByPolicy {
+                    KeepAwakeRow()
+                }
                 ExpandableRowStateful(icon: "display.2", iconActive: false,
                                       label: "Virtual Displays", state: state, key: \.showVirtualDisplays)
             }

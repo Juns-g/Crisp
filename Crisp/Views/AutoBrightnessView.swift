@@ -37,7 +37,7 @@ struct AutoBrightnessView: View {
                     .accessibilityValue(service.isEnabled ? "Syncing with built-in display brightness" : "Off")
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.vertical, 3)
 
             // Relative vs absolute mapping. Revealed with the panel spring while
             // tracking is on, instead of popping in at full height.
@@ -55,7 +55,7 @@ struct AutoBrightnessView: View {
                     .labelsHidden()
                     .controlSize(.small)
             }
-            .padding(.vertical, 7)
+            .padding(.vertical, 3)
             .padding(.trailing, 12)
             // Align the label under the parent's title: 12 pad + 26 icon + 8 spacing.
             .padding(.leading, 46)

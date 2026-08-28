@@ -15,7 +15,7 @@ Sharp HiDPI scaling, DDC brightness, presets and virtual displays.
 [![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)](#requirements)
 [![License](https://img.shields.io/github/license/didriksg/Crisp?color=3fb950)](LICENSE)
 
-[Website](https://didriksg.github.io/Crisp/) · [Crisp vs BetterDisplay & Lunar](https://didriksg.github.io/Crisp/crisp-vs-betterdisplay.html) · [Fix a blurry external monitor](https://didriksg.github.io/Crisp/fix-blurry-external-monitor-macos.html) · [中文](https://didriksg.github.io/Crisp/zh.html)
+[Website](https://crispmac.app/) · [Crisp vs BetterDisplay & Lunar](https://crispmac.app/crisp-vs-betterdisplay.html) · [Fix a blurry external monitor](https://crispmac.app/fix-blurry-external-monitor-macos.html) · [中文](https://crispmac.app/zh.html)
 
 </div>
 
@@ -30,10 +30,12 @@ https://github.com/user-attachments/assets/90a62808-84d2-40d6-8563-0b282b9b4b6d
 ## Install
 
 ```sh
-brew install --cask didriksg/tap/crisp
+brew install --cask crisp
 ```
 
 Or download [`Crisp.dmg`](https://github.com/didriksg/Crisp/releases/latest/download/Crisp.dmg) and drag Crisp to Applications. Every release is signed and notarized by Apple, so it opens with a normal double-click.
+
+Installed from `didriksg/tap` earlier? `brew upgrade` moves you to the main cask by itself; `brew untap didriksg/tap` afterwards is optional cleanup.
 
 ## Features
 
@@ -52,7 +54,7 @@ Or download [`Crisp.dmg`](https://github.com/didriksg/Crisp/releases/latest/down
 
 ## How does it compare?
 
-BetterDisplay and Lunar are excellent, deeper tools. Crisp keeps the everyday essentials free: flexible HiDPI scaling, hardware brightness, presets, disconnecting displays, color adjustments, and auto-brightness sync. See the full side-by-side: [Crisp vs BetterDisplay, Lunar & MonitorControl](https://didriksg.github.io/Crisp/crisp-vs-betterdisplay.html).
+BetterDisplay and Lunar are excellent, deeper tools. Crisp keeps the everyday essentials free: flexible HiDPI scaling, hardware brightness, presets, disconnecting displays, color adjustments, and auto-brightness sync. See the full side-by-side: [Crisp vs BetterDisplay, Lunar & MonitorControl](https://crispmac.app/crisp-vs-betterdisplay.html).
 
 ## Support
 
@@ -70,6 +72,7 @@ Thank you to the people chipping in toward keeping Crisp signed and notarized:
 
 - **Barry** ([@BarryBarrywu](https://github.com/BarryBarrywu))
 - **[@kuldipmaharjan](https://github.com/kuldipmaharjan)**
+- **Volodymyr Dombrovskyi** ([@rebelvg](https://github.com/rebelvg))
 
 ## Requirements
 
@@ -79,6 +82,10 @@ Thank you to the people chipping in toward keeping Crisp signed and notarized:
 
 - **Administrator password** (one time, per monitor): needed only when you turn on smooth scaling, which installs a display override file into `/Library/Displays/Contents/Resources/Overrides` that macOS protects. Regular HiDPI scaling and everything else are password-free.
 - **Accessibility** (System Settings > Privacy & Security > Accessibility): needed only if you turn on Brightness Keys, which routes the keyboard brightness keys to other displays (follow the pointer, all connected, or a chosen subset). Without it, everything else still works; the keys just control the built-in display as usual.
+
+## Managed Macs
+
+To keep Keep Awake off on company Macs, push a configuration profile for the `com.crisp.app` domain with `crisp.disableKeepAwake` set to `true`. Crisp reads it at launch and leaves the row out of Tools. A managed value outranks the user's own preferences, so it cannot be switched back on with `defaults write`.
 
 ## Building
 

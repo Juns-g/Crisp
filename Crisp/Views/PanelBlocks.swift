@@ -175,7 +175,7 @@ struct KeepAwakeRow: View {
         .toggleStyle(.switch)
         .controlSize(.small)
         .padding(.horizontal, 12)
-        .padding(.vertical, 5)
+        .padding(.vertical, 3)
     }
 }
 
@@ -205,7 +205,7 @@ struct PanelFooterBlock: View {
                 Spacer()
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 5)
+            .padding(.vertical, 3)
             .menuRowHover(quitHovered)
             .contentShape(Rectangle())
             .onTapGesture {

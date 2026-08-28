@@ -126,12 +126,6 @@ struct DetailTailBlock: View {
         VStack(alignment: .leading, spacing: 0) {
             SectionDivider()
 
-            // Set as main display
-            MainDisplayView(display: display)
-
-            // Disconnect this physical display (Apple Silicon only; hidden for the last screen)
-            DisconnectDisplayRow(display: display)
-
             // Manual volume enable for externals whose DDC volume probe never
             // succeeded (issue #57); hidden once the probe confirms support.
             VolumeOverrideView(display: display)
@@ -152,6 +146,15 @@ struct DetailTailBlock: View {
 
             // Notch management (built-in with notch only)
             NotchView(display: display)
+
+            // Set as main display. Grouped with Disconnect at the foot of the section:
+            // both act on the display as a whole, unlike the settings above them.
+            MainDisplayView(display: display)
+
+            // Disconnect this physical display (Apple Silicon only; hidden for the last
+            // screen). Always last: it's the one row that removes the section you're in,
+            // so it sits below every setting rather than between them.
+            DisconnectDisplayRow(display: display)
         }
     }
 }
