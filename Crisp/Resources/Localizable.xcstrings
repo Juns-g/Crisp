@@ -44,6 +44,16 @@
         }
       }
     },
+    "%@ (Crisp)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@（Crisp）"
+          }
+        }
+      }
+    },
     "%@ color" : {
       "localizations" : {
         "zh-Hans" : {

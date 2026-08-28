@@ -161,6 +161,11 @@ class DisplayManager: ObservableObject {
             BrightnessBoostService.shared.invalidate(for: $0)
             VolumeService.shared.invalidate(for: $0)
         }
+        // A mirrored physical unplugged, or its virtual master dying, must drop
+        // the mirror bookkeeping (and the orphan virtual with it). Checked against
+        // the online list, not removedIDs: the mirror virtual is never in
+        // `displays` (skipped below), so its death would not show up there.
+        MirroredModeService.shared.reconcile(online: newIDSet)
 
         // Diff-based refresh: keep existing DisplayInfo objects (preserves @Published state)
         let existingByID = Dictionary(uniqueKeysWithValues: displays.map { ($0.displayID, $0) })
@@ -170,6 +175,9 @@ class DisplayManager: ObservableObject {
 
         for i in 0..<Int(displayCount) {
             let id = displayIDs[i]
+            // A mirror virtual (#65) is a rendering trick, not a display: keep it out
+            // so no view, preset, brightness path, or the arranger ever sees one.
+            if MirroredModeService.isMirrorVirtual(id) { continue }
             if let existing = existingByID[id] {
                 updatedDisplays.append(existing)
             } else {
@@ -241,6 +249,9 @@ class DisplayManager: ObservableObject {
         // skips any display whose soft reconnect is still mid-blink, so this can't race a
         // toggle's own retry loop even though the blink's reconfig events land here mid-toggle.
         Task { await PhysicalDisplayToggleService.shared.recoverStrandedSoftReconnect() }
+        // Same idea for mirror-mode strays: unmirror any panel a crashed session
+        // left mirroring one of our virtual displays. Cheap no-op otherwise.
+        MirroredModeService.shared.recoverStrandedMirrors()
         // A physical unplug bypasses disconnect()'s last-screen guard: internal disabled via
         // Crisp + external cable pulled = zero active displays, all black. Bring one back.
         PhysicalDisplayToggleService.shared.restoreIfNoActiveDisplay()
