@@ -210,7 +210,7 @@ for attempt in 0..<20 {
 }
 guard let target = hidpiMode else {
     teardown()
-    fail("looks-like \(logicalW)x\(logicalH) HiDPI mode never enumerated on the virtual display — the cap may apply to virtual framebuffers too")
+    fail("looks-like \(logicalW)x\(logicalH) HiDPI mode never enumerated on the virtual display, the cap may apply to virtual framebuffers too")
 }
 
 var cfg: CGDisplayConfigRef?
@@ -239,7 +239,7 @@ if CGDisplayMirrorsDisplay(physical) == vdID {
     print("Look at the screen: is it the \(logicalW)x\(logicalH) desktop, sharp, full-screen?")
     print("Drag a window, check refresh feel, then judge text sharpness up close.")
 } else {
-    print("MIRROR DID NOT STICK — WindowServer reports no mirror on the physical display.")
+    print("MIRROR DID NOT STICK: WindowServer reports no mirror on the physical display.")
 }
 print("\nPress Enter (or Ctrl-C) to tear down and restore.")
 _ = readLine()

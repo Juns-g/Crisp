@@ -202,14 +202,26 @@ final class PresetService: ObservableObject, @unchecked Sendable {
                         && currentMode?.height == mode.height
                         && currentMode?.isHiDPI == mode.isHiDPI
                     if !alreadyActive {
-                        let ok = await ResolutionService.shared.setDisplayMode(mode, for: displayID)
-                        if ok {
+                        // A real mode while the panel is a mirror target (#65): unmirror
+                        // first, or WindowServer redirects the change to the virtual source.
+                        // A failed unmirror keeps the mirror up; leave the resolution alone.
+                        var unmirrored = true
+                        if MirroredModeService.shared.isActive(for: displayID) {
+                            unmirrored = await MirroredModeService.shared.restore(display: display)
+                        }
+                        if unmirrored, await ResolutionService.shared.setDisplayMode(mode, for: displayID) {
                             // refreshDisplays() doesn't re-read the current mode for
                             // already-present displays, so write it back here (as the manual
                             // switch does) or the panel keeps showing the old resolution.
                             display.currentDisplayMode = mode
                         }
                     }
+                } else if hiDPI, MirroredModeService.beyondCapStops(for: display)
+                            .contains(where: { $0.width == w && $0.height == h }) {
+                    // A beyond-cap size captured while mirrored (#65): it never
+                    // enumerates on the physical panel, so the lookup above cannot
+                    // find it. Mirror mode is the only route there.
+                    await MirroredModeService.shared.apply(display: display, width: w, height: h)
                 }
             }
 

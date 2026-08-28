@@ -258,13 +258,21 @@ final class DisplayModeController: ObservableObject {
                 // Leaving a mirrored stop for a real mode: unmirror and destroy
                 // first, otherwise the physical display is still a mirror target
                 // and the mode change would be redirected to the virtual source.
+                // A failed unmirror keeps the mirror up (restore leaves the
+                // bookkeeping alone then), so report failure instead of pushing
+                // a mode change at a panel that is still a target.
+                var unmirrored = true
                 if MirroredModeService.shared.isActive(for: displayID) {
-                    await MirroredModeService.shared.restore(display: display)
+                    unmirrored = await MirroredModeService.shared.restore(display: display)
                 }
-                success = await ResolutionService.shared.setDisplayMode(mode, for: displayID)
-                if !success {
-                    try? await Task.sleep(nanoseconds: 200_000_000)
+                if unmirrored {
                     success = await ResolutionService.shared.setDisplayMode(mode, for: displayID)
+                    if !success {
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                        success = await ResolutionService.shared.setDisplayMode(mode, for: displayID)
+                    }
+                } else {
+                    success = false
                 }
             }
             if success {
@@ -361,18 +369,14 @@ final class DisplayModeController: ObservableObject {
         // reach the CG apply path: switchTo routes them to MirroredModeService
         // (a hidden virtual display renders the 2x backing, the panel hardware-
         // mirrors it and downscales on scanout). Gated on the dense ladder being
-        // live, like the rest of smooth scaling; on uncapped panels the filter
-        // yields nothing and the slider is exactly what it was.
-        if !display.isBuiltin, smoothModesPresent {
-            let hidpiTop = display.availableModes.filter { $0.isHiDPI }.map(\.width).max() ?? 0
-            if hidpiTop > 0 {
-                ladder += HiDPIService.shared
-                    .smoothScaledLogicalSizes(nativeWidth: nativeW, nativeHeight: nativeH)
-                    .filter { $0.width > hidpiTop && $0.width < nativeW }
-                    .map { DisplayMode(id: -Int32($0.width), width: $0.width, height: $0.height,
-                                       pixelWidth: $0.width * 2, pixelHeight: $0.height * 2,
-                                       refreshRate: 0, isHiDPI: true, isNative: false) }
-            }
+        // live, like the rest of smooth scaling; which panels get stops at all is
+        // MirroredModeService.beyondCapStops's call (empty on uncapped panels, so
+        // the slider is exactly what it was).
+        if smoothModesPresent {
+            ladder += MirroredModeService.beyondCapStops(for: display)
+                .map { DisplayMode(id: -Int32($0.width), width: $0.width, height: $0.height,
+                                   pixelWidth: $0.width * 2, pixelHeight: $0.height * 2,
+                                   refreshRate: 0, isHiDPI: true, isNative: false) }
         }
         return ladder.sorted { $0.width == $1.width ? $0.height < $1.height : $0.width < $1.width }
     }

@@ -120,30 +120,64 @@ final class MirroredModeService: ObservableObject {
     func restore(physicalID: CGDirectDisplayID) async -> Bool {
         guard let vdID = active[physicalID]?.displayID else { return true }
         Self.log.info("restore: unmirroring physical \(physicalID), destroying virtual \(vdID)")
-        let unmirrored = await MirrorService.shared.disableMirror(displayID: physicalID)
+        // Only a confirmed unmirror may let the virtual go. disableMirror's false
+        // covers both a refused transaction and a slow one still in flight
+        // (runWithTimeout's fallback), and in either case the panel may still be
+        // mirroring this virtual; keep the entry, so the master stays alive and
+        // the next slider move or reconcile() gets another go.
+        guard await MirrorService.shared.disableMirror(displayID: physicalID) else {
+            Self.log.error("restore: unmirror of physical \(physicalID) failed, keeping virtual \(vdID)")
+            return false
+        }
         // Dropping the last reference starts WindowServer's async teardown.
         active.removeValue(forKey: physicalID)
         activePhysicalIDs.remove(physicalID)
         await waitForDisplayOffline(vdID)
-        return unmirrored
+        return true
     }
 
-    /// Reacts to a display leaving the online list (called from
+    /// Keeps the bookkeeping truthful against the fresh online list (called from
     /// DisplayManager.refreshDisplays). Two cases matter: the mirrored physical
-    /// was unplugged (nothing to unmirror anymore, let the orphan virtual die),
-    /// or our virtual died without us (WindowServer collapses the mirror set
-    /// itself when a master disappears; drop the stale entry so the state stays
-    /// truthful and the next slider move takes the normal create path).
-    func handleDisplayRemoval(_ removedID: CGDirectDisplayID) {
-        if active[removedID] != nil {
-            active.removeValue(forKey: removedID)
-            activePhysicalIDs.remove(removedID)
-            return
-        }
-        if let physicalID = active.first(where: { $0.value.displayID == removedID })?.key {
+    /// was unplugged (nothing to unmirror anymore, dropping the entry lets the
+    /// orphan virtual die), or our virtual died without us (WindowServer
+    /// collapses the mirror set itself when a master disappears; dropping the
+    /// stale entry makes the next slider move take the normal create path).
+    /// Set-based rather than per removed ID because the mirror virtual is never
+    /// in `DisplayManager.displays`, so its death never shows in that diff.
+    func reconcile(online: Set<CGDirectDisplayID>) {
+        for (physicalID, virtualDisplay) in active
+        where !online.contains(physicalID) || !online.contains(virtualDisplay.displayID) {
             active.removeValue(forKey: physicalID)
             activePhysicalIDs.remove(physicalID)
         }
+    }
+
+    /// A Crisp mirror virtual, ours or a stray from a crashed session: the shared
+    /// vendor stamp plus the MIRR serial. DisplayManager keeps these out of
+    /// `displays`, so no view, preset, or brightness path ever sees one.
+    static func isMirrorVirtual(_ displayID: CGDirectDisplayID) -> Bool {
+        CGDisplayVendorNumber(displayID) == VirtualDisplayService.crispVirtualVendorID
+            && CGDisplaySerialNumber(displayID) == mirrorSerialMarker
+    }
+
+    /// The looks-like sizes a display can only reach through mirror mode: every
+    /// smooth-scaling grid step between the widest HiDPI mode WindowServer let
+    /// the panel enumerate and native. Empty when the whole ladder enumerated
+    /// (nothing is capped) and for the built-in panel. One definition for the
+    /// slider, presets, and the virtual's mode list, so they can never disagree.
+    static func beyondCapStops(for display: DisplayInfo) -> [(width: Int, height: Int)] {
+        guard !display.isBuiltin else { return [] }
+        let (nativeW, nativeH) = display.nativeResolution
+        guard nativeW > 0, nativeH > 0 else { return [] }
+        // ponytail: ultrawide-only (21:9 and wider) until a 16:9 4K or 5K panel is
+        // verified with the mirror. Those are capped too (7680 and 10240 backings)
+        // and would otherwise grow the same stops, untested. Drop this guard to widen.
+        guard Double(nativeW) / Double(nativeH) >= 2.0 else { return [] }
+        let hidpiTop = display.availableModes.filter { $0.isHiDPI }.map(\.width).max() ?? 0
+        guard hidpiTop > 0 else { return [] }
+        return HiDPIService.shared
+            .smoothScaledLogicalSizes(nativeWidth: nativeW, nativeHeight: nativeH)
+            .filter { $0.width > hidpiTop && $0.width < nativeW }
     }
 
     /// Frees any physical display left mirroring a STRAY Crisp mirror virtual
@@ -231,10 +265,7 @@ final class MirroredModeService: ObservableObject {
         // Every beyond-cap stop on the smooth-scaling grid, in the same
         // (rotated) space as availableModes and the slider; the requested size
         // is force-included in case it sits off that grid.
-        let hidpiTop = display.availableModes.filter { $0.isHiDPI }.map(\.width).max() ?? 0
-        var stops = HiDPIService.shared
-            .smoothScaledLogicalSizes(nativeWidth: nativeW, nativeHeight: nativeH)
-            .filter { $0.width > hidpiTop && $0.width < nativeW }
+        var stops = Self.beyondCapStops(for: display)
         if !stops.contains(where: { $0.width == mustInclude.width && $0.height == mustInclude.height }) {
             stops.append((width: mustInclude.width, height: mustInclude.height))
         }
@@ -261,7 +292,7 @@ final class MirroredModeService: ObservableObject {
                                               refreshRate: rate))
         }
         guard !modes.isEmpty else {
-            Self.log.error("createMirrorVirtual: no beyond-cap stops (ladder top \(hidpiTop), native \(nativeW)x\(nativeH))")
+            Self.log.error("createMirrorVirtual: no beyond-cap stops (native \(nativeW)x\(nativeH))")
             return nil
         }
 
