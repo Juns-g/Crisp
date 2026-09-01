@@ -23,6 +23,12 @@ ships as a result. Read this before touching DDCService or chasing a
 - `scripts/ddc-probe.swift`: read-only. Lists displays, channels, and
   raw VCP 0x10 replies with header/checksum verdicts. Run this FIRST when
   a slider goes dead; it names the failure in seconds.
+- In-app tell for a user's Mac (no scripts): `defaults write com.crisp.app
+  crisp.showBrightnessControlMode -bool true`, relaunch Crisp. A caption
+  above each brightness slider then reads DDC (green, a write or read
+  succeeded), Software (orange, the three-failure latch flipped to gamma),
+  or System for the built-in; nothing until the first write settles it.
+  `-bool false` or `defaults delete` puts it back. Not in 1.5.0.
 - `scripts/ddc-write-probe.swift [aoc|dell] <value ... | burst>`: sends
   real brightness writes (visible on the monitor). `burst` simulates a
   slider drag (61 writes, 50ms pacing).

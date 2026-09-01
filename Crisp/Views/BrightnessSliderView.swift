@@ -72,10 +72,19 @@ struct BrightnessSliderView: View {
     // display->slider sync pull it back down through the fade.
     @State private var clickGliding: Bool = false
 
+    /// Debug switch: `defaults write com.crisp.app crisp.showBrightnessControlMode -bool true`
+    /// (relaunch Crisp) shows the mode row above every brightness slider, so a support
+    /// thread can tell DDC from software gamma without opening the monitor's menu. Read
+    /// once at launch, like `crisp.disableKeepAwake`; no Settings row on purpose.
+    /// ponytail: reads the DDC latch only. An HDR-dimmed external writes gamma but still
+    /// shows "DDC"; fold in BrightnessService's hdrDimmedDisplays if that ever misleads.
+    static let showControlMode = UserDefaults.standard.bool(forKey: "crisp.showBrightnessControlMode")
+
     var body: some View {
         VStack(spacing: 2) {
-            // Mode indicator row
-            if !compact {
+            // Mode indicator row: normally only in non-compact use (none today), or on
+            // every slider while the debug switch above is set.
+            if !compact || Self.showControlMode {
             HStack(spacing: 4) {
                 Spacer()
                 if display.isBuiltin {
