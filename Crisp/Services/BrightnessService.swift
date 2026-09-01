@@ -4,6 +4,7 @@ import IOKit.graphics
 import CoreGraphics
 // For CGDisplayCreateUUIDFromDisplayID (ApplicationServices, not CoreGraphics).
 import AppKit
+import os.log
 
 @_silgen_name("CGDisplayIOServicePort")
 private func CGDisplayIOServicePort(_ display: CGDirectDisplayID) -> io_service_t
@@ -254,6 +255,8 @@ final class BrightnessService: @unchecked Sendable {
     /// nil  = not yet determined
     /// true = DDC write succeeded at least once
     /// false = DDC write has failed; use software (gamma) fallback
+    private static let log = Logger(subsystem: "com.crisp.app", category: "brightness")
+
     private var ddcAvailable: [CGDirectDisplayID: Bool] = [:]
     private let ddcAvailableLock = NSLock()
 
@@ -321,6 +324,9 @@ final class BrightnessService: @unchecked Sendable {
                     self.ddcAvailable[displayID] = true
                     self.ddcMaxBrightness[displayID] = result.max
                     self.ddcAvailableLock.unlock()
+                    if firstRead {
+                        Self.log.notice("display \(displayID, privacy: .public): DDC brightness read ok \(result.current, privacy: .public)/\(result.max, privacy: .public), brightness over DDC")
+                    }
                     Task { @MainActor in
                         // DDC reads quantize (many panels expose a coarser internal
                         // scale than they accept), so a value we just set can read back
@@ -465,8 +471,11 @@ final class BrightnessService: @unchecked Sendable {
     private var hdrDimmedDisplays: Set<CGDirectDisplayID> = []
 
     func setHDRSoftwareDimming(_ on: Bool, for displayID: CGDirectDisplayID) {
-        ddcAvailableLock.withLock {
-            if on { hdrDimmedDisplays.insert(displayID) } else { hdrDimmedDisplays.remove(displayID) }
+        let changed = ddcAvailableLock.withLock {
+            on ? hdrDimmedDisplays.insert(displayID).inserted : hdrDimmedDisplays.remove(displayID) != nil
+        }
+        if changed {
+            Self.log.notice("display \(displayID, privacy: .public): HDR mode \(on ? "on, brightness routed to software gamma" : "off, brightness back on DDC", privacy: .public)")
         }
     }
 
@@ -562,7 +571,14 @@ final class BrightnessService: @unchecked Sendable {
         ) { [weak self] success in
             guard let self else { return }
             if success {
-                self.ddcAvailableLock.withLock { self.ddcAvailable[displayID] = true }
+                let firstSuccess = self.ddcAvailableLock.withLock { () -> Bool in
+                    let was = self.ddcAvailable[displayID]
+                    self.ddcAvailable[displayID] = true
+                    return was != true
+                }
+                if firstSuccess {
+                    Self.log.notice("display \(displayID, privacy: .public): DDC brightness write acknowledged, brightness over DDC")
+                }
                 self.ddcPumpLock.withLock { self.ddcFailStreak[displayID] = 0 }
             } else {
                 let streak = self.ddcPumpLock.withLock { () -> Int in
@@ -574,6 +590,9 @@ final class BrightnessService: @unchecked Sendable {
                 // mid-drag (DDC + gamma dimming stack up and later "reset" visibly).
                 // Only give up on DDC after 3 consecutive failures.
                 if streak >= 3 {
+                    if streak == 3 {
+                        Self.log.notice("display \(displayID, privacy: .public): 3 consecutive DDC brightness writes failed, brightness now software gamma until reconnect")
+                    }
                     self.ddcAvailableLock.withLock { self.ddcAvailable[displayID] = false }
                     DispatchQueue.main.async { [weak self] in
                         self?.setSoftwareBrightness(percent, for: displayID)

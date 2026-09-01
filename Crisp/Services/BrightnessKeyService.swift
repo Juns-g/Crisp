@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import ApplicationServices
+import os.log
 
 // MARK: - C Event Tap Callback
 
@@ -64,6 +65,9 @@ final class BrightnessKeyService: @unchecked Sendable {
     /// Volume keys use the same 1/16 step as macOS's own volume control.
     private nonisolated static let volumeStep: Double = 100.0 / 16.0
 
+    /// Tap lifecycle at notice: #57 lost a round trip on a silently dead tap.
+    private nonisolated static let log = Logger(subsystem: "com.crisp.app", category: "keys")
+
     // MARK: - Start / Stop
 
     /// Installs the event tap. Requires Accessibility permissions.
@@ -107,12 +111,14 @@ final class BrightnessKeyService: @unchecked Sendable {
         self.runLoopSource = source
         stopRetrying()
         startTrustWatchdog()
+        Self.log.notice("key tap armed")
     }
 
     /// Removes the event tap and releases the retained self reference.
     func stop() {
         stopTrustWatchdog()
         if let tap = eventTap {
+            Self.log.notice("key tap removed")
             CGEvent.tapEnable(tap: tap, enable: false)
             if let source = runLoopSource {
                 CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
@@ -139,6 +145,7 @@ final class BrightnessKeyService: @unchecked Sendable {
         // ponytail: unbounded 2s poll; tapCreate is cheap and it stops the instant the grant
         // lands. The activation observer just makes it feel instant when the user clicks back in.
         if pollTimer == nil {
+            Self.log.notice("key tap refused (Accessibility not granted for this build?), retrying every 2 s")
             pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
                 // Scheduled from the main actor, so it fires on the main run loop.
                 MainActor.assumeIsolated {
@@ -197,6 +204,7 @@ final class BrightnessKeyService: @unchecked Sendable {
             MainActor.assumeIsolated {
                 guard let self else { timer.invalidate(); return }
                 guard self.eventTap != nil, !AXIsProcessTrusted() else { return }
+                Self.log.notice("Accessibility trust dropped, tearing the key tap down")
                 self.disabledAt = ProcessInfo.processInfo.systemUptime
                 self.stop()
                 self.retryUntilArmed()
@@ -233,6 +241,7 @@ final class BrightnessKeyService: @unchecked Sendable {
         // just a few seconds later, without ever risking the freeze. (kome)
         if type.rawValue == CGEventType.tapDisabledByTimeout.rawValue ||
            type.rawValue == CGEventType.tapDisabledByUserInput.rawValue {
+            Self.log.notice("key tap disabled by the system (\(type.rawValue == CGEventType.tapDisabledByTimeout.rawValue ? "timeout" : "user input", privacy: .public)), re-arming after settle")
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.disabledAt = ProcessInfo.processInfo.systemUptime

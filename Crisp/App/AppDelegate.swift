@@ -110,9 +110,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // hidden once trust settles true). Re-check a couple of times as trust settles and arm
             // if it has; start() is idempotent, and this is bounded so users who never granted
             // don't poll forever. (upgrade zombie)
+            // Logged so a support capture shows the #57 case: System Settings lists
+            // Crisp as allowed, but the grant belongs to a differently signed build.
+            Self.log.notice("Accessibility not trusted at launch, key tap not started; re-checking at 1 s and 3 s")
             for delay in [1.0, 3.0] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    if AXIsProcessTrusted() { BrightnessKeyService.shared.start() }
+                    if AXIsProcessTrusted() {
+                        BrightnessKeyService.shared.start()
+                    } else if delay == 3.0 {
+                        Self.log.notice("Accessibility still not trusted after 3 s, brightness keys stay off until armed from the panel")
+                    }
                 }
             }
         }

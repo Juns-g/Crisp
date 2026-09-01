@@ -20,9 +20,26 @@ ships as a result. Read this before touching DDCService or chasing a
   display is in HDR mode (`hdrDimmedDisplays`, pushed by
   BrightnessBoostService): a DisplayHDR monitor owns its luminance and
   silently discards DDC brightness writes while still acking them.
+- The unified log, subsystem `com.crisp.app`, categories `ddc`,
+  `brightness`, `volume`, `keys`. Channel pairing per display and the
+  strategy it took, every probe reply or its failure class (I2C error,
+  bad header with the first six bytes, bad checksum, max 0), writes that
+  failed all three attempts, the three-failure latch to gamma, HDR
+  routing, read quarantine start and expiry, the map flush on
+  reconfiguration, any single I2C op over 500 ms, and the key tap
+  lifecycle. Per-write chatter sits at debug (memory only). The bug form
+  asks reporters for `log show --last 30m --predicate 'subsystem ==
+  "com.crisp.app"' --style compact`. Read that capture before asking
+  questions; #14, #57 and #72 were each one capture's worth.
 - `scripts/ddc-probe.swift`: read-only. Lists displays, channels, and
   raw VCP 0x10 replies with header/checksum verdicts. Run this FIRST when
   a slider goes dead; it names the failure in seconds.
+- In-app tell for a user's Mac (no scripts): `defaults write com.crisp.app
+  crisp.showBrightnessControlMode -bool true`, relaunch Crisp. A caption
+  above each brightness slider then reads DDC (green, a write or read
+  succeeded), Software (orange, the three-failure latch flipped to gamma),
+  or System for the built-in; nothing until the first write settles it.
+  `-bool false` or `defaults delete` puts it back. Not in 1.5.0.
 - `scripts/ddc-write-probe.swift [aoc|dell] <value ... | burst>`: sends
   real brightness writes (visible on the monitor). `burst` simulates a
   slider drag (61 writes, 50ms pacing).
