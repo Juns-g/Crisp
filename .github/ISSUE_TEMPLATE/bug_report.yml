@@ -64,3 +64,13 @@ body:
       description: Screenshots, error messages, or anything unusual about your setup.
     validations:
       required: false
+  - type: textarea
+    id: crisp-log
+    attributes:
+      label: Crisp log
+      description: |
+        For anything about brightness, volume, DDC, or the brightness keys, this is the most useful thing you can attach. Reproduce the problem first, then run this in Terminal and drag the file it creates into this field:
+        `log show --last 30m --predicate 'subsystem == "com.crisp.app"' --style compact > ~/Desktop/crisp-log.txt`
+        The log stays on your Mac until you attach it. It lists display models and DDC commands, no personal data. Empty on Crisp 1.5.0 and older.
+    validations:
+      required: false

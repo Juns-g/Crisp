@@ -4,6 +4,7 @@ import CoreGraphics
 import IOKit
 import IOKit.i2c
 import IOKit.graphics
+import os.log
 
 @_silgen_name("CGDisplayIOServicePort")
 private func CGDisplayIOServicePort(_ display: CGDirectDisplayID) -> io_service_t
@@ -20,6 +21,23 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     static let brightnessVCP: UInt8 = 0x10
     static let contrastVCP: UInt8   = 0x12
     static let volumeVCP: UInt8     = 0x62
+
+    /// Diagnostics for support threads. Transitions and failures go out at
+    /// notice/error (persisted; reporters run `log show --predicate
+    /// 'subsystem == "com.crisp.app"'`), per-write chatter at debug (memory
+    /// only). Display IDs and vendor/product pair with the pairing lines;
+    /// serials never appear.
+    private static let log = Logger(subsystem: "com.crisp.app", category: "ddc")
+    /// A single I2C op slower than this is logged at notice (issue #72: 12 s reads).
+    private static let slowOpThresholdMs = 500.0
+
+    private static func millisSince(_ start: DispatchTime) -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+    }
+
+    private static func hex(_ code: UInt8) -> String { String(format: "0x%02X", code) }
+    /// Last logged pairing outcome, guarded by avServiceLock; reset on the map flush.
+    private var lastPairingSummary = ""
     static let powerVCP: UInt8      = 0xD6
 
     private let ddcQueue = DispatchQueue(label: "com.crisp.ddc", qos: .userInitiated)
@@ -146,6 +164,36 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         }
         let result = DDCServiceMatcher.match(services: identities, displays: displays)
 
+        // Log the pairing once per outcome: with no channel at all the walk
+        // re-runs on every DDC op, and six identical lines per probe help nobody.
+        var lines: [(error: Bool, text: String)] = []
+        for display in displays {
+            let vendorProduct = String(format: "vendor 0x%04X product 0x%04X",
+                                       display.identity.vendor, display.identity.product)
+            if let index = result.byDisplayID[display.id] {
+                let byIdentity = identities[index].map {
+                    $0.vendor == display.identity.vendor && $0.product == display.identity.product
+                } ?? false
+                lines.append((false, "pairing: display \(display.id) (\(vendorProduct)) -> channel \(index) of \(ordered.count) by \(byIdentity ? "identity" : "traversal order")"))
+            } else {
+                lines.append((true, "pairing: display \(display.id) (\(vendorProduct)) -> no DDC channel (\(ordered.count) found)"))
+            }
+        }
+        let summary = lines.map(\.text).joined(separator: "\n")
+        let changed = avServiceLock.withLock { () -> Bool in
+            defer { lastPairingSummary = summary }
+            return summary != lastPairingSummary
+        }
+        if changed {
+            for line in lines {
+                if line.error {
+                    Self.log.error("\(line.text, privacy: .public)")
+                } else {
+                    Self.log.notice("\(line.text, privacy: .public)")
+                }
+            }
+        }
+
         var map: [CGDirectDisplayID: IOAVServiceRef] = [:]
         // Safe: each CGDirectDisplayID key is assigned exactly once, so the unspecified
         // Dictionary iteration order cannot drop or overwrite an entry.
@@ -240,7 +288,10 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     ///   [0x84, 0x03, vcpCode, valueHigh, valueLow, checksum]
     /// Checksum = XOR of 0x50 (0x51 XOR 0x01) with all preceding buffer bytes.
     private func arm64Write(displayID: CGDirectDisplayID, command: UInt8, value: UInt16) -> Bool {
-        guard let avService = findAVService(for: displayID) else { return false }
+        guard let avService = findAVService(for: displayID) else {
+            Self.log.debug("write \(Self.hex(command), privacy: .public) display \(displayID, privacy: .public): no DDC channel")
+            return false
+        }
 
         let valueHigh = UInt8((value >> 8) & 0xFF)
         let valueLow  = UInt8(value & 0xFF)
@@ -252,6 +303,9 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 
         var buf: [UInt8] = payload + [checksum]
         let ret = IOAVServiceWriteI2C(avService, 0x37, 0x51, &buf, UInt32(buf.count))
+        if ret != kIOReturnSuccess {
+            Self.log.debug("write \(Self.hex(command), privacy: .public)=\(value, privacy: .public) display \(displayID, privacy: .public): I2C error \(String(format: "0x%08X", ret), privacy: .public)")
+        }
         return ret == kIOReturnSuccess
     }
 
@@ -259,7 +313,16 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     /// Request layout: [0x82, 0x01, vcpCode, checksum]
     /// Response bytes 4-7 carry: [maxHigh, maxLow, curHigh, curLow]
     private func arm64Read(displayID: CGDirectDisplayID, command: UInt8) -> (current: UInt16, max: UInt16)? {
-        guard let avService = findAVService(for: displayID) else { return nil }
+        guard let avService = findAVService(for: displayID) else {
+            Self.log.debug("read \(Self.hex(command), privacy: .public) display \(displayID, privacy: .public): no DDC channel")
+            return nil
+        }
+        // Every failure class gets its own line: this is what a reporter's log
+        // capture answers instead of a round of questions (docs/ddc-notes.md).
+        func fail(_ reason: String) -> (current: UInt16, max: UInt16)? {
+            Self.log.notice("read \(Self.hex(command), privacy: .public) display \(displayID, privacy: .public): \(reason, privacy: .public)")
+            return nil
+        }
 
         // Build and send the VCP Get Request packet
         var requestChecksum = UInt8(0x6E ^ 0x51)
@@ -269,7 +332,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 
         let writeRet = IOAVServiceWriteI2C(avService, 0x37, 0x51, &requestBuf, UInt32(requestBuf.count))
         guard writeRet == kIOReturnSuccess else {
-            return nil
+            return fail("request write I2C error \(String(format: "0x%08X", writeRet))")
         }
 
         // Wait for the display to prepare its DDC/CI reply (~40ms per spec)
@@ -279,7 +342,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         var replyBuf = [UInt8](repeating: 0, count: 12)
         let readRet = IOAVServiceReadI2C(avService, 0x37, 0x51, &replyBuf, UInt32(replyBuf.count))
         guard readRet == kIOReturnSuccess else {
-            return nil
+            return fail("reply read I2C error \(String(format: "0x%08X", readRet))")
         }
 
         // DDC/CI VCP reply format (IOAVService variant):
@@ -307,7 +370,8 @@ final class DDCService: ObservableObject, @unchecked Sendable {
               replyBuf[3] == 0x00,      // result code: no error
               replyBuf[4] == command    // echo of the VCP code we asked for
         else {
-            return nil
+            let head = replyBuf.prefix(6).map { String(format: "%02X", $0) }.joined(separator: " ")
+            return fail("bad reply header [\(head)] (null frame, echo, or stale EDID bytes)")
         }
 
         // Header bytes alone are only 4 bytes of protection: a wedged DDC
@@ -318,15 +382,16 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         var expectedChecksum = UInt8(0x50)
         for i in 0...9 { expectedChecksum ^= replyBuf[i] }
         guard expectedChecksum == replyBuf[10] else {
-            return nil
+            return fail("bad reply checksum")
         }
 
         let maxVal = (UInt16(replyBuf[6]) << 8) | UInt16(replyBuf[7])
         let curVal = (UInt16(replyBuf[8]) << 8) | UInt16(replyBuf[9])
         // A zero max is also invalid (would make every write 0); reject it.
         guard maxVal > 0 else {
-            return nil
+            return fail("reply carries max 0")
         }
+        Self.log.notice("read \(Self.hex(command), privacy: .public) display \(displayID, privacy: .public): ok \(curVal, privacy: .public)/\(maxVal, privacy: .public)")
         return (current: curVal, max: maxVal)
     }
 #endif
@@ -403,6 +468,13 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     /// Synchronous DDC write (VCP Set). Returns true on success.
     /// On ARM64 uses the IOAVService path; on x86_64 uses the IOFramebuffer I2C path.
     private func writeSynchronous(displayID: CGDirectDisplayID, command: UInt8, value: UInt16) -> Bool {
+        let start = DispatchTime.now()
+        defer {
+            let ms = Self.millisSince(start)
+            if ms > Self.slowOpThresholdMs {
+                Self.log.notice("slow write \(Self.hex(command), privacy: .public) display \(displayID, privacy: .public): \(Int(ms), privacy: .public) ms")
+            }
+        }
 #if arch(arm64)
         // ARM64 primary path
         if arm64Write(displayID: displayID, command: command, value: value) {
@@ -437,17 +509,24 @@ final class DDCService: ObservableObject, @unchecked Sendable {
             guard Date() >= until else { return nil }
             readQuarantineUntil.removeValue(forKey: displayID)
             readFailStreak[displayID] = 0
+            Self.log.notice("display \(displayID, privacy: .public): read quarantine expired, probing again")
         }
+        let start = DispatchTime.now()
 #if arch(arm64)
         let result = arm64Read(displayID: displayID, command: command)
 #else
         let result = intelReadSynchronous(displayID: displayID, command: command)
 #endif
+        let ms = Self.millisSince(start)
+        if ms > Self.slowOpThresholdMs {
+            Self.log.notice("slow read \(Self.hex(command), privacy: .public) display \(displayID, privacy: .public): \(Int(ms), privacy: .public) ms")
+        }
         if result == nil {
             let streak = readFailStreak[displayID, default: 0] + 1
             readFailStreak[displayID] = streak
             if streak >= readQuarantineThreshold {
                 readQuarantineUntil[displayID] = Date().addingTimeInterval(readQuarantineInterval)
+                Self.log.notice("display \(displayID, privacy: .public): \(streak, privacy: .public) consecutive read failures, reads quarantined for \(Int(self.readQuarantineInterval), privacy: .public) s")
             }
         } else {
             readFailStreak[displayID] = 0
@@ -602,6 +681,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     /// per-removed-ID cleanup never sees that, and the stale map then writes
     /// one monitor's brightness into the other's channel.
     func invalidateAllChannelMappings() {
+        Self.log.notice("display reconfiguration: channel map flushed, pairing re-runs on the next DDC op")
         ddcQueue.async {
             self.readFailStreak.removeAll()
             self.readQuarantineUntil.removeAll()
@@ -610,6 +690,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         avServiceLock.lock()
         avServiceCache.removeAll()
         allExternalAVServices.removeAll()
+        lastPairingSummary = ""
         avServiceLock.unlock()
 #endif
     }
@@ -631,11 +712,13 @@ final class DDCService: ObservableObject, @unchecked Sendable {
                     self.cacheLock.lock()
                     self.vcpCache[displayID]?[command] = nil
                     self.cacheLock.unlock()
+                    Self.log.debug("write \(Self.hex(command), privacy: .public)=\(value, privacy: .public) display \(displayID, privacy: .public): ok (attempt \(attempt + 1, privacy: .public))")
                     completion?(true)
                     return
                 }
                 if attempt < 2 { Thread.sleep(forTimeInterval: 0.05) }
             }
+            Self.log.error("write \(Self.hex(command), privacy: .public)=\(value, privacy: .public) display \(displayID, privacy: .public): failed all 3 attempts")
             completion?(false)
         }
     }
@@ -670,6 +753,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
                 }
                 if attempt < 2 { Thread.sleep(forTimeInterval: 0.05) }
             }
+            Self.log.notice("read \(Self.hex(command), privacy: .public) display \(displayID, privacy: .public): no valid reply in 3 attempts")
             completion(nil)
         }
     }

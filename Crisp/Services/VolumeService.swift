@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 import CoreAudio
 import AppKit
+import os.log
 
 /// DDC/CI speaker volume (VCP 0x62) for external monitors (issue #23):
 /// support probing, a coalesced writer, mute, and default-audio-output
@@ -12,6 +13,8 @@ import AppKit
 final class VolumeService: ObservableObject {
     static let shared = VolumeService()
     private init() {}
+
+    private static let log = Logger(subsystem: "com.crisp.app", category: "volume")
 
     /// Raw DDC max volume per display (usually 100), from the probe read.
     private var ddcMax: [CGDirectDisplayID: UInt16] = [:]
@@ -81,7 +84,17 @@ final class VolumeService: ObservableObject {
         let uuid = display.displayUUID
         DDCService.shared.readAsync(displayID: id, command: DDCService.volumeVCP) { result in
             Task { @MainActor in
-                guard let result else { return }
+                guard let result else {
+                    // Only while the feature is hidden: a remembered or forced
+                    // display failing a probe is the DDC layer's line to log.
+                    if !display.volumeSupported {
+                        Self.log.notice("\(display.name, privacy: .public): volume probe (VCP 0x62) got no valid reply, slider hidden; the Volume Control toggle forces write-only")
+                    }
+                    return
+                }
+                if !self.rememberedCapable.contains(uuid) {
+                    Self.log.notice("\(display.name, privacy: .public): volume probe ok \(result.current, privacy: .public)/\(result.max, privacy: .public), slider shown")
+                }
                 self.ddcMax[id] = result.max
                 display.volumeSupported = true
                 self.rememberCapable(uuid)
