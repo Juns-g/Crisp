@@ -158,14 +158,20 @@ final class PhysicalDisplayToggleService: ObservableObject {
         let virtual = VirtualDisplayService.shared
         return ids.prefix(Int(count)).filter { id in
             guard !virtual.isVirtualDisplay(id) else { return false }
-            // Once the last real display is gone macOS spawns a placeholder
-            // display (vendor 'unkn' 0x756E6B6E, model 'virt' 0x76697274,
-            // fingerprinted live on macOS 26). It is not a viewable screen, and
-            // counting it kept restoreIfNoActiveDisplay from ever firing in the
-            // all-screens-black state it exists to fix.
-            let isPlaceholder = CGDisplayVendorNumber(id) == 0x756E6B6E
-                && CGDisplayModelNumber(id) == 0x76697274
-            return !isPlaceholder
+            // Real panels carry 16-bit EDID vendor and product codes. Two kinds of
+            // entry enumerate as active without a screen behind them, and both fail
+            // that shape: the placeholder macOS spawns once the last real display is
+            // gone (vendor 'unkn' 0x756E6B6E, model 'virt' 0x76697274, four-character
+            // tags that cannot fit in 16 bits; fingerprinted live on macOS 26), and the
+            // stub a re-enabled record leaves when its hardware is no longer attached
+            // (vendor 0, model 0; observed live by @ncchen99 on #91, online and active,
+            // showing nothing). Counting either kept restoreIfNoActiveDisplay from
+            // firing, or let it stop, in the all-screens-black state it exists to fix.
+            // Matching by shape rather than by the one fingerprint also survives a
+            // future macOS renaming the placeholder.
+            let vendor = CGDisplayVendorNumber(id), model = CGDisplayModelNumber(id)
+            let hasNoPanel = vendor == 0 || model == 0 || vendor > 0xFFFF || model > 0xFFFF
+            return !hasNoPanel
         }.count
     }
 
