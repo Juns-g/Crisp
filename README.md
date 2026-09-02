@@ -96,12 +96,14 @@ Source builds include a minimal `crispctl` target:
 xcodegen generate && xcodebuild -scheme crispctl -configuration Release
 ```
 
-It supports exactly three commands:
+It supports five control commands:
 
 ```sh
 crispctl display list
 crispctl brightness get <display>
 crispctl brightness set <display> <percent>
+crispctl brightness boost get <display>
+crispctl brightness boost set <display> on|off
 crispctl help
 ```
 
@@ -110,6 +112,8 @@ crispctl help
 `display list` reports each display's uuid, current resolution and brightness backend. The backend is Crisp's current route (`builtin`, `ddc`, `software`, or `unknown` while external DDC availability is undetermined); HDR software dimming reports `software`. Output is one JSON object per call.
 
 Crisp must already be running; crispctl never launches it. `brightness set` is a manual change like using the slider and clears the active preset. The reply means Crisp accepted the request, not that the panel was read back; it is not retried automatically.
+
+For example, `brightness boost get` returns `{"ok":true,"brightnessBoost":{"displayID":7,"eligible":true,"enabled":false}}`. `eligible` is the running Extra Brightness service's current eligibility result; `enabled` is its persisted per-display toggle state, so the two can differ while capability has collapsed and cleanup or auto-disable is pending. `brightness boost set` uses that existing service: `on` is refused when currently ineligible or when enabling fails, while `off` remains available for a connected display regardless of current eligibility. Enabling an external display may wait while the service settles HDR mode. Success means the service returned `true`, not that hardware, EDR headroom, or luminance was independently verified. A transport timeout does not prove the change was not applied; do not retry automatically—run `brightness boost get` first.
 
 The current public Crisp 1.5.0 release, normal DMG, and Homebrew cask do not include `crispctl`.
 

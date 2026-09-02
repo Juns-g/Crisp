@@ -18,7 +18,7 @@ final class CrispControlModelTests: XCTestCase {
         brightnessBackend: .ddc
     )
 
-    func testParserSupportsExactlyThreeCommands() {
+    func testParserSupportsFiveControlCommandsByIDAndUUID() {
         let cases: [([String], CrispControlRequest)] = [
             (["display", "list"], .init(command: .list)),
             (["brightness", "get", "42"], .init(command: .getBrightness, selector: "42")),
@@ -29,6 +29,23 @@ final class CrispControlModelTests: XCTestCase {
             (
                 ["brightness", "set", "42", "37.5"],
                 .init(command: .setBrightness, brightness: 37.5, selector: "42")
+            ),
+            (["brightness", "boost", "get", "42"], .init(command: .getBrightnessBoost, selector: "42")),
+            (
+                ["brightness", "boost", "get", "37D8832A-2D66-02CA-B9F7-8F30A301B230"],
+                .init(command: .getBrightnessBoost, selector: "37D8832A-2D66-02CA-B9F7-8F30A301B230")
+            ),
+            (
+                ["brightness", "boost", "set", "42", "on"],
+                .init(command: .setBrightnessBoost, selector: "42", enabled: true)
+            ),
+            (
+                ["brightness", "boost", "set", "37D8832A-2D66-02CA-B9F7-8F30A301B230", "off"],
+                .init(
+                    command: .setBrightnessBoost,
+                    selector: "37D8832A-2D66-02CA-B9F7-8F30A301B230",
+                    enabled: false
+                )
             )
         ]
         for (arguments, request) in cases {
@@ -42,7 +59,10 @@ final class CrispControlModelTests: XCTestCase {
         }
         // The reference must name every command it documents, and the usage line must
         // point at it, so a wrong invocation still leads to the full text.
-        for command in ["display list", "brightness get <display>", "brightness set <display>", "help"] {
+        for command in [
+            "display list", "brightness get <display>", "brightness set <display>",
+            "brightness boost get <display>", "brightness boost set <display>", "help"
+        ] {
             XCTAssertTrue(CrispControlCLIModel.help.contains(command), command)
         }
         XCTAssertTrue(CrispControlCLIModel.usage.contains("crispctl help"))
@@ -53,7 +73,13 @@ final class CrispControlModelTests: XCTestCase {
             ["help", "me"], ["display"], ["displays", "list"], ["display", "list", "--json"],
             ["brightness", "get"], ["brightness", "get", ""], ["brightness", "set", "42"],
             ["brightness", "set", "42", "nan"], ["brightness", "set", "42", "inf"],
-            ["brightness", "set", "42", "-0.1"], ["brightness", "set", "42", "100.1"]
+            ["brightness", "set", "42", "-0.1"], ["brightness", "set", "42", "100.1"],
+            ["brightness", "boost", "get"], ["brightness", "boost", "get", ""],
+            ["brightness", "boost", "get", "42", "extra"],
+            ["brightness", "boost", "set", "42"], ["brightness", "boost", "set", "", "on"],
+            ["brightness", "boost", "set", "42", "true"],
+            ["brightness", "boost", "set", "42", "ON"],
+            ["brightness", "boost", "set", "42", "on", "extra"]
         ]
         for arguments in cases {
             XCTAssertEqual(CrispControlCLIModel.parse(arguments: arguments), .failure)
@@ -63,6 +89,15 @@ final class CrispControlModelTests: XCTestCase {
                 arguments: ["brightness", "set", "42", value]
             ) else { return XCTFail("expected boundary \(value)") }
             XCTAssertEqual(request.brightness, Double(value))
+        }
+    }
+
+    func testOnlyBrightnessBoostSetGetsLongerReceiveTimeout() {
+        XCTAssertEqual(CrispControlCLIModel.receiveTimeoutSeconds(for: .setBrightnessBoost), 5)
+        for command in [
+            CrispControlRequest.Command.list, .getBrightness, .setBrightness, .getBrightnessBoost
+        ] {
+            XCTAssertEqual(CrispControlCLIModel.receiveTimeoutSeconds(for: command), 2)
         }
     }
 
@@ -90,6 +125,7 @@ final class CrispControlModelTests: XCTestCase {
         let list = CrispControlModel.handle(Data(#"{"command":"list"}"#.utf8), displays: [display])
         XCTAssertEqual(list.response, .success(displays: [display]))
         XCTAssertNil(list.brightnessChange)
+        XCTAssertNil(list.brightnessBoostChange)
 
         let listJSON = try XCTUnwrap(
             JSONSerialization.jsonObject(with: CrispControlModel.encode(list.response))
@@ -106,6 +142,7 @@ final class CrispControlModelTests: XCTestCase {
         )
         XCTAssertEqual(get.response, .success(display: display))
         XCTAssertNil(get.brightnessChange)
+        XCTAssertNil(get.brightnessBoostChange)
 
         let getJSON = try XCTUnwrap(
             JSONSerialization.jsonObject(with: CrispControlModel.encode(get.response))
@@ -140,6 +177,32 @@ final class CrispControlModelTests: XCTestCase {
         XCTAssertNil(CrispControlModel.resolve(selector: "", in: displays))
     }
 
+    func testModelReturnsCurrentBrightnessBoostStateByLegacyIDAndSelector() throws {
+        let state = CrispControlBrightnessBoostState(displayID: 7, eligible: false, enabled: true)
+        let requests = [
+            #"{"command":"getBrightnessBoost","display":7}"#,
+            #"{"command":"getBrightnessBoost","selector":"7"}"#,
+            #"{"command":"getBrightnessBoost","selector":"37d8832a-2d66-02ca-b9f7-8f30a301b230"}"#
+        ]
+        for request in requests {
+            let result = CrispControlModel.handle(Data(request.utf8), displays: [display]) { id in
+                id == state.displayID ? state : nil
+            }
+            XCTAssertEqual(result.response, .success(brightnessBoost: state), request)
+            XCTAssertNil(result.brightnessChange, request)
+            XCTAssertNil(result.brightnessBoostChange, request)
+        }
+
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: CrispControlModel.encode(.success(brightnessBoost: state)))
+                as? [String: Any]
+        )
+        let boost = try XCTUnwrap(json["brightnessBoost"] as? [String: Any])
+        XCTAssertEqual(boost["displayID"] as? Int, 7)
+        XCTAssertEqual(boost["eligible"] as? Bool, false)
+        XCTAssertEqual(boost["enabled"] as? Bool, true)
+    }
+
     func testDisplayMetadataAllowsMissingCurrentResolutionAndLegacyResponses() throws {
         let displayWithoutMode = CrispControlDisplay(
             id: 8,
@@ -160,6 +223,7 @@ final class CrispControlModelTests: XCTestCase {
         XCTAssertNil(decoded.display?.uuid)
         XCTAssertNil(decoded.display?.resolution)
         XCTAssertNil(decoded.display?.brightnessBackend)
+        XCTAssertNil(decoded.brightnessBoost)
     }
 
     func testBrightnessBackendClassifierCoversCurrentRouting() {
@@ -202,14 +266,55 @@ final class CrispControlModelTests: XCTestCase {
         )
         XCTAssertEqual(result.response, .success())
         XCTAssertEqual(result.brightnessChange, .init(displayID: 7, brightness: 35))
+        XCTAssertNil(result.brightnessBoostChange)
         let bySelector = CrispControlModel.handle(
             Data(#"{"command":"setBrightness","selector":"37D8832A-2D66-02CA-B9F7-8F30A301B230","brightness":35}"#.utf8),
             displays: [display]
         )
         XCTAssertEqual(bySelector.brightnessChange, .init(displayID: 7, brightness: 35))
+        XCTAssertNil(bySelector.brightnessBoostChange)
         XCTAssertEqual(
             CrispControlModel.encode(result.response),
             Data(#"{"ok":true}"#.utf8) + Data([0x0A])
+        )
+    }
+
+    func testBrightnessBoostSetCreatesRequestedEffectForOnAndOff() {
+        let requests = [
+            (#"{"command":"setBrightnessBoost","display":7,"enabled":true}"#, true),
+            (
+                #"{"command":"setBrightnessBoost","selector":"37d8832a-2d66-02ca-b9f7-8f30a301b230","enabled":false}"#,
+                false
+            )
+        ]
+        for (request, enabled) in requests {
+            let result = CrispControlModel.handle(
+                Data(request.utf8),
+                displays: [display]
+            )
+            XCTAssertEqual(result.response, .success(), request)
+            XCTAssertNil(result.brightnessChange, request)
+            XCTAssertEqual(result.brightnessBoostChange, .init(displayID: 7, enabled: enabled), request)
+        }
+    }
+
+    func testBrightnessBoostSetResponseTurnsServiceRefusalIntoServerFailure() {
+        XCTAssertEqual(
+            CrispControlModel.brightnessBoostSetResponse(enabled: true, accepted: true),
+            .success()
+        )
+        let refused = CrispControlModel.brightnessBoostSetResponse(enabled: true, accepted: false)
+        XCTAssertEqual(refused, .failure("extra brightness could not be enabled"))
+        XCTAssertEqual(
+            CrispControlCLIModel.classify(
+                CrispControlModel.encode(refused),
+                for: .setBrightnessBoost
+            ),
+            .serverFailure
+        )
+        XCTAssertEqual(
+            CrispControlModel.brightnessBoostSetResponse(enabled: false, accepted: false),
+            .failure("extra brightness could not be disabled")
         )
     }
 
@@ -222,12 +327,20 @@ final class CrispControlModelTests: XCTestCase {
             #"{"command":"setBrightness","selector":"","brightness":35}"#,
             #"{"command":"setBrightness","display":7}"#,
             #"{"command":"setBrightness","display":7,"brightness":101}"#,
+            #"{"command":"getBrightnessBoost"}"#,
+            #"{"command":"getBrightnessBoost","display":8}"#,
+            #"{"command":"getBrightnessBoost","selector":"nope"}"#,
+            #"{"command":"setBrightnessBoost","display":7}"#,
+            #"{"command":"setBrightnessBoost","display":8,"enabled":false}"#,
+            #"{"command":"setBrightnessBoost","selector":"nope","enabled":false}"#,
+            #"{"command":"setBrightnessBoost","display":7,"enabled":"on"}"#,
             #"{"command":"unknown"}"#
         ]
         for request in requests {
             let result = CrispControlModel.handle(Data(request.utf8), displays: [display])
             XCTAssertFalse(result.response.ok, request)
             XCTAssertNil(result.brightnessChange, request)
+            XCTAssertNil(result.brightnessBoostChange, request)
         }
     }
 
@@ -258,7 +371,7 @@ final class CrispControlModelTests: XCTestCase {
     }
 
     private var commands: [CrispControlRequest.Command] {
-        [.list, .getBrightness, .setBrightness]
+        [.list, .getBrightness, .setBrightness, .getBrightnessBoost, .setBrightnessBoost]
     }
 
     private func classify(

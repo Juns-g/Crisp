@@ -45,11 +45,18 @@ struct CrispControlDisplay: Codable, Equatable {
         self.brightnessBackend = brightnessBackend
     }
 }
+struct CrispControlBrightnessBoostState: Codable, Equatable {
+    let displayID: UInt32
+    let eligible: Bool
+    let enabled: Bool
+}
 struct CrispControlRequest: Codable, Equatable {
     enum Command: String, Codable {
         case list
         case getBrightness
         case setBrightness
+        case getBrightnessBoost
+        case setBrightnessBoost
     }
 
     let command: Command
@@ -58,11 +65,19 @@ struct CrispControlRequest: Codable, Equatable {
     /// A display as a person typed it: a runtime id or a uuid. Takes precedence over
     /// `display`, which stays for clients that already send the numeric id.
     let selector: String?
-    init(command: Command, display: UInt32? = nil, brightness: Double? = nil, selector: String? = nil) {
+    let enabled: Bool?
+    init(
+        command: Command,
+        display: UInt32? = nil,
+        brightness: Double? = nil,
+        selector: String? = nil,
+        enabled: Bool? = nil
+    ) {
         self.command = command
         self.display = display
         self.brightness = brightness
         self.selector = selector
+        self.enabled = enabled
     }
 }
 enum CrispControlFrame {
@@ -85,27 +100,37 @@ struct CrispControlResponse: Codable, Equatable {
     let ok: Bool
     let displays: [CrispControlDisplay]?
     let display: CrispControlDisplay?
+    let brightnessBoost: CrispControlBrightnessBoostState?
     let error: String?
 
     init(
         ok: Bool,
         displays: [CrispControlDisplay]? = nil,
         display: CrispControlDisplay? = nil,
+        brightnessBoost: CrispControlBrightnessBoostState? = nil,
         error: String? = nil
     ) {
         self.ok = ok
         self.displays = displays
         self.display = display
+        self.brightnessBoost = brightnessBoost
         self.error = error
     }
     static func success() -> Self { Self(ok: true) }
     static func success(displays: [CrispControlDisplay]) -> Self { Self(ok: true, displays: displays) }
     static func success(display: CrispControlDisplay) -> Self { Self(ok: true, display: display) }
+    static func success(brightnessBoost: CrispControlBrightnessBoostState) -> Self {
+        Self(ok: true, brightnessBoost: brightnessBoost)
+    }
     static func failure(_ error: String) -> Self { Self(ok: false, error: error) }
 }
 struct CrispControlBrightnessChange: Equatable {
     let displayID: UInt32
     let brightness: Double
+}
+struct CrispControlBrightnessBoostChange: Equatable {
+    let displayID: UInt32
+    let enabled: Bool
 }
 enum CrispControlModel {
     static func brightnessBackend(
@@ -133,35 +158,60 @@ enum CrispControlModel {
         (try? encode(response, sorted: false))
             ?? Data(#"{"ok":false,"error":"response encoding failed"}"#.utf8) + Data([0x0A])
     }
+    static func brightnessBoostSetResponse(enabled: Bool, accepted: Bool) -> CrispControlResponse {
+        accepted ? .success() : .failure("extra brightness could not be \(enabled ? "enabled" : "disabled")")
+    }
     static func handle(
         _ data: Data,
-        displays: [CrispControlDisplay]
-    ) -> (response: CrispControlResponse, brightnessChange: CrispControlBrightnessChange?) {
+        displays: [CrispControlDisplay],
+        brightnessBoostState: (UInt32) -> CrispControlBrightnessBoostState? = { _ in nil }
+    ) -> (
+        response: CrispControlResponse,
+        brightnessChange: CrispControlBrightnessChange?,
+        brightnessBoostChange: CrispControlBrightnessBoostChange?
+    ) {
         guard let request = try? JSONDecoder().decode(CrispControlRequest.self, from: data) else {
-            return (.failure("invalid request"), nil)
+            return (.failure("invalid request"), nil, nil)
         }
         switch request.command {
         case .list:
-            return (.success(displays: displays), nil)
+            return (.success(displays: displays), nil, nil)
         case .getBrightness:
             guard request.selector != nil || request.display != nil else {
-                return (.failure("display is required"), nil)
+                return (.failure("display is required"), nil, nil)
             }
             guard let display = target(of: request, in: displays) else {
-                return (.failure("display not found"), nil)
+                return (.failure("display not found"), nil, nil)
             }
-            return (.success(display: display), nil)
+            return (.success(display: display), nil, nil)
         case .setBrightness:
             guard request.selector != nil || request.display != nil, let value = request.brightness else {
-                return (.failure("display and brightness are required"), nil)
+                return (.failure("display and brightness are required"), nil, nil)
             }
             guard (0...100).contains(value) else {
-                return (.failure("brightness must be between 0 and 100"), nil)
+                return (.failure("brightness must be between 0 and 100"), nil, nil)
             }
             guard let display = target(of: request, in: displays) else {
-                return (.failure("display not found"), nil)
+                return (.failure("display not found"), nil, nil)
             }
-            return (.success(), .init(displayID: display.id, brightness: value))
+            return (.success(), .init(displayID: display.id, brightness: value), nil)
+        case .getBrightnessBoost:
+            guard request.selector != nil || request.display != nil else {
+                return (.failure("display is required"), nil, nil)
+            }
+            guard let display = target(of: request, in: displays),
+                  let state = brightnessBoostState(display.id) else {
+                return (.failure("display not found"), nil, nil)
+            }
+            return (.success(brightnessBoost: state), nil, nil)
+        case .setBrightnessBoost:
+            guard request.selector != nil || request.display != nil, let enabled = request.enabled else {
+                return (.failure("display and state are required"), nil, nil)
+            }
+            guard let display = target(of: request, in: displays) else {
+                return (.failure("display not found"), nil, nil)
+            }
+            return (.success(), nil, .init(displayID: display.id, enabled: enabled))
         }
     }
 
@@ -192,11 +242,13 @@ enum CrispControlCLIModel {
         same user; crispctl talks to it over a local socket and never launches it.
 
         Commands:
-          display list                    Online displays as JSON: id, uuid, name,
-                                          resolution, brightness, brightnessBackend
-          brightness get <display>        Read brightness, 0-100
-          brightness set <display> <pct>  Set brightness, 0-100; clears the active preset
-          help                            Show this help (also -h, --help)
+          display list                           Online displays as JSON: id, uuid, name,
+                                                 resolution, brightness, brightnessBackend
+          brightness get <display>               Read brightness, 0-100
+          brightness set <display> <pct>         Set brightness, 0-100; clears the active preset
+          brightness boost get <display>         Read Extra Brightness eligibility and state
+          brightness boost set <display> on|off  Enable or disable Extra Brightness
+          help                                   Show this help (also -h, --help)
 
         <display> is a runtime id or a uuid from 'display list'. Ids can change after
         an unplug or a wake; uuids do not.
@@ -211,6 +263,12 @@ enum CrispControlCLIModel {
         case failure
     }
     enum ResponseResult: Equatable { case success, serverFailure, invalid }
+    static func receiveTimeoutSeconds(for command: CrispControlRequest.Command) -> Int {
+        switch command {
+        case .setBrightnessBoost: return 5
+        default: return 2
+        }
+    }
     static func parse(arguments: [String]) -> ParseResult {
         if arguments.isEmpty || arguments == ["help"] || arguments == ["--help"] || arguments == ["-h"] {
             return .help
@@ -224,6 +282,18 @@ enum CrispControlCLIModel {
         if arguments.count == 4, arguments[0...1] == ["brightness", "set"], !arguments[2].isEmpty,
            let value = Double(arguments[3]), value.isFinite, (0...100).contains(value) {
             return .request(.init(command: .setBrightness, brightness: value, selector: arguments[2]))
+        }
+        if arguments.count == 4, arguments[0...2] == ["brightness", "boost", "get"],
+           !arguments[3].isEmpty {
+            return .request(.init(command: .getBrightnessBoost, selector: arguments[3]))
+        }
+        if arguments.count == 5, arguments[0...2] == ["brightness", "boost", "set"],
+           !arguments[3].isEmpty {
+            switch arguments[4] {
+            case "on": return .request(.init(command: .setBrightnessBoost, selector: arguments[3], enabled: true))
+            case "off": return .request(.init(command: .setBrightnessBoost, selector: arguments[3], enabled: false))
+            default: break
+            }
         }
         return .failure
     }
