@@ -20,11 +20,15 @@ final class CrispControlModelTests: XCTestCase {
 
     func testParserSupportsExactlyThreeCommands() {
         let cases: [([String], CrispControlRequest)] = [
-            (["displays", "list"], .init(command: .list)),
-            (["brightness", "get", "42"], .init(command: .getBrightness, display: 42)),
+            (["display", "list"], .init(command: .list)),
+            (["brightness", "get", "42"], .init(command: .getBrightness, selector: "42")),
+            (
+                ["brightness", "get", "37D8832A-2D66-02CA-B9F7-8F30A301B230"],
+                .init(command: .getBrightness, selector: "37D8832A-2D66-02CA-B9F7-8F30A301B230")
+            ),
             (
                 ["brightness", "set", "42", "37.5"],
-                .init(command: .setBrightness, display: 42, brightness: 37.5)
+                .init(command: .setBrightness, brightness: 37.5, selector: "42")
             )
         ]
         for (arguments, request) in cases {
@@ -38,7 +42,7 @@ final class CrispControlModelTests: XCTestCase {
         }
         // The reference must name every command it documents, and the usage line must
         // point at it, so a wrong invocation still leads to the full text.
-        for command in ["displays list", "brightness get", "brightness set", "crispctl help"] {
+        for command in ["display list", "brightness get <display>", "brightness set <display>", "help"] {
             XCTAssertTrue(CrispControlCLIModel.help.contains(command), command)
         }
         XCTAssertTrue(CrispControlCLIModel.usage.contains("crispctl help"))
@@ -46,9 +50,8 @@ final class CrispControlModelTests: XCTestCase {
 
     func testParserRejectsInvalidArityIDsOptionsAndPercent() {
         let cases = [
-            ["help", "me"], ["displays"], ["displays", "list", "--json"],
-            ["brightness", "get"], ["brightness", "get", "x"],
-            ["brightness", "get", "4294967296"], ["brightness", "set", "42"],
+            ["help", "me"], ["display"], ["displays", "list"], ["display", "list", "--json"],
+            ["brightness", "get"], ["brightness", "get", ""], ["brightness", "set", "42"],
             ["brightness", "set", "42", "nan"], ["brightness", "set", "42", "inf"],
             ["brightness", "set", "42", "-0.1"], ["brightness", "set", "42", "100.1"]
         ]
@@ -112,6 +115,29 @@ final class CrispControlModelTests: XCTestCase {
         XCTAssertEqual(returnedDisplay["uuid"] as? String, display.uuid)
         XCTAssertEqual(returnedDisplay["brightnessBackend"] as? String, "ddc")
         XCTAssertEqual((returnedDisplay["resolution"] as? [String: Any])?["pixelWidth"] as? Int, 5120)
+
+        // The CLI sends what was typed as a selector: an id, or a uuid in any case.
+        for selector in ["7", "37d8832a-2d66-02ca-b9f7-8f30a301b230"] {
+            let bySelector = CrispControlModel.handle(
+                Data(#"{"command":"getBrightness","selector":"\#(selector)"}"#.utf8),
+                displays: [display]
+            )
+            XCTAssertEqual(bySelector.response, .success(display: display), selector)
+        }
+    }
+
+    func testResolvePrefersIDThenUUIDCaseInsensitive() {
+        let other = CrispControlDisplay(id: 9, name: "Other", brightness: 1, isBuiltin: true, uuid: "9")
+        let displays = [display, other]
+        XCTAssertEqual(CrispControlModel.resolve(selector: "7", in: displays), display)
+        // An all-digit uuid still resolves as an id first.
+        XCTAssertEqual(CrispControlModel.resolve(selector: "9", in: displays), other)
+        XCTAssertEqual(
+            CrispControlModel.resolve(selector: "37d8832a-2d66-02ca-b9f7-8f30a301b230", in: displays),
+            display
+        )
+        XCTAssertNil(CrispControlModel.resolve(selector: "8", in: displays))
+        XCTAssertNil(CrispControlModel.resolve(selector: "", in: displays))
     }
 
     func testDisplayMetadataAllowsMissingCurrentResolutionAndLegacyResponses() throws {
@@ -176,6 +202,11 @@ final class CrispControlModelTests: XCTestCase {
         )
         XCTAssertEqual(result.response, .success())
         XCTAssertEqual(result.brightnessChange, .init(displayID: 7, brightness: 35))
+        let bySelector = CrispControlModel.handle(
+            Data(#"{"command":"setBrightness","selector":"37D8832A-2D66-02CA-B9F7-8F30A301B230","brightness":35}"#.utf8),
+            displays: [display]
+        )
+        XCTAssertEqual(bySelector.brightnessChange, .init(displayID: 7, brightness: 35))
         XCTAssertEqual(
             CrispControlModel.encode(result.response),
             Data(#"{"ok":true}"#.utf8) + Data([0x0A])
@@ -187,6 +218,8 @@ final class CrispControlModelTests: XCTestCase {
             #"{"command":"list""#,
             #"{"command":"getBrightness"}"#,
             #"{"command":"getBrightness","display":8}"#,
+            #"{"command":"getBrightness","selector":"nope"}"#,
+            #"{"command":"setBrightness","selector":"","brightness":35}"#,
             #"{"command":"setBrightness","display":7}"#,
             #"{"command":"setBrightness","display":7,"brightness":101}"#,
             #"{"command":"unknown"}"#
