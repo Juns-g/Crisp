@@ -99,15 +99,17 @@ xcodegen generate && xcodebuild -scheme crispctl -configuration Release
 It supports exactly three commands:
 
 ```sh
-crispctl displays list
-crispctl brightness get <display-id>
-crispctl brightness set <display-id> <percent>
+crispctl display list
+crispctl brightness get <display>
+crispctl brightness set <display> <percent>
 crispctl help
 ```
 
-`crispctl help` is the full reference (output format, display ids, exit codes); point an agent at it before it does anything else. `displays list` includes additive UUID, current-resolution, and brightness-backend metadata. The backend is Crisp's current route (`builtin`, `ddc`, `software`, or `unknown` while external DDC availability is undetermined); HDR software dimming reports `software`.
+`<display>` is a runtime id or a uuid from `display list`. Ids can change after an unplug or a wake; uuids do not, so scripts should prefer them. `crispctl help` prints the reference (commands, output format, exit codes); point an agent at it before it does anything else.
 
-Crisp must already be running. A display UUID is stable across reconnects for identification, but commands still require the numeric runtime display ID from a fresh `displays list`; output is JSON by default. `brightness set` is a manual change like using the slider and clears the active preset. A successful request means the change was accepted and queued, not independently verified; it is not retried automatically.
+`display list` reports each display's uuid, current resolution and brightness backend. The backend is Crisp's current route (`builtin`, `ddc`, `software`, or `unknown` while external DDC availability is undetermined); HDR software dimming reports `software`. Output is one JSON object per call.
+
+Crisp must already be running; crispctl never launches it. `brightness set` is a manual change like using the slider and clears the active preset. The reply means Crisp accepted the request, not that the panel was read back; it is not retried automatically.
 
 The current public Crisp 1.5.0 release, normal DMG, and Homebrew cask do not include `crispctl`.
 

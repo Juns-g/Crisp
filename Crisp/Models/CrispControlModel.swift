@@ -55,10 +55,14 @@ struct CrispControlRequest: Codable, Equatable {
     let command: Command
     let display: UInt32?
     let brightness: Double?
-    init(command: Command, display: UInt32? = nil, brightness: Double? = nil) {
+    /// A display as a person typed it: a runtime id or a uuid. Takes precedence over
+    /// `display`, which stays for clients that already send the numeric id.
+    let selector: String?
+    init(command: Command, display: UInt32? = nil, brightness: Double? = nil, selector: String? = nil) {
         self.command = command
         self.display = display
         self.brightness = brightness
+        self.selector = selector
     }
 }
 enum CrispControlFrame {
@@ -140,73 +144,65 @@ enum CrispControlModel {
         case .list:
             return (.success(displays: displays), nil)
         case .getBrightness:
-            guard let id = request.display else { return (.failure("display is required"), nil) }
-            guard let display = displays.first(where: { $0.id == id }) else {
+            guard request.selector != nil || request.display != nil else {
+                return (.failure("display is required"), nil)
+            }
+            guard let display = target(of: request, in: displays) else {
                 return (.failure("display not found"), nil)
             }
             return (.success(display: display), nil)
         case .setBrightness:
-            guard let id = request.display, let value = request.brightness else {
+            guard request.selector != nil || request.display != nil, let value = request.brightness else {
                 return (.failure("display and brightness are required"), nil)
             }
             guard (0...100).contains(value) else {
                 return (.failure("brightness must be between 0 and 100"), nil)
             }
-            guard displays.contains(where: { $0.id == id }) else {
+            guard let display = target(of: request, in: displays) else {
                 return (.failure("display not found"), nil)
             }
-            return (.success(), .init(displayID: id, brightness: value))
+            return (.success(), .init(displayID: display.id, brightness: value))
         }
+    }
+
+    /// Finds a display by the selector a person typed: a runtime id, or a uuid in any
+    /// case. Ids win, so a uuid that happens to be all digits still needs the uuid form.
+    static func resolve(selector: String, in displays: [CrispControlDisplay]) -> CrispControlDisplay? {
+        if let id = UInt32(selector), let match = displays.first(where: { $0.id == id }) {
+            return match
+        }
+        return displays.first { $0.uuid?.caseInsensitiveCompare(selector) == .orderedSame }
+    }
+    private static func target(
+        of request: CrispControlRequest, in displays: [CrispControlDisplay]
+    ) -> CrispControlDisplay? {
+        if let selector = request.selector { return resolve(selector: selector, in: displays) }
+        return request.display.flatMap { id in displays.first { $0.id == id } }
     }
 }
 enum CrispControlCLIModel {
-    static let usage = "usage: crispctl displays list | crispctl brightness get <display-id> | "
-        + "crispctl brightness set <display-id> <percent> | crispctl help"
+    static let usage = "usage: crispctl <command> [<args>]; run 'crispctl help' for the commands"
 
     /// The full reference, for a person at a terminal and for an agent that reads it
     /// before acting. Kept in the shared model so the app and the CLI cannot drift.
     static let help = """
-        crispctl: control a running Crisp from the command line.
+        Usage: crispctl <command> [<args>]
 
-        Crisp must be running on this Mac under the same user. crispctl talks to it
-        over a local Unix socket (mode 0600 in the per-user temp dir) and never
-        launches the app. Source builds only for now; the DMG and the Homebrew cask
-        do not ship crispctl.
+        Control a running Crisp from the command line. Crisp must be running for the
+        same user; crispctl talks to it over a local socket and never launches it.
 
-        Commands
-          crispctl displays list
-              Every online display: id, name, brightness (0-100), isBuiltin,
-              plus uuid, current resolution, and brightnessBackend metadata.
-          crispctl brightness get <display-id>
-              Current brightness of one display.
-          crispctl brightness set <display-id> <percent>
-              Set brightness, 0-100. Same path as the panel slider: hardware (DDC)
-              or software dimming as Crisp decided for that display, and it clears
-              the active preset. The reply means Crisp accepted the request, not
-              that the panel was read back; run brightness get to confirm.
-          crispctl help
-              This text. Also --help and -h.
+        Commands:
+          display list                    Online displays as JSON: id, uuid, name,
+                                          resolution, brightness, brightnessBackend
+          brightness get <display>        Read brightness, 0-100
+          brightness set <display> <pct>  Set brightness, 0-100; clears the active preset
+          help                            Show this help (also -h, --help)
 
-        Display ids
-          UUID is stable across reconnects and identifies the display. Commands
-          still require the numeric runtime id, which can change after an unplug
-          or a wake, so run a fresh displays list before acting.
+        <display> is a runtime id or a uuid from 'display list'. Ids can change after
+        an unplug or a wake; uuids do not.
 
-        Output
-          One JSON object per call. Success: {"ok":true,...}. Failure:
-          {"ok":false,"error":"..."}. Later versions may add fields; ignore
-          what you do not know. Crisp's own refusals come back on stdout,
-          crispctl's own errors (no socket, bad arguments) go to stderr.
-          brightnessBackend is Crisp's current route: builtin, ddc, software,
-          or unknown while external DDC availability is undetermined. An HDR
-          software-dimming override reports software.
-
-        Exit codes
-          0  ok
-          1  could not reach Crisp: not running, socket missing, another user,
-             or an unreadable reply
-          2  bad arguments
-          3  Crisp refused the request: unknown display, value out of range
+        Output is one JSON object per call: {"ok":true,...} or {"ok":false,"error":"..."}.
+        Exit codes: 0 ok, 1 Crisp unreachable, 2 bad arguments, 3 Crisp refused.
         """
 
     enum ParseResult: Equatable {
@@ -219,17 +215,15 @@ enum CrispControlCLIModel {
         if arguments.isEmpty || arguments == ["help"] || arguments == ["--help"] || arguments == ["-h"] {
             return .help
         }
-        if arguments == ["displays", "list"] {
+        if arguments == ["display", "list"] {
             return .request(.init(command: .list))
         }
-        if arguments.count == 3, arguments[0...1] == ["brightness", "get"],
-           let id = UInt32(arguments[2]) {
-            return .request(.init(command: .getBrightness, display: id))
+        if arguments.count == 3, arguments[0...1] == ["brightness", "get"], !arguments[2].isEmpty {
+            return .request(.init(command: .getBrightness, selector: arguments[2]))
         }
-        if arguments.count == 4, arguments[0...1] == ["brightness", "set"],
-           let id = UInt32(arguments[2]), let value = Double(arguments[3]),
-           value.isFinite, (0...100).contains(value) {
-            return .request(.init(command: .setBrightness, display: id, brightness: value))
+        if arguments.count == 4, arguments[0...1] == ["brightness", "set"], !arguments[2].isEmpty,
+           let value = Double(arguments[3]), value.isFinite, (0...100).contains(value) {
+            return .request(.init(command: .setBrightness, brightness: value, selector: arguments[2]))
         }
         return .failure
     }
