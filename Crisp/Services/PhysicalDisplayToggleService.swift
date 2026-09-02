@@ -394,6 +394,16 @@ final class PhysicalDisplayToggleService: ObservableObject {
     private func setEnabled(_ enabled: Bool, displayID: CGDirectDisplayID) async -> Result<Void, ToggleError> {
         let action = enabled ? "enable" : "disable"
         let waited = DispatchTime.now()
+        // No DDC traffic while the transaction runs. WindowServer's enable waits behind an
+        // in-flight I2C read on the DCP and the whole machine freezes with it: a 6 s volume
+        // read on the display Crisp had just disconnected gave a 6 s freeze on its reconnect,
+        // the commit completing within 60 ms of the read giving up, three times in a row.
+        let releaseDDC = await DDCService.shared.hold()
+        defer { releaseDDC() }
+        let heldMs = Self.millisSince(waited)
+        if heldMs > Self.slowOpThresholdMs {
+            Self.log.notice("\(action, privacy: .public) \(displayID, privacy: .public): waited \(Int(heldMs), privacy: .public) ms for DDC to go idle")
+        }
         let result: Result<Void, ToggleError> = await CGHelpers.runWithTimeout(
             seconds: 10, fallback: .failure(.configurationFailed(.failure))
         ) {

@@ -58,6 +58,16 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 
 #if arch(arm64)
     private var avServiceCache: [CGDirectDisplayID: IOAVServiceRef] = [:]
+    /// When the last registry walk found no channel for a display. A walk test-reads every
+    /// DCPAVServiceProxy, and one whose display is off or wedged holds the DCP's I2C engine
+    /// for about six seconds before it fails, so re-walking on every op for an unpaired
+    /// display kept that engine busy for most of a refresh. WindowServer's enable of a
+    /// display waits behind an I2C transaction on that engine, and the whole machine waits
+    /// with it (issue #33's shape; measured here as a 6 s freeze on a reconnect that landed
+    /// inside a 6 s volume read). Remembering the miss briefly turns six walks per refresh
+    /// into one and still lets a monitor that answers late get picked up. Under avServiceLock.
+    private var noChannelSince: [CGDirectDisplayID: Date] = [:]
+    private let noChannelRetryInterval: TimeInterval = 20
     private let avServiceLock = NSLock()
     /// Ordered list of all working external AVServices found during last enumeration.
     private var allExternalAVServices: [IOAVServiceRef] = []
@@ -243,11 +253,15 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     /// buildAVServiceMapByProximity), then vendor/product/serial matching against the
     /// CoreGraphics display list, with a traversal-order fallback.
     private func findAVService(for displayID: CGDirectDisplayID) -> IOAVServiceRef? {
-        // Fast path: return cached service if present
+        // Fast path: return cached service if present, or a recent miss as nil.
         avServiceLock.lock()
         if let cached = avServiceCache[displayID] {
             avServiceLock.unlock()
             return cached
+        }
+        if let since = noChannelSince[displayID], Date().timeIntervalSince(since) < noChannelRetryInterval {
+            avServiceLock.unlock()
+            return nil
         }
         avServiceLock.unlock()
 
@@ -256,6 +270,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         let (serviceMap, ordered) = buildAVServiceMapByProximity()
 
         guard !ordered.isEmpty else {
+            avServiceLock.withLock { noChannelSince[displayID] = Date() }
             return nil
         }
 
@@ -271,6 +286,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
             avServiceCache[extID] = avService
         }
         let result = avServiceCache[displayID]
+        noChannelSince[displayID] = result == nil ? Date() : nil
         avServiceLock.unlock()
 
         return result
@@ -689,10 +705,28 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 #if arch(arm64)
         avServiceLock.lock()
         avServiceCache.removeAll()
+        noChannelSince.removeAll()
         allExternalAVServices.removeAll()
         lastPairingSummary = ""
         avServiceLock.unlock()
 #endif
+    }
+
+    /// Keeps the DDC queue idle while the caller runs a display transaction: resolves once
+    /// every op queued before it has finished, and holds later ops until the returned
+    /// closure is called (or 15 s pass, so a lost release cannot wedge DDC for the session).
+    /// WindowServer's enable of a display waits behind an in-flight I2C transaction on the
+    /// DCP, and the machine freezes with it, so PhysicalDisplayToggleService takes this
+    /// around every enable and disable.
+    func hold() async -> () -> Void {
+        let gate = DispatchSemaphore(value: 0)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            ddcQueue.async {
+                continuation.resume()
+                _ = gate.wait(timeout: .now() + 15)
+            }
+        }
+        return { gate.signal() }
     }
 
     // MARK: - Public Async API (with retry)
