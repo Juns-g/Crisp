@@ -204,13 +204,56 @@ final class PhysicalDisplayToggleService: ObservableObject {
         )
 
         Self.log.notice("disconnect requested: \(display.displayUUID, privacy: .public) id \(displayID, privacy: .public)")
+        let otherModes = currentModes(excluding: displayID)
         let result = await setEnabled(false, displayID: displayID)
         if case .success = result {
             disconnected.removeAll { $0.uuid == snapshot.uuid }
             disconnected.append(snapshot)
             saveDesired()
+            Task { [weak self] in await self?.restoreModes(otherModes) }
         }
         return result
+    }
+
+    /// The mode of every other online display, taken before a disconnect so it can be put
+    /// back afterwards. macOS keeps an arrangement per set of attached displays and applies
+    /// it whenever the set changes, so taking one display away can move the others to
+    /// whatever they last ran at in the smaller set: on this Mac a 1440p 165 Hz panel dropped
+    /// to 1080p 60 Hz and the built-in changed scale (issue #108). It is WindowServer's doing,
+    /// not Crisp's: the same SkyLight disable from a bare probe with Crisp quit does it too,
+    /// and pinning the other modes inside the disable transaction is accepted and ignored.
+    /// The user asked for one display to go, not for the rest to change, so the modes they
+    /// had go back in a second transaction once the arrangement has landed.
+    private func currentModes(excluding displayID: CGDirectDisplayID) -> [(CGDirectDisplayID, CGDisplayMode)] {
+        onlineDisplayIDs().filter { $0 != displayID }.compactMap { id in
+            CGDisplayCopyDisplayMode(id).map { (id, $0) }
+        }
+    }
+
+    private func restoreModes(_ modes: [(CGDirectDisplayID, CGDisplayMode)]) async {
+        // A mirror target's mode is driven by its source (see ResolutionService).
+        let moved = {
+            modes.compactMap { id, mode -> (CGDirectDisplayID, CGDisplayMode, CGDisplayMode)? in
+                guard self.onlineDisplayIDs().contains(id), !MirroredModeService.shared.isActive(for: id),
+                      let current = CGDisplayCopyDisplayMode(id),
+                      current.ioDisplayModeID != mode.ioDisplayModeID else { return nil }
+                return (id, current, mode)
+            }
+        }
+        // The re-arrangement landed about a second after the commit here. Poll for it rather
+        // than wait a fixed time, so the flip the user sees is as short as it can be; the
+        // extra tick after the first move catches a second display changing in the same breath.
+        var changed = moved()
+        for _ in 0..<30 where changed.isEmpty {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            changed = moved()
+        }
+        guard !changed.isEmpty else { return }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        for (id, current, mode) in moved() {
+            let restored = await ResolutionService.applyModeSync(mode, on: id)
+            Self.log.notice("display \(id, privacy: .public) moved to \(current.width, privacy: .public)x\(current.height, privacy: .public) after the disconnect, restoring \(mode.width, privacy: .public)x\(mode.height, privacy: .public) @\(Int(mode.refreshRate), privacy: .public): \(restored ? "ok" : "failed", privacy: .public)")
+        }
     }
 
     /// Reconnects a previously disconnected display and drops it from the disconnected set.
