@@ -105,9 +105,9 @@ crispctl brightness set <display-id> <percent>
 crispctl help
 ```
 
-`crispctl help` is the full reference (output format, display ids, exit codes); point an agent at it before it does anything else.
+`crispctl help` is the full reference (output format, display ids, exit codes); point an agent at it before it does anything else. `displays list` includes additive UUID, current-resolution, and brightness-backend metadata. The backend is Crisp's current route (`builtin`, `ddc`, `software`, or `unknown` while external DDC availability is undetermined); HDR software dimming reports `software`.
 
-Crisp must already be running. Display selectors are numeric runtime IDs from `displays list`, and output is JSON by default. `brightness set` is a manual change like using the slider and clears the active preset. A successful request means the change was accepted and queued, not independently verified; it is not retried automatically.
+Crisp must already be running. A display UUID is stable across reconnects for identification, but commands still require the numeric runtime display ID from a fresh `displays list`; output is JSON by default. `brightness set` is a manual change like using the slider and clears the active preset. A successful request means the change was accepted and queued, not independently verified; it is not retried automatically.
 
 The current public Crisp 1.5.0 release, normal DMG, and Homebrew cask do not include `crispctl`.
 

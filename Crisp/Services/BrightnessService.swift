@@ -751,6 +751,20 @@ final class BrightnessService: @unchecked Sendable {
         ddcAvailableLock.withLock { ddcAvailable[displayID] }
     }
 
+    /// Returns a read-only snapshot of Crisp's current brightness route.
+    @MainActor
+    func brightnessBackend(for display: DisplayInfo) -> CrispControlBrightnessBackend {
+        let displayID = display.displayID
+        let state = ddcAvailableLock.withLock {
+            (hdrDimmedDisplays.contains(displayID), ddcAvailable[displayID])
+        }
+        return CrispControlModel.brightnessBackend(
+            isBuiltin: display.isBuiltin,
+            hdrSoftwareDimming: state.0,
+            ddcAvailable: state.1
+        )
+    }
+
     /// Clears all per-display state for a disconnected display.
     /// Call this when a display is removed so stale state cannot pollute a reconnect.
     @MainActor
