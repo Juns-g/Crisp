@@ -31,6 +31,9 @@ final class PhysicalDisplayToggleService: ObservableObject {
         var name: String
         var width: Int
         var height: Int
+        /// Whether this was the built-in panel, captured at disconnect time. Optional so
+        /// records written before this field decode instead of throwing away the whole list.
+        var isBuiltin: Bool?
         var id: String { uuid }
     }
 
@@ -174,7 +177,8 @@ final class PhysicalDisplayToggleService: ObservableObject {
             displayID: displayID,
             name: display.name,
             width: display.pixelWidth,
-            height: display.pixelHeight
+            height: display.pixelHeight,
+            isBuiltin: display.isBuiltin
         )
 
         let result = await setEnabled(false, displayID: displayID)
@@ -201,6 +205,15 @@ final class PhysicalDisplayToggleService: ObservableObject {
             saveDesired()
         }
         return result
+    }
+
+    /// Built-in test for a disconnect record. Prefers the flag captured at disconnect time,
+    /// while the ID still answered truthfully: in the all-black state this matters in,
+    /// SLSGetDisplayList has collapsed to the placeholder display and CGDisplayIsBuiltin
+    /// answers with garbage for the stale IDs left over. Records written before that flag
+    /// existed fall back to the live query, which is no worse than before.
+    private func wasBuiltin(_ record: DisconnectedDisplay, id: CGDirectDisplayID) -> Bool {
+        record.isBuiltin ?? (CGDisplayIsBuiltin(id) == 1)
     }
 
     /// Finds the current CGDirectDisplayID for a disconnected record by matching its UUID
@@ -574,13 +587,24 @@ final class PhysicalDisplayToggleService: ObservableObject {
             // SLSConfigureDisplayEnabled still honors a stale ID for attached
             // hardware, while detached hardware fails at
             // CGCompleteDisplayConfiguration (error 1001) and the loop moves on.
-            // Prefer the built-in panel when the ID still classifies; stale IDs
-            // answer CGDisplayIsBuiltin with garbage, which sorts as non-builtin.
+            // Prefer the built-in panel, from the flag captured at disconnect time
+            // (see wasBuiltin): the IDs here are stale, so a live query is unreliable.
             let candidates = self.disconnected
                 .map { record in (record, self.resolveCurrentID(for: record) ?? record.displayID) }
-                .sorted { CGDisplayIsBuiltin($0.1) == 1 && CGDisplayIsBuiltin($1.1) != 1 }
+                .sorted { self.wasBuiltin($0.0, id: $0.1) && !self.wasBuiltin($1.0, id: $1.1) }
             for (record, _) in candidates {
-                if case .success = await self.reconnect(uuid: record.uuid) { return }
+                // macOS re-probes displays by itself in this state and often wins the race;
+                // stop as soon as anything viewable is back, whoever brought it back.
+                guard self.physicalActiveDisplayCount() == 0 else { return }
+                guard case .success = await self.reconnect(uuid: record.uuid) else { continue }
+                // A successful transaction is NOT proof of recovery (see verifyBackOnline):
+                // around sleep transitions it reports success while the display stays
+                // disabled, and that lie used to end the restore with every screen still
+                // black. Only enumeration ends it; otherwise move on to the next record.
+                for _ in 0..<20 {
+                    if self.physicalActiveDisplayCount() > 0 { return }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
             }
         }
     }
