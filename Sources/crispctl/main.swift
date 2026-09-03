@@ -4,7 +4,7 @@ private struct ClientFailure: Error { let message: String }
 private func systemFailure(_ operation: String) -> ClientFailure {
     ClientFailure(message: "control socket \(operation) failed: \(String(cString: strerror(errno)))")
 }
-private func connectToCrisp() throws -> Int32 {
+private func connectToCrisp(receiveTimeoutSeconds: Int) throws -> Int32 {
     let path = CrispControlSocket.path
     guard path.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path) else {
         throw ClientFailure(message: "control socket path is too long")
@@ -17,11 +17,12 @@ private func connectToCrisp() throws -> Int32 {
     let client = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
     guard client >= 0 else { throw systemFailure("creation") }
     do {
-        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        var receiveTimeout = timeval(tv_sec: receiveTimeoutSeconds, tv_usec: 0)
+        var sendTimeout = timeval(tv_sec: 2, tv_usec: 0)
         let timeoutSize = socklen_t(MemoryLayout<timeval>.size)
         var enabled: Int32 = 1
-        guard setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, timeoutSize) == 0,
-              setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, timeoutSize) == 0,
+        guard setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &receiveTimeout, timeoutSize) == 0,
+              setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, timeoutSize) == 0,
               setsockopt(
                   client,
                   SOL_SOCKET,
@@ -101,7 +102,9 @@ case .help:
 case .failure: fail(CrispControlCLIModel.usage, code: 2)
 }
 do {
-    let client = try connectToCrisp()
+    let client = try connectToCrisp(
+        receiveTimeoutSeconds: CrispControlCLIModel.receiveTimeoutSeconds(for: request.command)
+    )
     defer { Darwin.close(client) }
     try send(CrispControlModel.encode(request, sorted: true), to: client)
     let response = try receive(from: client)
