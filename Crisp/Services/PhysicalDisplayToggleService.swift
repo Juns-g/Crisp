@@ -680,14 +680,26 @@ final class PhysicalDisplayToggleService: ObservableObject {
     /// has a live screen. The settle delay rides out transient empty display lists during
     /// wake/replug storms, so a monitor that comes right back keeps the disconnect intact.
     func restoreIfNoActiveDisplay() {
-        guard isSupported, !disconnected.isEmpty, !restoreInFlight else { return }
-        guard physicalActiveDisplayCount() == 0 else { return }
+        guard isSupported, !disconnected.isEmpty else { return }
+        // With records to act on, every stand-down is worth a line: a capture of a dark
+        // desk otherwise cannot tell "never asked" from "asked and refused", and which guard
+        // refused (issue #92: a dock pulled during sleep can keep its displays in the online
+        // list until the link times out, and those count as active).
+        let active = physicalActiveDisplayCount()
+        guard !restoreInFlight, active == 0 else {
+            Self.log.notice("restore asked with \(self.disconnected.count, privacy: .public) record(s): \(active, privacy: .public) active display(s), in flight \(self.restoreInFlight, privacy: .public), standing down")
+            return
+        }
         restoreInFlight = true
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard let self else { return }
             defer { self.restoreInFlight = false }
-            guard self.physicalActiveDisplayCount() == 0 else { return }
+            let settled = self.physicalActiveDisplayCount()
+            guard settled == 0 else {
+                Self.log.notice("restore settled: \(settled, privacy: .public) active display(s) after 2 s, standing down")
+                return
+            }
             // This path acts with every screen black, so without a line here a capture
             // cannot tell a Crisp restore from macOS re-probing on its own (noted from
             // the outside in #91).
