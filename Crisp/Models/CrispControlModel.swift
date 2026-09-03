@@ -22,6 +22,7 @@ struct CrispControlDisplay: Codable, Equatable {
     let id: UInt32
     let name: String
     let brightness: Double
+    let maxBrightness: Double?
     let isBuiltin: Bool
     let uuid: String?
     let resolution: CrispControlResolution?
@@ -31,6 +32,7 @@ struct CrispControlDisplay: Codable, Equatable {
         id: UInt32,
         name: String,
         brightness: Double,
+        maxBrightness: Double? = nil,
         isBuiltin: Bool,
         uuid: String? = nil,
         resolution: CrispControlResolution? = nil,
@@ -39,6 +41,7 @@ struct CrispControlDisplay: Codable, Equatable {
         self.id = id
         self.name = name
         self.brightness = brightness
+        self.maxBrightness = maxBrightness
         self.isBuiltin = isBuiltin
         self.uuid = uuid
         self.resolution = resolution
@@ -185,16 +188,7 @@ enum CrispControlModel {
             }
             return (.success(display: display), nil, nil)
         case .setBrightness:
-            guard request.selector != nil || request.display != nil, let value = request.brightness else {
-                return (.failure("display and brightness are required"), nil, nil)
-            }
-            guard (0...100).contains(value) else {
-                return (.failure("brightness must be between 0 and 100"), nil, nil)
-            }
-            guard let display = target(of: request, in: displays) else {
-                return (.failure("display not found"), nil, nil)
-            }
-            return (.success(), .init(displayID: display.id, brightness: value), nil)
+            return handleSetBrightness(request, displays: displays, brightnessBoostState: brightnessBoostState)
         case .getBrightnessBoost:
             guard request.selector != nil || request.display != nil else {
                 return (.failure("display is required"), nil, nil)
@@ -213,6 +207,41 @@ enum CrispControlModel {
             }
             return (.success(), nil, .init(displayID: display.id, enabled: enabled))
         }
+    }
+
+    private static func handleSetBrightness(
+        _ request: CrispControlRequest,
+        displays: [CrispControlDisplay],
+        brightnessBoostState: (UInt32) -> CrispControlBrightnessBoostState?
+    ) -> (
+        response: CrispControlResponse,
+        brightnessChange: CrispControlBrightnessChange?,
+        brightnessBoostChange: CrispControlBrightnessBoostChange?
+    ) {
+        guard request.selector != nil || request.display != nil, let value = request.brightness else {
+            return (.failure("display and brightness are required"), nil, nil)
+        }
+        guard value.isFinite, value >= 0 else {
+            return (.failure("brightness must be finite and nonnegative"), nil, nil)
+        }
+        guard let display = target(of: request, in: displays) else {
+            return (.failure("display not found"), nil, nil)
+        }
+        if value > 100 {
+            guard let state = brightnessBoostState(display.id), state.enabled else {
+                return (.failure("extra brightness is disabled for this display"), nil, nil)
+            }
+            guard state.eligible else {
+                return (.failure("extra brightness is not eligible for this display"), nil, nil)
+            }
+            guard let maximum = display.maxBrightness else {
+                return (.failure("extra brightness maximum is unavailable for this display"), nil, nil)
+            }
+            guard value <= maximum else {
+                return (.failure("brightness exceeds the live maximum of \(maximum)"), nil, nil)
+            }
+        }
+        return (.success(), .init(displayID: display.id, brightness: value), nil)
     }
 
     /// Finds a display by the selector a person typed: a runtime id, or a uuid in any
@@ -243,9 +272,11 @@ enum CrispControlCLIModel {
 
         Commands:
           display list                           Online displays as JSON: id, uuid, name,
-                                                 resolution, brightness, brightnessBackend
-          brightness get <display>               Read brightness, 0-100
-          brightness set <display> <pct>         Set brightness, 0-100; clears the active preset
+                                                 resolution, brightness, maxBrightness,
+                                                 brightnessBackend
+          brightness get <display>               Read logical brightness and its live maximum
+          brightness set <display> <pct>         Set 0-100, or up to maxBrightness while Extra
+                                                 Brightness is enabled and eligible; clears preset
           brightness boost get <display>         Read Extra Brightness eligibility and state
           brightness boost set <display> on|off  Enable or disable Extra Brightness
           help                                   Show this help (also -h, --help)
@@ -280,7 +311,7 @@ enum CrispControlCLIModel {
             return .request(.init(command: .getBrightness, selector: arguments[2]))
         }
         if arguments.count == 4, arguments[0...1] == ["brightness", "set"], !arguments[2].isEmpty,
-           let value = Double(arguments[3]), value.isFinite, (0...100).contains(value) {
+           let value = Double(arguments[3]), value.isFinite, value >= 0 {
             return .request(.init(command: .setBrightness, brightness: value, selector: arguments[2]))
         }
         if arguments.count == 4, arguments[0...2] == ["brightness", "boost", "get"],

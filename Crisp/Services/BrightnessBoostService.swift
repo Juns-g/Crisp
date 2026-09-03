@@ -157,6 +157,19 @@ final class BrightnessBoostService {
         return false
     }
 
+    /// Live logical ceiling exposed to automation. Unlike DisplayInfo.maxBrightness,
+    /// this is not transiently lower while the UI range expansion is animating.
+    func maximumBrightness(for display: DisplayInfo) -> Double {
+        guard isEnabled(for: display), isEligible(display) else { return 100 }
+        return BrightnessBoostMath.sliderMax(potentialHeadroom: potentialHeadroom(for: display.displayID))
+    }
+
+    /// An accepted CLI set must not be clamped by the remaining range animation.
+    func settleMaximumBrightness(_ maximum: Double, for display: DisplayInfo) {
+        maxAnimators[display.displayID]?.cancel()
+        display.maxBrightness = maximum
+    }
+
     // MARK: - Toggle
 
     /// Enable or disable boost. Async because switching an external monitor to

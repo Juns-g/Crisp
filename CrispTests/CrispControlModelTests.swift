@@ -5,6 +5,7 @@ final class CrispControlModelTests: XCTestCase {
         id: 7,
         name: "Studio Display",
         brightness: 64,
+        maxBrightness: 100,
         isBuiltin: false,
         uuid: "37D8832A-2D66-02CA-B9F7-8F30A301B230",
         resolution: CrispControlResolution(
@@ -73,7 +74,7 @@ final class CrispControlModelTests: XCTestCase {
             ["help", "me"], ["display"], ["displays", "list"], ["display", "list", "--json"],
             ["brightness", "get"], ["brightness", "get", ""], ["brightness", "set", "42"],
             ["brightness", "set", "42", "nan"], ["brightness", "set", "42", "inf"],
-            ["brightness", "set", "42", "-0.1"], ["brightness", "set", "42", "100.1"],
+            ["brightness", "set", "42", "-0.1"],
             ["brightness", "boost", "get"], ["brightness", "boost", "get", ""],
             ["brightness", "boost", "get", "42", "extra"],
             ["brightness", "boost", "set", "42"], ["brightness", "boost", "set", "", "on"],
@@ -84,7 +85,7 @@ final class CrispControlModelTests: XCTestCase {
         for arguments in cases {
             XCTAssertEqual(CrispControlCLIModel.parse(arguments: arguments), .failure)
         }
-        for value in ["0", "100"] {
+        for value in ["0", "100", "100.1", "175"] {
             guard case let .request(request) = CrispControlCLIModel.parse(
                 arguments: ["brightness", "set", "42", value]
             ) else { return XCTFail("expected boundary \(value)") }
@@ -133,6 +134,7 @@ final class CrispControlModelTests: XCTestCase {
         )
         let listedDisplay = try XCTUnwrap((listJSON["displays"] as? [[String: Any]])?.first)
         XCTAssertEqual(listedDisplay["uuid"] as? String, display.uuid)
+        XCTAssertEqual(listedDisplay["maxBrightness"] as? Double, 100)
         XCTAssertEqual(listedDisplay["brightnessBackend"] as? String, "ddc")
         XCTAssertEqual((listedDisplay["resolution"] as? [String: Any])?["logicalWidth"] as? Int, 2560)
 
@@ -150,6 +152,7 @@ final class CrispControlModelTests: XCTestCase {
         )
         let returnedDisplay = try XCTUnwrap(getJSON["display"] as? [String: Any])
         XCTAssertEqual(returnedDisplay["uuid"] as? String, display.uuid)
+        XCTAssertEqual(returnedDisplay["maxBrightness"] as? Double, 100)
         XCTAssertEqual(returnedDisplay["brightnessBackend"] as? String, "ddc")
         XCTAssertEqual((returnedDisplay["resolution"] as? [String: Any])?["pixelWidth"] as? Int, 5120)
 
@@ -223,7 +226,73 @@ final class CrispControlModelTests: XCTestCase {
         XCTAssertNil(decoded.display?.uuid)
         XCTAssertNil(decoded.display?.resolution)
         XCTAssertNil(decoded.display?.brightnessBackend)
+        XCTAssertNil(decoded.display?.maxBrightness)
         XCTAssertNil(decoded.brightnessBoost)
+    }
+
+    func testBoostedListGetAndSetUseTheLiveLogicalRange() throws {
+        let boosted = CrispControlDisplay(
+            id: 7,
+            name: "Studio Display",
+            brightness: 135,
+            maxBrightness: 160,
+            isBuiltin: false
+        )
+        let enabled = CrispControlBrightnessBoostState(displayID: 7, eligible: true, enabled: true)
+        let state: (UInt32) -> CrispControlBrightnessBoostState? = { $0 == 7 ? enabled : nil }
+
+        let list = CrispControlModel.handle(Data(#"{"command":"list"}"#.utf8), displays: [boosted])
+        XCTAssertEqual(list.response.displays?.first?.brightness, 135)
+        XCTAssertEqual(list.response.displays?.first?.maxBrightness, 160)
+        let get = CrispControlModel.handle(
+            Data(#"{"command":"getBrightness","display":7}"#.utf8), displays: [boosted]
+        )
+        XCTAssertEqual(get.response.display?.brightness, 135)
+        XCTAssertEqual(get.response.display?.maxBrightness, 160)
+
+        let accepted = CrispControlModel.handle(
+            Data(#"{"command":"setBrightness","display":7,"brightness":150}"#.utf8),
+            displays: [boosted],
+            brightnessBoostState: state
+        )
+        XCTAssertEqual(accepted.response, .success())
+        XCTAssertEqual(accepted.brightnessChange, .init(displayID: 7, brightness: 150))
+
+        let tooHigh = CrispControlModel.handle(
+            Data(#"{"command":"setBrightness","display":7,"brightness":161}"#.utf8),
+            displays: [boosted],
+            brightnessBoostState: state
+        )
+        XCTAssertEqual(tooHigh.response, .failure("brightness exceeds the live maximum of 160.0"))
+        XCTAssertNil(tooHigh.brightnessChange)
+    }
+
+    func testBoostedSetRequiresEnabledEligibleStateButNativeRangeDoesNot() {
+        let boosted = CrispControlDisplay(
+            id: 7, name: "Studio Display", brightness: 100, maxBrightness: 160, isBuiltin: false
+        )
+        func set(_ value: Double, state: CrispControlBrightnessBoostState?) -> (
+            response: CrispControlResponse,
+            brightnessChange: CrispControlBrightnessChange?,
+            brightnessBoostChange: CrispControlBrightnessBoostChange?
+        ) {
+            CrispControlModel.handle(
+                Data(#"{"command":"setBrightness","display":7,"brightness":\#(value)}"#.utf8),
+                displays: [boosted],
+                brightnessBoostState: { _ in state }
+            )
+        }
+
+        let disabled = set(120, state: .init(displayID: 7, eligible: true, enabled: false))
+        XCTAssertEqual(disabled.response, .failure("extra brightness is disabled for this display"))
+        XCTAssertNil(disabled.brightnessChange)
+        let ineligible = set(120, state: .init(displayID: 7, eligible: false, enabled: true))
+        XCTAssertEqual(ineligible.response, .failure("extra brightness is not eligible for this display"))
+        XCTAssertNil(ineligible.brightnessChange)
+
+        for value in [0.0, 100.0] {
+            XCTAssertEqual(set(value, state: nil).brightnessChange, .init(displayID: 7, brightness: value))
+        }
     }
 
     func testBrightnessBackendClassifierCoversCurrentRouting() {
@@ -326,7 +395,6 @@ final class CrispControlModelTests: XCTestCase {
             #"{"command":"getBrightness","selector":"nope"}"#,
             #"{"command":"setBrightness","selector":"","brightness":35}"#,
             #"{"command":"setBrightness","display":7}"#,
-            #"{"command":"setBrightness","display":7,"brightness":101}"#,
             #"{"command":"getBrightnessBoost"}"#,
             #"{"command":"getBrightnessBoost","display":8}"#,
             #"{"command":"getBrightnessBoost","selector":"nope"}"#,
