@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import CoreGraphics
+import ColorSync // CGDisplayCreateUUIDFromDisplayID
 
 /// Service responsible for reading and changing display resolution modes.
 @MainActor
@@ -18,9 +19,14 @@ final class ResolutionService: @unchecked Sendable {
         let hidpi: Bool
     }
 
-    private static let savedModesKey = "crisp.ResolutionService.savedModeAttrs"
+    /// Keyed by display uuid. The previous key, crisp.ResolutionService.savedModeAttrs, held the
+    /// same entries keyed by CGDirectDisplayID; those are session numbers macOS hands to whichever
+    /// display comes next, so an entry followed its number to a different panel (a 1920x1080 saved
+    /// under id 3 on one display was applied to another display holding id 3 at a later wake).
+    /// A new key rather than a migration: an id cannot be mapped back to the uuid it was saved for.
+    private static let savedModesKey = "crisp.ResolutionService.savedModesByUUID"
 
-    /// Last user-set mode per displayID (string key). Used to re-apply modes after sleep/wake.
+    /// Last user-set mode per display uuid. Used to re-apply modes after sleep/wake.
     private var savedModes: [String: SavedMode] = {
         guard let data = UserDefaults.standard.data(forKey: ResolutionService.savedModesKey),
               let decoded = try? JSONDecoder().decode([String: SavedMode].self, from: data)
@@ -29,9 +35,16 @@ final class ResolutionService: @unchecked Sendable {
     }()
 
     private func persistMode(_ mode: DisplayMode, for displayID: CGDirectDisplayID) {
-        savedModes["\(displayID)"] = SavedMode(width: mode.width, height: mode.height,
-                                               refresh: mode.refreshRate, hidpi: mode.isHiDPI)
+        guard let key = Self.uuidKey(for: displayID) else { return }
+        savedModes[key] = SavedMode(width: mode.width, height: mode.height,
+                                    refresh: mode.refreshRate, hidpi: mode.isHiDPI)
         UserDefaults.standard.set(try? JSONEncoder().encode(savedModes), forKey: Self.savedModesKey)
+    }
+
+    /// nil while the display is disabled: CGDisplayCreateUUIDFromDisplayID has no uuid for it then.
+    private static func uuidKey(for displayID: CGDirectDisplayID) -> String? {
+        guard let cfUUID = CGDisplayCreateUUIDFromDisplayID(displayID) else { return nil }
+        return CFUUIDCreateString(nil, cfUUID.takeRetainedValue()) as String
     }
 
     /// Refresh rates match within 1 Hz (macOS reports 59.97 for a stored 60, etc., and the
@@ -54,7 +67,7 @@ final class ResolutionService: @unchecked Sendable {
         // would redirect to the virtual and fight the mirror. That state is
         // MirroredModeService's to restore, not ours.
         guard !MirroredModeService.shared.isActive(for: displayID) else { return }
-        guard let saved = savedModes["\(displayID)"] else { return }
+        guard let key = Self.uuidKey(for: displayID), let saved = savedModes[key] else { return }
 
         // Already at the saved resolution? Nothing to do.
         if let cur = CGDisplayCopyDisplayMode(displayID),
