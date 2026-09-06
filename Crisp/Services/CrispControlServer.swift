@@ -99,7 +99,7 @@ final class CrispControlServer {
                 brightness: display.brightness,
                 maxBrightness: boostService.maximumBrightness(for: display),
                 isBuiltin: display.isBuiltin,
-                uuid: boostService.stableDisplayUUID(for: display),
+                uuid: display.displayUUID,
                 resolution: resolution,
                 brightnessBackend: BrightnessService.shared.brightnessBackend(for: display)
             )
@@ -109,8 +109,8 @@ final class CrispControlServer {
             displays: displays,
             hdrState: { id in
                 guard let display = managedDisplays.first(where: { $0.displayID == id }),
-                      let uuid = boostService.stableDisplayUUID(for: display),
-                      let enabled = boostService.hdrState(for: display, expectedUUID: uuid) else { return nil }
+                      let enabled = boostService.hdrState(for: display, expectedUUID: display.displayUUID)
+                else { return nil }
                 return CrispControlHDRState(
                     displayID: id,
                     enabled: enabled

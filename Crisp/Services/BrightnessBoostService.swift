@@ -12,20 +12,6 @@ import CoreGraphics
 final class BrightnessBoostService {
     static let shared = BrightnessBoostService()
 
-    private nonisolated static let connectionEpochLock = NSLock()
-    nonisolated(unsafe) private static var connectionEpoch: UInt64 = 0
-
-    nonisolated static func advanceConnectionEpoch() {
-        connectionEpochLock.withLock {
-            precondition(connectionEpoch < .max)
-            connectionEpoch += 1
-        }
-    }
-
-    private nonisolated static func currentConnectionEpoch() -> UInt64 {
-        connectionEpochLock.withLock { connectionEpoch }
-    }
-
     /// MPDisplayMgr instance; nil when MonitorPanel is unavailable.
     private let manager: NSObject? = {
         guard dlopen("/System/Library/PrivateFrameworks/MonitorPanel.framework/MonitorPanel", RTLD_LAZY) != nil,
@@ -192,7 +178,6 @@ final class BrightnessBoostService {
     @discardableResult
     func setEnabled(_ enabled: Bool, for display: DisplayInfo) async -> Bool {
         let uuid = display.displayUUID
-        let requestEpoch = Self.currentConnectionEpoch()
         if enabled {
             // A disable-collapse may still be running from a rapid off/on
             // flip; cancel it where it is (through the same maxAnimators slot
@@ -211,7 +196,7 @@ final class BrightnessBoostService {
                 hdrRequestTokens[display.displayID] = requestToken
                 guard setHDRMode(
                     true, for: display, expectedUUID: targetUUID,
-                    expectedEpoch: requestEpoch, requestToken: requestToken
+                    requestToken: requestToken
                 ) else { return false }
                 switchedHDRForThisAttempt = (targetUUID, requestToken)
                 // Give WindowServer a moment to re-sync the display in HDR mode.
@@ -228,7 +213,7 @@ final class BrightnessBoostService {
                 if let request = switchedHDRForThisAttempt {
                     _ = setHDRMode(
                         false, for: display, expectedUUID: request.uuid,
-                        expectedEpoch: requestEpoch, requestToken: request.token
+                        requestToken: request.token
                     )
                 }
                 return false
@@ -442,7 +427,7 @@ final class BrightnessBoostService {
     /// Returns nil when this runtime ID no longer names the expected online
     /// display or its HDR state cannot be read.
     func hdrState(for display: DisplayInfo, expectedUUID: String) -> Bool? {
-        guard stableDisplayUUID(for: display)?.caseInsensitiveCompare(expectedUUID) == .orderedSame,
+        guard display.displayUUID.caseInsensitiveCompare(expectedUUID) == .orderedSame,
               isEligibleForHDRToggle(display),
               let d = mpDisplay(for: display.displayID) else { return nil }
         return d.value(forKey: "preferHDRModes") as? Bool
@@ -463,17 +448,6 @@ final class BrightnessBoostService {
         return uuidString as String
     }
 
-    func stableDisplayUUID(for display: DisplayInfo) -> String? {
-        let displayID = display.displayID
-        guard CGDisplayIsOnline(displayID) != 0 else { return nil }
-        if let uuid = uniqueDisplayUUID(for: display) { return uuid }
-        // Query the fallback live so a reused runtime ID cannot inherit stale identity fields.
-        let vendor = CGDisplayVendorNumber(displayID)
-        let model = CGDisplayModelNumber(displayID)
-        let serial = CGDisplaySerialNumber(displayID)
-        return "v\(vendor)-m\(model)-s\(serial)"
-    }
-
     /// Current HDR-preference request token per display. An off request waits out
     /// the boost collapse before switching modes; if a newer request lands
     /// during that wait, the older one must not fire its stale mode switch
@@ -491,7 +465,6 @@ final class BrightnessBoostService {
         _ on: Bool, for display: DisplayInfo, expectedUUID: String? = nil
     ) async -> Bool {
         let displayID = display.displayID
-        let requestEpoch = Self.currentConnectionEpoch()
         guard let targetUUID = expectedUUID ?? uniqueDisplayUUID(for: display),
               mutationHDRState(for: display, expectedUUID: targetUUID) != nil else { return false }
         let requestToken = UUID()
@@ -499,7 +472,7 @@ final class BrightnessBoostService {
         if on {
             return setHDRMode(
                 true, for: display, expectedUUID: targetUUID,
-                expectedEpoch: requestEpoch, requestToken: requestToken
+                requestToken: requestToken
             )
         }
         if isEnabled(for: display) {
@@ -520,7 +493,7 @@ final class BrightnessBoostService {
         try? await Task.sleep(nanoseconds: 200_000_000)
         return setHDRMode(
             false, for: display, expectedUUID: targetUUID,
-            expectedEpoch: requestEpoch, requestToken: requestToken
+            requestToken: requestToken
         )
     }
 
@@ -551,7 +524,6 @@ final class BrightnessBoostService {
         _ on: Bool,
         for display: DisplayInfo,
         expectedUUID: String,
-        expectedEpoch: UInt64,
         requestToken: UUID
     ) -> Bool {
         let displayID = display.displayID
@@ -560,8 +532,7 @@ final class BrightnessBoostService {
         let sel = NSSelectorFromString("setPreferHDRModes:")
         guard d.responds(to: sel) else { return false }
         typealias Fn = @convention(c) (NSObject, Selector, Bool) -> Void
-        guard Self.currentConnectionEpoch() == expectedEpoch,
-              hdrRequestTokens[displayID] == requestToken,
+        guard hdrRequestTokens[displayID] == requestToken,
               uniqueDisplayUUID(for: display)?.caseInsensitiveCompare(expectedUUID) == .orderedSame else {
             return false
         }
