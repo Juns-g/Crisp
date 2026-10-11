@@ -82,6 +82,9 @@ struct OSDBannerView: View {
                        in: 0...1)
                     .controlSize(.small)
                     .tint(.white)
+                    // Draws the live slider on macOS 27, where the panel is
+                    // not made key; 26 ignores it and needs the key window.
+                    .environment(\.controlActiveState, .key)
             } else {
                 restingTrack
             }

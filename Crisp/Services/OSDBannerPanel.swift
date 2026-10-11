@@ -6,8 +6,9 @@ import SwiftUI
 @available(macOS 26.0, *)
 @MainActor
 final class OSDBannerPanel: NSPanel {
-    /// Only ever while the pointer is on the capsule, see setHovering.
-    override var canBecomeKey: Bool { true }
+    /// Only ever while the pointer is on the capsule, see setHovering. Never
+    /// on macOS 27, where key changes the glass and a click would make it key.
+    override var canBecomeKey: Bool { !OSDBannerService.drawsMacOS27Capsule }
 
     let model = OSDBannerModel()
     /// The capsule's backdrop layer, or nil when the private class was
@@ -182,8 +183,11 @@ final class OSDBannerPanel: NSPanel {
         // AppKit only draws the real slider (glass knob, bright line) in a key
         // window; see OSDBannerView.track. Key only while the pointer is on
         // the capsule, handed back on the way out, or every brightness press
-        // would steal the keyboard from whatever is in front.
-        if hovering {
+        // would steal the keyboard from whatever is in front. Not on macOS
+        // 27: key changes the glass there, which the HUD's never does, and the
+        // slider takes the controlActiveState override instead.
+        // Measured: see docs/osd-notes.md (Track (inactive vs. key window)).
+        if hovering && !OSDBannerService.drawsMacOS27Capsule {
             // Give the keyboard back only to the app it came from: Crisp is
             // its own app in front while an update window or About is up.
             crispWasActive = NSApp.isActive
