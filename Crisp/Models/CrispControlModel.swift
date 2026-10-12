@@ -687,7 +687,7 @@ enum CrispControlCLIModel {
     }
 
     static let entries: [Entry] = [
-        Entry(group: .display, usage: "display list", summary: "List displays as JSON", detail: """
+        Entry(group: .display, usage: "display list", summary: "List displays", detail: """
             Each display carries id, uuid, name, resolution, brightness, maxBrightness,
             brightnessBackend and connected, which is false while Crisp holds it off.
             """),
@@ -705,7 +705,7 @@ enum CrispControlCLIModel {
             The reply comes after the window server has answered. If it is lost, run
             'display list' before retrying: the display may already have changed state.
             """),
-        Entry(group: .display, usage: "display input list <display>", summary: "List a monitor's inputs as JSON", detail: """
+        Entry(group: .display, usage: "display input list <display>", summary: "List a monitor's inputs", detail: """
             Each input carries value and name, from the list the monitor reports, or a
             standard list when it reports none. current is the input this Mac is on, or
             null when Crisp cannot read it. The first call for a monitor reads its list,
@@ -734,7 +734,7 @@ enum CrispControlCLIModel {
             Verified against the live state after the switch. If the reply is lost, do not
             retry automatically: run 'hdr get' first.
             """),
-        Entry(group: .image, usage: "image get <display>", summary: "Read Image Adjustment as JSON", detail: """
+        Entry(group: .image, usage: "image get <display>", summary: "Read Image Adjustment", detail: """
             The display's id, uuid and name, the values of every setting 'image set' takes,
             and paused, which is true while Pause in the menu shows the display without its
             adjustment. 'image set' and 'image reset' reply with the same object.
@@ -749,7 +749,7 @@ enum CrispControlCLIModel {
             """),
         Entry(group: .image, usage: "image reset <display>", summary: "Reset Image Adjustment to neutral",
               detail: "The same as Reset All in the menu."),
-        Entry(group: .preset, usage: "preset list", summary: "List presets as JSON", detail: """
+        Entry(group: .preset, usage: "preset list", summary: "List presets", detail: """
             Each preset carries id, name, captures (what applying it changes: resolution,
             brightness, arrangement, imageAdjustment, hdr, connection), displays (the uuids it has
             settings for) and active, which is true for the preset last applied until a
@@ -780,7 +780,10 @@ enum CrispControlCLIModel {
         macOS display list, so use its uuid.
         """
     static let contract = """
-        Output is one JSON object per call: {"ok":true,...} or {"ok":false,"error":"..."}.
+        Output is text for people and can change between releases. Scripts and agents
+        add --json to any command: one JSON object per call, {"ok":true,...} or
+        {"ok":false,"error":"..."}, which is what the field names in each command's help
+        describe.
         Exit codes: 0 ok, 1 Crisp unreachable, 2 bad arguments, 3 Crisp refused.
         """
 
@@ -988,4 +991,83 @@ enum CrispControlCLIModel {
         if response.ok { return .success }
         return response.error != nil ? .serverFailure : .invalid
     }
+}
+/// What crispctl prints without --json (#227): text for people, which can change from
+/// one release to the next; scripts and agents read --json. A read prints a table or a
+/// value. A change prints nothing, except a change of connection (the state it ended in)
+/// and a preset that skipped displays.
+enum CrispControlText {
+    static func render(_ response: CrispControlResponse, for command: CrispControlRequest.Command) -> String {
+        switch command {
+        case .list: return displayTable(response.displays ?? [])
+        case .getBrightness: return displayTable(response.display.map { [$0] } ?? [])
+        case .getBrightnessBoost:
+            guard let boost = response.brightnessBoost else { return "" }
+            return boost.eligible ? onOff(boost.enabled) : "off (not eligible)"
+        case .getHDR: return response.hdr.map { onOff($0.enabled) } ?? ""
+        case .connectDisplay, .disconnectDisplay, .toggleDisplay, .setInput:
+            guard let display = response.display else { return "" }
+            return display.name + ((display.connected ?? true) ? " connected" : " disconnected")
+        case .listInputs:
+            guard let inputs = response.inputs else { return "" }
+            return table(inputs.inputs.map { [$0.value == inputs.current ? "*" : "", $0.name, String($0.value)] })
+        case .getImage: return response.image.map(imageTable) ?? ""
+        case .listPresets:
+            guard let presets = response.presets, !presets.isEmpty else { return "no presets" }
+            return table([["", "NAME", "CAPTURES", "ID"]]
+                + presets.map { [$0.active ? "*" : "", $0.name, $0.captures.joined(separator: ","), $0.id] })
+        case .applyPreset: return (response.skippedDisplays ?? []).map { "skipped \($0): not connected" }.joined(separator: "\n")
+        case .setBrightness, .setBrightnessBoost, .setHDR, .setImage, .resetImage: return ""
+        }
+    }
+
+    private static func displayTable(_ displays: [CrispControlDisplay]) -> String {
+        table([["ID", "NAME", "BRIGHTNESS", "RESOLUTION", "BACKEND", "UUID"]] + displays.map { display in
+            let connected = display.connected ?? true
+            var brightness = percent(display.brightness)
+            if let maximum = display.maxBrightness, maximum > 100 { brightness += " of " + percent(maximum) }
+            let resolution = display.resolution.map {
+                "\($0.logicalWidth)x\($0.logicalHeight) \(number($0.refreshRate))Hz" + ($0.isHiDPI ? " HiDPI" : "")
+            }
+            return [
+                String(display.id), display.name, connected ? brightness : "-",
+                connected ? resolution ?? "-" : "disconnected", display.brightnessBackend?.rawValue ?? "-", display.uuid ?? "-"
+            ]
+        })
+    }
+
+    /// Named as `image set` takes them, so a line read here can be typed back.
+    private static func imageTable(_ image: CrispControlImageAdjustment) -> String {
+        let rows = CrispControlImageSetting.allCases.map { setting -> [String] in
+            let value: String
+            switch setting {
+            case .contrast: value = number(image.contrast)
+            case .gamma: value = number(image.gamma)
+            case .gain: value = number(image.gain)
+            case .temperature: value = number(image.temperature)
+            case .redGamma: value = number(image.redGamma)
+            case .greenGamma: value = number(image.greenGamma)
+            case .blueGamma: value = number(image.blueGamma)
+            case .redGain: value = number(image.redGain)
+            case .greenGain: value = number(image.greenGain)
+            case .blueGain: value = number(image.blueGain)
+            case .quantization: value = String(image.quantization)
+            case .invert: value = onOff(image.invert)
+            }
+            return [setting.rawValue, value]
+        }
+        return "\(image.name) (\(image.displayID))\n" + table(rows + [["paused", image.paused ? "yes" : "no"]])
+    }
+
+    /// Columns padded to their widest cell, two spaces apart.
+    private static func table(_ rows: [[String]]) -> String {
+        let widths = (0..<(rows.first?.count ?? 0)).map { column in rows.map { $0[column].count }.max() ?? 0 }
+        return rows.map { row in
+            zip(row, widths).map { $0.padding(toLength: $1, withPad: " ", startingAt: 0) }
+                .joined(separator: "  ").replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+        }.joined(separator: "\n")
+    }
+    private static func onOff(_ value: Bool) -> String { value ? "on" : "off" }
+    private static func percent(_ value: Double) -> String { "\(Int(value.rounded()))%" }
+    private static func number(_ value: Double) -> String { String(format: "%g", value) }
 }
