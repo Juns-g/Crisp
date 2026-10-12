@@ -19,11 +19,11 @@ enum CrispControlSkill {
     ## Start here
 
     1. Run `crispctl help` once. It is the reference for the installed version, and `crispctl <command> --help` gives the detail for one command. Trust it over this file where they differ.
-    2. Run `crispctl display list` and pick displays by `uuid`. Runtime ids change after an unplug or a wake; uuids do not.
+    2. Run `crispctl display list --json` and pick displays by `uuid`. Runtime ids change after an unplug or a wake; uuids do not.
 
     ## The contract
 
-    Every call prints one JSON object: `{"ok":true,...}` or `{"ok":false,"error":"..."}`. Exit codes: 0 ok, 1 Crisp unreachable, 2 bad arguments, 3 Crisp refused (this includes "display not found").
+    Always add `--json`. Without it crispctl prints text for people, which can change between releases. With it, every call prints one JSON object: `{"ok":true,...}` or `{"ok":false,"error":"..."}`. Exit codes: 0 ok, 1 Crisp unreachable, 2 bad arguments, 3 Crisp refused (this includes "display not found").
 
     `display list` gives each display's `id`, `uuid`, `name`, `isBuiltin`, `resolution`, `brightness`, `maxBrightness`, `brightnessBackend` and `connected`. The backend is how Crisp sets brightness right now: `builtin` (also Apple displays such as the Studio Display), `ddc` (the monitor's own backlight), `software` (dimming in the picture, also used for HDR), or `unknown` while Crisp has not yet settled whether DDC works.
 
@@ -55,7 +55,7 @@ enum CrispControlSkill {
 
     ```sh
     # Dim every external to 40 %
-    crispctl display list | jq -r '.displays[] | select(.isBuiltin | not) | select(.connected) | .uuid' |
+    crispctl display list --json | jq -r '.displays[] | select(.isBuiltin | not) | select(.connected) | .uuid' |
       while read -r uuid; do crispctl brightness set "$uuid" 40; done
 
     # Toggle one monitor by uuid (a KVM or Stream Deck button)

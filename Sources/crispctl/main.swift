@@ -1,6 +1,9 @@
 import Darwin
 import Foundation
 private struct ClientFailure: Error { let message: String }
+/// --json prints the server's reply as it came, for scripts and agents; without it,
+/// text for people (#227). It may stand anywhere among the arguments.
+private let jsonOutput = CommandLine.arguments.contains("--json")
 private func systemFailure(_ operation: String) -> ClientFailure {
     ClientFailure(message: "control socket \(operation) failed: \(String(cString: strerror(errno)))")
 }
@@ -90,7 +93,7 @@ private func receive(from client: Int32) throws -> Data {
     }
 }
 private func fail(_ message: String, code: Int32) -> Never {
-    FileHandle.standardError.write(CrispControlModel.encode(.failure(message)))
+    FileHandle.standardError.write(jsonOutput ? CrispControlModel.encode(.failure(message)) : Data("error: \(message)\n".utf8))
     Darwin.exit(code)
 }
 /// The version of the Crisp this tool ships inside: crispctl lives at
@@ -120,7 +123,7 @@ private func installSkill(for agent: String) -> Never {
     Darwin.exit(EXIT_SUCCESS)
 }
 let request: CrispControlRequest
-switch CrispControlCLIModel.parse(arguments: Array(CommandLine.arguments.dropFirst())) {
+switch CrispControlCLIModel.parse(arguments: CommandLine.arguments.dropFirst().filter { $0 != "--json" }) {
 case let .request(value): request = value
 case let .help(topic):
     switch topic {
@@ -161,11 +164,19 @@ do {
     }
     switch CrispControlCLIModel.classify(response, for: request.command) {
     case .success:
-        FileHandle.standardOutput.write(response)
+        if jsonOutput {
+            FileHandle.standardOutput.write(response)
+        } else if let decoded = try? JSONDecoder().decode(CrispControlResponse.self, from: response) {
+            let text = CrispControlText.render(decoded, for: request.command)
+            if !text.isEmpty { print(text) }
+        }
         Darwin.exit(EXIT_SUCCESS)
     case .serverFailure:
-        FileHandle.standardOutput.write(response)
-        Darwin.exit(3)
+        if jsonOutput {
+            FileHandle.standardOutput.write(response)
+            Darwin.exit(3)
+        }
+        fail((try? JSONDecoder().decode(CrispControlResponse.self, from: response))?.error ?? "", code: 3)
     case .invalid:
         throw ClientFailure(message: "server returned invalid response")
     }
