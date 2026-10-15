@@ -1,7 +1,8 @@
 # Virtual displays through crispctl
 
-**Formal hardware acceptance has not been performed.** Compilation and model
-checks do not prove a usable desktop without HDMI. This change follows the
+**Local MacBook Pro validation has passed; target Mac mini HDMI-disconnected
+acceptance remains pending.** The device checks below do not prove a usable
+desktop without HDMI. This change follows the
 current main branch's socket, JSON envelope, exit codes and bundled Skill;
 it does not restore the archived control-plane package or software audio mode.
 
@@ -69,6 +70,39 @@ restore saved autoCreate configs. Ready proves display/mode state, not native
 resolution, screenshot/input permission, an unlocked session or sleep prevention.
 Compare actual and configured dimensions when native resolution matters.
 Keep Awake, lock/FileVault/login control and capture/input tools are outside scope.
+
+## Local device validation (2026-10-15)
+
+Tested code: `7b3768c`, built with Swift 6 and installed locally as an ad-hoc
+Crisp 1.7.1 build after preserving the previous apps and preferences.
+
+- Configure saved a config with autoCreate off and added no screen.
+- Ensure produced one owned virtual screen, independently observed through
+  CoreGraphics at 1920×1080, 75 Hz, native 1x. Actual mode is separate from the
+  configuration's existing refreshRate default; the CLI does not set Hz.
+- Repeated ensure returned the same runtime ID and did not add another screen.
+- Changing geometry while active was refused with exit 3, preserving the config
+  and online screen.
+- Normal App quit removed the virtual screen. With autoCreate on, reopening
+  restored the same saved identity without a CLI ensure; the numeric display ID
+  changed. Independent enumeration still showed exactly one virtual screen.
+- A disposable TextEdit window was moved to that screen. WindowServer bounds
+  confirmed the document window was inside it. Clicking Bold changed its state,
+  typed text was read back through screenshots and accessibility, and the saved
+  RTF's plain text matched exactly. Input/read-back was repeated after App restart.
+- AutoCreate off plus disable released the screen. The task's config was removed
+  while Crisp was stopped, preserving all other preferences. Final restart/list
+  showed no saved test config; the original physical topology and held-disconnect
+  records were unchanged. The installed bundle passed deep/strict signature
+  verification and its App/CLI hashes matched the tested build.
+
+The Mac mini has not arrived. HDMI-disconnected capture/click/input, login or
+FileVault boundaries, sleep/wake and long-running stability, and actual
+WindowServer failure/late-completion recovery remain unverified. On this local
+ad-hoc install, Crisp was not Accessibility-trusted, so its global brightness-key
+hook stayed off; no OS permission settings were changed. Virtual commands do
+not require that hook. This validation is not a claim that formal target-device
+acceptance is complete.
 
 ## Controlled acceptance and recovery
 
