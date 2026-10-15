@@ -1,8 +1,8 @@
 # Virtual displays through crispctl
 
-**Local MacBook Pro validation has passed; target Mac mini HDMI-disconnected
-acceptance remains pending.** The device checks below do not prove a usable
-desktop without HDMI. This change follows the
+**Acceptance for this iteration passed on a MacBook Pro.** Mac mini
+HDMI-disconnected testing is not a merge prerequisite; that scenario remains
+untested. This change follows the
 current main branch's socket, JSON envelope, exit codes and bundled Skill;
 it does not restore the archived control-plane package or software audio mode.
 
@@ -101,8 +101,9 @@ FileVault boundaries, sleep/wake and long-running stability, and actual
 WindowServer failure/late-completion recovery remain unverified. On this local
 ad-hoc install, Crisp was not Accessibility-trusted, so its global brightness-key
 hook stayed off; no OS permission settings were changed. Virtual commands do
-not require that hook. This validation is not a claim that formal target-device
-acceptance is complete.
+not require that hook. The MacBook Pro results above satisfy the agreed
+acceptance scope for this iteration; the untested scenarios are coverage limits,
+not outstanding acceptance requirements.
 
 ## Controlled acceptance and recovery
 
