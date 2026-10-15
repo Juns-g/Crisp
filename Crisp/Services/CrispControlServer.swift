@@ -108,6 +108,13 @@ final class CrispControlServer {
     private var connectionChain: Task<Void, Never>?
 
     private func response(to request: Data) async -> Data {
+        if let decoded = try? JSONDecoder().decode(CrispControlRequest.self, from: request) {
+            switch decoded.command {
+            case .headlessStatus, .headlessStart, .headlessConfirm, .headlessRestore:
+                return CrispControlModel.encode(await HeadlessDisplayService.shared.handle(decoded, displays: displayManager.displays))
+            default: break
+            }
+        }
         if let virtual = await virtualResponse(to: request) { return CrispControlModel.encode(virtual) }
         guard Self.changesConnection(request) else { return await reply(to: request) }
         let previous = connectionChain
@@ -253,7 +260,8 @@ final class CrispControlServer {
         switch request.command {
         case .status, .listVirtualDisplays:
             return CrispControlResponse(ok: true, running: request.command == .status ? true : nil,
-                                        virtualDisplays: VirtualDisplayService.shared.controlSnapshots())
+                                        virtualDisplays: VirtualDisplayService.shared.controlSnapshots(),
+                                        headless: request.command == .status ? HeadlessDisplayService.shared.state() : nil)
         case .configureVirtualDisplay, .ensureVirtualDisplay, .disableVirtualDisplay:
             guard let id = request.virtualConfigID else {
                 return .failure("a valid configuration UUID and matching configuration are required")

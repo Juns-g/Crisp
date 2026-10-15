@@ -257,6 +257,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard HeadlessDisplayService.shared.needsRecovery else { return .terminateNow }
+        Task { @MainActor in
+            let restored = await HeadlessDisplayService.shared.restore()
+            sender.reply(toApplicationShouldTerminate: restored)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         controlServer.stop()
         for obs in wakeObservers {

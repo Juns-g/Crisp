@@ -33,6 +33,9 @@ refused. A same-size third-party screen cannot satisfy it. An unowned online
 screen with the same vendor/product/serial identity is reported as a conflict,
 not adopted or duplicated. Saved descriptor identity collisions are refused.
 
+During an explicit [headless session](crispctl-headless.md), restore its physical
+screen before disabling, deleting or changing the active virtual geometry.
+
 Disable releases only this configuration's Crisp-owned object, waits for its
 runtime ID to leave online enumeration, and keeps its saved settings. Set
 autoCreate off as well to prevent next-start restoration. Delete a saved test

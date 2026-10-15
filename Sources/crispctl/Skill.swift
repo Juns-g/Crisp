@@ -5,7 +5,7 @@ enum CrispControlSkill {
     static let text = #"""
     ---
     name: crispctl
-    description: Control displays on a Mac that runs Crisp through its crispctl command line tool. Use when the user wants to read or set display brightness, switch Extra Brightness or HDR, list displays, disconnect and reconnect a display, switch a monitor's input, change Image Adjustment (contrast, color temperature, gamma), list and apply saved presets, or configure and inspect Crisp-owned virtual displays from a script, a shortcut or an agent.
+    description: Control displays on a Mac that runs Crisp through its crispctl command line tool. Use when the user wants to read or set display brightness, switch Extra Brightness or HDR, list displays, disconnect and reconnect a display, switch a monitor's input, change Image Adjustment (contrast, color temperature, gamma), list and apply saved presets, configure and inspect Crisp-owned virtual displays, or explicitly switch to a virtual-only headless desktop from a script, a shortcut or an agent.
     ---
 
     # crispctl
@@ -49,13 +49,19 @@ enum CrispControlSkill {
 
     `virtual disable <config-id>` releases only that config's owned screen and keeps its saved settings. Configure autoCreate off as well to stop next-start restoration. Deletion stays in the GUI. In-flight creation, including an apply that outlived its timeout, blocks writes for the same config. If the worker never finishes, arrange a controlled App restart. On failure, inspect the returned `virtualDisplay` and read `virtual list`; do not retry automatically. A development or read request does not authorize screen creation/removal. Only make the virtual-screen changes the user requested. Hardware acceptance requires a real screenshot, harmless click/input and a second screenshot to read the result back; mock results and exit 0 do not pass it.
 
+    `headless status` reads the current session, `physicalOnline` (omitted when unknown), `virtualReady` and `lastError`. `status` includes the same `headless` object. Reads never enter or recover a session.
+
+    `headless start <physical-uuid> <config-id>` is an explicit exception for the last physical screen on Apple Silicon, only when the named Crisp virtual screen is already ready. Both selectors must be UUIDs. Use it only when the user authorized that physical screen to go dark. It returns `headless.session.id`, phase `awaitingConfirmation` and `confirmBy` (Unix seconds). Within 30 seconds, verify the intended virtual desktop with an actual screenshot, harmless click/input and screenshot read-back, then `headless confirm <session-id>`. If verification fails, let it roll back or run `headless restore <session-id>`. Never confirm merely because start or status succeeded. Repeated start for the same live session neither writes again nor extends the trial; a stale confirmation token is refused.
+
+    `headless restore <session-id>` restores only that session's physical screen and leaves the virtual screen. Normal `display connect <physical-uuid>` also ends the session. Confirmation does not disable recovery when the virtual screen stops being ready. The participating virtual config cannot be disabled or removed until the physical screen is restored. Normal App quit restores first; restart does not resume a headless session. Native timeouts are uncertain: recovery waits for a late transaction, reports `recoveryFailed` when it cannot verify the physical screen, and keeps the virtual screen. Read status and arrange recovery before any retry. This mode supplies neither network access, sleep prevention nor lock/FileVault bypass.
+
     ## Safety
 
-    Do not retry a command that changes state when its reply is lost or times out. It may have been applied. Read the state first (`display list`, `brightness boost get`, `hdr get`, `image get`, `preset list`, `virtual list`), then decide.
+    Do not retry a command that changes state when its reply is lost or times out. It may have been applied. Read the state first (`display list`, `brightness boost get`, `hdr get`, `image get`, `preset list`, `virtual list`, `headless status`), then decide.
 
     A preset can change resolution, arrangement and HDR as well as brightness, and turn displays off. Only apply a preset the user named.
 
-    A disconnect takes a screen away from the user. Only disconnect a display when the user asked for that display by name or uuid, and never the last one they are looking at. An input switch takes the screen away the same way: only switch when the user asked for it.
+    A disconnect takes a screen away from the user. Only disconnect a display when the user asked for that display by name or uuid, and keep the ordinary last-screen protection. Only the explicitly authorized `headless` workflow above may turn off the last physical screen. An input switch takes the screen away the same way: only switch when the user asked for it.
 
     ## Examples
 

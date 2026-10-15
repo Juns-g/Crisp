@@ -67,6 +67,7 @@ struct CrispControlRequest: Codable, Equatable {
     enum Command: String, Codable {
         case list
         case status, listVirtualDisplays, configureVirtualDisplay, ensureVirtualDisplay, disableVirtualDisplay
+        case headlessStatus, headlessStart, headlessConfirm, headlessRestore
         case getBrightness
         case setBrightness
         case getBrightnessBoost
@@ -99,6 +100,7 @@ struct CrispControlRequest: Codable, Equatable {
     /// `setInput`: the input as a person typed it, a name or a number.
     let input: String?
     let virtualConfig: CrispControlVirtualDisplayConfig?
+    let headlessConfigID: UUID?
     init(
         command: Command,
         display: UInt32? = nil,
@@ -108,7 +110,8 @@ struct CrispControlRequest: Codable, Equatable {
         setting: CrispControlImageSetting? = nil,
         value: Double? = nil,
         input: String? = nil,
-        virtualConfig: CrispControlVirtualDisplayConfig? = nil
+        virtualConfig: CrispControlVirtualDisplayConfig? = nil,
+        headlessConfigID: UUID? = nil
     ) {
         self.command = command
         self.display = display
@@ -119,6 +122,7 @@ struct CrispControlRequest: Codable, Equatable {
         self.value = value
         self.input = input
         self.virtualConfig = virtualConfig
+        self.headlessConfigID = headlessConfigID
     }
 
     var virtualConfigID: UUID? {
@@ -231,6 +235,7 @@ struct CrispControlResponse: Codable, Equatable {
     let running: Bool?
     let virtualDisplays: [CrispControlVirtualDisplay]?
     let virtualDisplay: CrispControlVirtualDisplay?
+    let headless: CrispControlHeadlessState?
     let error: String?
 
     init(
@@ -247,6 +252,7 @@ struct CrispControlResponse: Codable, Equatable {
         running: Bool? = nil,
         virtualDisplays: [CrispControlVirtualDisplay]? = nil,
         virtualDisplay: CrispControlVirtualDisplay? = nil,
+        headless: CrispControlHeadlessState? = nil,
         error: String? = nil
     ) {
         self.ok = ok
@@ -262,6 +268,7 @@ struct CrispControlResponse: Codable, Equatable {
         self.running = running
         self.virtualDisplays = virtualDisplays
         self.virtualDisplay = virtualDisplay
+        self.headless = headless
         self.error = error
     }
     static func success() -> Self { Self(ok: true) }
@@ -396,6 +403,8 @@ enum CrispControlModel {
         switch request.command {
         case .list:
             return .init(.success(displays: displays), nil, nil, nil)
+        case .headlessStatus, .headlessStart, .headlessConfirm, .headlessRestore:
+            return .init(.failure("headless requests require the app service"), nil, nil, nil)
         case .status, .listVirtualDisplays, .configureVirtualDisplay, .ensureVirtualDisplay, .disableVirtualDisplay:
             return .init(.failure("virtual display requests require the app service"), nil, nil, nil)
         case .getBrightness:
@@ -666,7 +675,7 @@ enum CrispControlModel {
 }
 enum CrispControlCLIModel {
     enum Group: String, CaseIterable {
-        case display, brightness, hdr, image, preset, virtual
+        case display, brightness, hdr, image, preset, virtual, headless
         var title: String {
             switch self {
             case .display: return "Display commands"
@@ -674,6 +683,7 @@ enum CrispControlCLIModel {
             case .hdr: return "HDR commands"
             case .image: return "Image Adjustment commands"
             case .preset: return "Preset commands"
+            case .headless: return "Headless display commands"
             case .virtual: return "Virtual display commands"
             }
         }
@@ -684,6 +694,7 @@ enum CrispControlCLIModel {
             case .hdr: return "Read and switch HDR on external displays."
             case .image: return "Read and set Image Adjustment: contrast, gamma, color temperature and the other sliders."
             case .preset: return "List and apply the presets saved in Crisp."
+            case .headless: return "Explicitly switch from one physical screen to a ready virtual screen, or restore it."
             case .virtual: return "Save, activate and inspect Crisp-owned virtual displays by configuration UUID."
             }
         }
@@ -713,6 +724,27 @@ enum CrispControlCLIModel {
     }
 
     static let entries: [Entry] = [
+        Entry(group: .headless, usage: "headless status", summary: "Read the current session and live display state", detail: """
+            Reads only. Reports session identity, phase, confirmation deadline, actual physical
+            online state and virtual readiness. It does not prove remote access or capture permissions.
+            """),
+        Entry(group: .headless, usage: "headless start <physical-uuid> <config-id>",
+              summary: "Disconnect the last physical screen with a virtual fallback", detail: """
+            Both selectors must be UUIDs. The named Crisp virtual config must already be ready.
+            The physical screen must be the only active physical screen. Ordinary disconnect
+            protection is unchanged. Confirm the returned session ID within 30 seconds after
+            verifying screenshot and input, or the physical screen is restored automatically.
+            Repeating start for the same live session does not reset its deadline.
+            """),
+        Entry(group: .headless, usage: "headless confirm <session-id>", summary: "Keep a verified session after the trial", detail: """
+            Use only after screenshot/input read-back succeeded. This confirms the exact session,
+            not a remote connection. Virtual loss still triggers physical recovery after confirmation.
+            """),
+        Entry(group: .headless, usage: "headless restore <session-id>", summary: "Restore the session's physical screen", detail: """
+            Restores only the named session's screen and keeps the virtual screen. Session-only:
+            normal App quit restores first, and a later launch recovers a stranded disconnect.
+            On timeout or unknown state, read headless status before deciding; do not retry blindly.
+            """),
         Entry(group: .virtual, usage: "virtual list", summary: "Read saved and live virtual display state", detail: """
             Each entry separates saved configuration, enableRequested, creating, retained,
             online, active, ready, runtime displayID and actual resolution. A read changes nothing.
@@ -901,6 +933,8 @@ enum CrispControlCLIModel {
     enum ResponseResult: Equatable { case success, serverFailure, invalid }
     static func receiveTimeoutSeconds(for command: CrispControlRequest.Command) -> Int {
         switch command {
+        case .headlessStart: return 45
+        case .headlessRestore: return 67
         case .configureVirtualDisplay, .ensureVirtualDisplay, .disableVirtualDisplay: return 67
         case .setBrightnessBoost: return 5
         case .setHDR: return 6
@@ -962,7 +996,7 @@ enum CrispControlCLIModel {
     }
     private static func matchedRequest(_ arguments: [String]) -> CrispControlRequest? {
         if arguments == ["status"] { return .init(command: .status) }
-        if let request = virtualRequest(arguments) { return request }
+        if let request = headlessRequest(arguments) ?? virtualRequest(arguments) { return request }
         if arguments == ["display", "list"] {
             return .init(command: .list)
         }
@@ -996,6 +1030,21 @@ enum CrispControlCLIModel {
             }
         }
         return imageRequest(arguments) ?? presetRequest(arguments) ?? connectionRequest(arguments)
+    }
+    private static func headlessRequest(_ arguments: [String]) -> CrispControlRequest? {
+        if arguments == ["headless", "status"] { return .init(command: .headlessStatus) }
+        guard arguments.first == "headless", arguments.count >= 3,
+              arguments[2].count == 36, let id = UUID(uuidString: arguments[2]) else { return nil }
+        if arguments.count == 4, arguments[1] == "start", arguments[3].count == 36,
+           let configID = UUID(uuidString: arguments[3]) {
+            return .init(command: .headlessStart, selector: id.uuidString, headlessConfigID: configID)
+        }
+        guard arguments.count == 3 else { return nil }
+        switch arguments[1] {
+        case "confirm": return .init(command: .headlessConfirm, selector: id.uuidString)
+        case "restore": return .init(command: .headlessRestore, selector: id.uuidString)
+        default: return nil
+        }
     }
     private static func virtualRequest(_ arguments: [String]) -> CrispControlRequest? {
         if arguments == ["virtual", "list"] { return .init(command: .listVirtualDisplays) }
@@ -1071,6 +1120,8 @@ enum CrispControlCLIModel {
 enum CrispControlText {
     static func render(_ response: CrispControlResponse, for command: CrispControlRequest.Command) -> String {
         switch command {
+        case .headlessStatus, .headlessStart, .headlessConfirm, .headlessRestore:
+            return headlessText(response.headless)
         case .status, .listVirtualDisplays, .configureVirtualDisplay, .ensureVirtualDisplay, .disableVirtualDisplay:
             return virtualTable(response.virtualDisplays ?? response.virtualDisplay.map { [$0] } ?? [])
         case .list: return displayTable(response.displays ?? [])
@@ -1085,14 +1136,28 @@ enum CrispControlText {
         case .listInputs:
             guard let inputs = response.inputs else { return "" }
             return table(inputs.inputs.map { [$0.value == inputs.current ? "*" : "", $0.name, String($0.value)] })
+        case .getImage, .listPresets, .applyPreset: return imageAndPresetText(response, for: command)
+        case .setBrightness, .setBrightnessBoost, .setHDR, .setImage, .resetImage: return ""
+        }
+    }
+
+    private static func imageAndPresetText(_ response: CrispControlResponse, for command: CrispControlRequest.Command) -> String {
+        switch command {
         case .getImage: return response.image.map(imageTable) ?? ""
         case .listPresets:
             guard let presets = response.presets, !presets.isEmpty else { return "no presets" }
             return table([["", "NAME", "CAPTURES", "ID"]]
                 + presets.map { [$0.active ? "*" : "", $0.name, $0.captures.joined(separator: ","), $0.id] })
         case .applyPreset: return (response.skippedDisplays ?? []).map { "skipped \($0): not connected" }.joined(separator: "\n")
-        case .setBrightness, .setBrightnessBoost, .setHDR, .setImage, .resetImage: return ""
+        default: return ""
         }
+    }
+
+    private static func headlessText(_ state: CrispControlHeadlessState?) -> String {
+        guard let state else { return "" }
+        return "headless \(state.session?.phase.rawValue ?? "idle")"
+            + " session=\(state.session?.id.uuidString ?? "-")"
+            + " physicalOnline=\(state.physicalOnline.map(String.init) ?? "unknown") virtualReady=\(state.virtualReady)"
     }
 
     private static func virtualTable(_ displays: [CrispControlVirtualDisplay]) -> String {
@@ -1239,4 +1304,57 @@ struct CrispControlVirtualDisplay: Codable, Equatable {
     let displayID: UInt32?
     let resolution: CrispControlResolution?
     let lastError: String?
+}
+
+/// Session identity and policy are shared with the CLI tests; native changes stay in the App.
+struct CrispControlHeadlessSession: Codable, Equatable {
+    enum Phase: String, Codable {
+        case entering, awaitingConfirmation, active, restoring, restored, recoveryFailed
+    }
+    let id: UUID
+    let physicalUUID: String
+    let virtualConfigID: UUID
+    var phase: Phase = .entering
+    /// Unix seconds for the client. The service enforces the deadline with a monotonic clock.
+    var confirmBy: TimeInterval?
+
+    var needsRecovery: Bool { phase != .restored }
+
+    func canConfirm(_ token: UUID, expired: Bool, virtualReady: Bool, physicalOnline: Bool?) -> Bool {
+        token == id && !expired && virtualReady && physicalOnline == false
+            && (phase == .awaitingConfirmation || phase == .active)
+    }
+
+    func recoveryReason(expired: Bool, virtualReady: Bool) -> String? {
+        guard phase == .awaitingConfirmation || phase == .active else { return nil }
+        if !virtualReady { return "the session's virtual screen is no longer ready" }
+        if phase == .awaitingConfirmation, expired { return "the 30-second confirmation deadline expired" }
+        return nil
+    }
+}
+
+struct CrispControlHeadlessState: Codable, Equatable {
+    let session: CrispControlHeadlessSession?
+    let physicalOnline: Bool?
+    let virtualReady: Bool
+    let lastError: String?
+}
+
+/// A disabled last screen can lose its UUID and disappear even from SkyLight's list.
+/// Permit its recorded ID only while the same native hardware descriptor still agrees.
+struct CrispControlPhysicalIdentity: Equatable {
+    let displayID: UInt32
+    let uuid: String?
+    let vendor: UInt32
+    let product: UInt32
+    let serial: UInt32
+    let isBuiltin: Bool
+
+    func canRecoverRecorded(_ observed: Self) -> Bool {
+        guard uuid != nil, vendor != 0, product != 0, displayID == observed.displayID,
+              vendor == observed.vendor, product == observed.product, serial == observed.serial,
+              isBuiltin == observed.isBuiltin else { return false }
+        if let observedUUID = observed.uuid { return observedUUID == uuid }
+        return true
+    }
 }

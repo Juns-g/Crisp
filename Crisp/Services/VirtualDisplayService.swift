@@ -224,7 +224,7 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
 
     @discardableResult
     func destroy(configID: UUID) -> Bool {
-        guard !creationGate.isBusy(configID) else { return false }
+        guard !creationGate.isBusy(configID), !HeadlessDisplayService.shared.usesVirtual(configID) else { return false }
         return release(configID: configID)
     }
 
@@ -265,7 +265,8 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
 
     @discardableResult
     func removeConfig(id: UUID) -> Bool {
-        guard !creationGate.isBusy(id), pendingRemovals[id] == nil else { return false }
+        guard !creationGate.isBusy(id), pendingRemovals[id] == nil,
+              !HeadlessDisplayService.shared.usesVirtual(id) else { return false }
         destroy(configID: id)
         let previous = configs
         configs.removeAll { $0.id == id }
@@ -281,7 +282,8 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
     /// CGVirtualDisplay, so those destroy and recreate it.
     @discardableResult
     func updateConfig(_ updated: VirtualDisplayConfig) async -> Bool {
-        guard !creationGate.isBusy(updated.id), pendingRemovals[updated.id] == nil,
+        guard !HeadlessDisplayService.shared.usesVirtual(updated.id), !creationGate.isBusy(updated.id),
+              pendingRemovals[updated.id] == nil,
               let idx = configs.firstIndex(where: { $0.id == updated.id }) else { return false }
         let old = configs[idx]
         configs[idx] = updated
@@ -420,6 +422,9 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
             return .failure("saved config \(configID.uuidString) not found")
         }
         guard !creationGate.isBusy(configID) else { return controlFailure(config, "creation is in progress") }
+        if !enabled, HeadlessDisplayService.shared.usesVirtual(configID) {
+            return controlFailure(config, "restore the headless session before disabling its virtual screen")
+        }
         if enabled {
             guard await create(config: config) else {
                 return controlFailure(config, lastErrors[configID] ?? "creation outcome is uncertain")
