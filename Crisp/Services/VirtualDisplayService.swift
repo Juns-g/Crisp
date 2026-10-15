@@ -30,6 +30,8 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
     private var activeDisplayObjects: [UUID: CGVirtualDisplay] = [:]
 
     private var creationGate = VirtualDisplayCreationGate()
+    /// A timed-out CLI release still needs offline read-back on a later disable.
+    private var pendingRemovals: [UUID: CGDirectDisplayID] = [:]
     private var enableRequests: [UUID: Bool] = [:]
     private var lastErrors: [UUID: String] = [:]
 
@@ -67,6 +69,11 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
         case .create: break
         }
         defer { creationGate.finish(config.id) }
+        return await createReserved(config)
+    }
+
+    /// The caller holds the config's reservation, including any preceding teardown.
+    private func createReserved(_ config: VirtualDisplayConfig) async -> Bool {
         enableRequests[config.id] = true
         lastErrors.removeValue(forKey: config.id)
         guard creationPreflight(config) else { return false }
@@ -110,6 +117,7 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
         }
         // Retain before apply: the background call can outlive its bounded wait.
         activeDisplayObjects[config.id] = virtualDisplay
+        pendingRemovals.removeValue(forKey: config.id)
         activeConfigIDs.insert(config.id)
 
         let settings = CGVirtualDisplaySettings()
@@ -217,6 +225,12 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
     @discardableResult
     func destroy(configID: UUID) -> Bool {
         guard !creationGate.isBusy(configID) else { return false }
+        return release(configID: configID)
+    }
+
+    /// The caller either checked or holds the config's reservation.
+    @discardableResult
+    private func release(configID: UUID) -> Bool {
         enableRequests[configID] = false
         guard activeDisplayObjects[configID] != nil else {
             return false
@@ -235,31 +249,48 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
         guard !configs.contains(where: { $0.id == config.id }) else {
             return await create(config: config)
         }
-        // Create first; only persist on success to avoid stale config if process crashes.
-        if await create(config: config) {
-            configs.append(config)
-            saveConfigs()
-            return true
+        guard creationGate.begin(config.id, retained: false) == .create else { return false }
+        defer { creationGate.finish(config.id) }
+        let created = await createReserved(config)
+        // A failed/timed-out apply may still own a live object. Keep its config visible
+        // for read-back and cleanup instead of leaving an unaddressable virtual screen.
+        guard created || activeDisplayObjects[config.id] != nil else { return false }
+        configs.append(config)
+        guard saveConfigs() else {
+            lastErrors[config.id] = "configuration persistence read-back failed"
+            return false
         }
-        return false
+        return created
     }
 
-    func removeConfig(id: UUID) {
-        guard !creationGate.isBusy(id) else { return }
+    @discardableResult
+    func removeConfig(id: UUID) -> Bool {
+        guard !creationGate.isBusy(id), pendingRemovals[id] == nil else { return false }
         destroy(configID: id)
+        let previous = configs
         configs.removeAll { $0.id == id }
-        saveConfigs()
+        guard saveConfigs() else {
+            configs = previous
+            saveConfigs()
+            return false
+        }
+        return true
     }
 
     /// Name/autoCreate update in place; resolution/HiDPI changes are baked into the live
     /// CGVirtualDisplay, so those destroy and recreate it.
     @discardableResult
     func updateConfig(_ updated: VirtualDisplayConfig) async -> Bool {
-        guard !creationGate.isBusy(updated.id),
+        guard !creationGate.isBusy(updated.id), pendingRemovals[updated.id] == nil,
               let idx = configs.firstIndex(where: { $0.id == updated.id }) else { return false }
         let old = configs[idx]
         configs[idx] = updated
-        saveConfigs()
+        guard saveConfigs() else {
+            configs[idx] = old
+            saveConfigs()
+            lastErrors[updated.id] = "configuration persistence read-back failed"
+            return false
+        }
 
         let geometryChanged = old.width != updated.width
             || old.height != updated.height
@@ -268,9 +299,11 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
             // Identity is stable, so must wait for the old display to actually leave the
             // online list, or the recreate races WindowServer's async teardown of it.
             let oldDisplayID = activeDisplayObjects[updated.id]?.displayID
-            destroy(configID: updated.id)
+            _ = creationGate.begin(updated.id, retained: false)
+            defer { creationGate.finish(updated.id) }
+            release(configID: updated.id)
             if let oldDisplayID { await waitForDisplayOffline(oldDisplayID) }
-            return await create(config: updated)
+            return await createReserved(updated)
         }
         return true
     }
@@ -333,7 +366,8 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
     }
 
     private func controlSnapshot(_ config: VirtualDisplayConfig, online: [CGDirectDisplayID]?) -> CrispControlVirtualDisplay {
-        let id = activeDisplayObjects[config.id]?.displayID
+        let retainedID = activeDisplayObjects[config.id]?.displayID
+        let id = retainedID ?? pendingRemovals[config.id]
         let isOnline = online.map { ids in id.map { ids.contains($0) && matchesIdentity($0, config: config) } ?? false }
         let active = isOnline == true && id.map { CGDisplayIsActive($0) != 0 } == true
         let mode = isOnline == true ? id.flatMap { CGDisplayCopyDisplayMode($0) } : nil
@@ -348,8 +382,8 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
         let creating = creationGate.isBusy(config.id)
         return CrispControlVirtualDisplay(
             config: config, saved: saved, enableRequested: enableRequests[config.id], creating: creating,
-            retained: id != nil, online: isOnline, active: active,
-            ready: saved && active && resolution != nil && !creating, displayID: id, resolution: resolution,
+            retained: retainedID != nil, online: isOnline, active: active,
+            ready: saved && retainedID != nil && active && resolution != nil && !creating, displayID: id, resolution: resolution,
             lastError: online == nil ? "online display enumeration failed" : lastErrors[config.id]
         )
     }
@@ -363,7 +397,7 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
         guard config.isValid else { return controlFailure(config, "invalid configuration") }
         guard !creationGate.isBusy(config.id) else { return controlFailure(config, "creation is in progress") }
         let existing = configs.first { $0.id == config.id }
-        if let existing, activeDisplayObjects[config.id] != nil,
+        if let existing, activeDisplayObjects[config.id] != nil || pendingRemovals[config.id] != nil,
            existing.width != config.width || existing.height != config.height || existing.hiDPI != config.hiDPI {
             return controlFailure(existing, "disable this config before changing its geometry")
         }
@@ -391,14 +425,20 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
                 return controlFailure(config, lastErrors[configID] ?? "creation outcome is uncertain")
             }
         } else {
-            let oldID = activeDisplayObjects[configID]?.displayID
-            _ = destroy(configID: configID)
+            _ = creationGate.begin(configID, retained: false)
+            defer { creationGate.finish(configID) }
+            let oldID = activeDisplayObjects[configID]?.displayID ?? pendingRemovals[configID]
+            pendingRemovals[configID] = oldID
+            release(configID: configID)
             if let oldID {
                 await waitForDisplayOffline(oldID)
-                guard onlineDisplayIDs()?.contains(oldID) == false else {
+                guard let online = onlineDisplayIDs(),
+                      !online.contains(oldID) || (CGDisplayVendorNumber(oldID) != 0 && !matchesIdentity(oldID, config: config)) else {
+                    lastErrors[configID] = "display removal outcome is uncertain"
                     return controlFailure(config, "display removal outcome is uncertain")
                 }
             }
+            pendingRemovals.removeValue(forKey: configID)
             lastErrors.removeValue(forKey: configID)
         }
         let snapshot = controlSnapshot(config, online: onlineDisplayIDs())

@@ -38,6 +38,14 @@ runtime ID to leave online enumeration, and keeps its saved settings. Set
 autoCreate off as well to prevent next-start restoration. Delete a saved test
 configuration in the GUI if desired.
 
+If a CLI release cannot verify removal, subsequent disable attempts keep checking
+the same runtime ID. The state can report `retained:false` with `online:true`
+until WindowServer finishes teardown; that state is never ready. GUI creation
+failures also keep a configuration visible when an object is still retained.
+Deletion and geometry edits remain refused until disable verifies that removal.
+GUI geometry recreation reserves the configuration throughout teardown and
+creation, so concurrent CLI writes cannot replace its saved geometry mid-flight.
+
 ## State and failure
 
 List returns `virtualDisplays`; a mutation returns `virtualDisplay`, including
@@ -51,8 +59,8 @@ codes remain: 0 success, 1 unreachable/lost reply, 2 arguments, 3 app refusal.
 | `saved` | Exact configuration read back from UserDefaults |
 | `enableRequested` | Last enable/release request in this session; omitted before any request |
 | `creating`, `retained` | Creation/apply in flight, and a strongly retained CGVirtualDisplay |
-| `online` | Retained runtime ID and descriptor found in CoreGraphics; omitted on enumeration failure |
-| `active`, `ready` | Active display; ready additionally requires saved config, readable mode and no creation in flight |
+| `online` | Known runtime ID and descriptor found in CoreGraphics, including a pending CLI release; omitted on enumeration failure |
+| `active`, `ready` | Active display; ready additionally requires retained ownership, saved config, readable mode and no creation in flight |
 | `displayID` | Diagnostic runtime ID; never a configuration selector |
 | `resolution` | Actual logical/pixel dimensions, refresh rate and HiDPI state; omitted if unavailable |
 | `lastError` | Last creation failure or current enumeration failure; omitted when none is known |
