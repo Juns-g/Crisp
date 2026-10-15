@@ -1,4 +1,4 @@
-# Explicit virtual-only desktop (M2)
+# Explicit virtual-only desktop
 
 This adds a session-only exception for a user who deliberately wants the last
 physical screen off while keeping a Crisp-owned virtual desktop. It requires
@@ -31,7 +31,7 @@ write (not a disk fsync guarantee). When macOS
 hides the disabled screen even from the full list, recovery may use its recorded
 runtime ID only while the captured vendor/product/serial/built-in descriptor
 still matches and that ID does not enumerate as another screen. An unknown
-hardware descriptor is refused; only actual online UUID read-back completes
+hardware descriptor or a UUID-less external screen with no serial is refused; only actual online UUID read-back completes
 recovery.
 
 The reply's `headless.session` contains a new `id`, the two selectors, `phase`
@@ -39,7 +39,8 @@ and, during the trial, `confirmBy` as Unix seconds. Use that exact session ID
 for confirm/restore. Confirm within **30 seconds after start completes** or
 the service attempts to restore the physical screen. Repeating start for the
 same live session does not issue another write or extend its deadline. Starting
-another session while one is active or recovering is refused. Stale confirmation
+another session while one is active or recovering is refused. A repeat is also
+refused if the trial expired or its current display state is no longer ready. Stale confirmation
 tokens are refused. The deadline is enforced with a monotonic clock.
 
 Confirmation records the caller's acceptance; it cannot verify a remote client
@@ -56,7 +57,7 @@ Disconnecting the remote client does not end the confirmed session.
 - `physicalOnline`: actual online enumeration of the named physical UUID;
   absent when there is no session or enumeration failed.
 - `virtualReady`: the named configuration's current owned, online, active,
-  readable-mode state, using the M1 identity checks.
+  readable-mode state, using the virtual-display identity checks.
 - `lastError`: the last recovery reason or failure, including after restoration.
 
 Reads do not enter, confirm or restore a session. A successful read means the
@@ -70,7 +71,8 @@ of virtual readiness triggers restoration; an unexpected physical return ends
 the session through the same recovery path. The participating virtual screen
 cannot be disabled, removed or geometrically edited through Crisp until the
 physical screen has been restored. Name/autoCreate configuration changes do not
-release the live screen.
+release the live screen. Refused GUI changes use the existing temporary error
+message rather than adding a permanent panel row or another dialog.
 
 `headless restore` or ordinary `display connect <physical-uuid>` restores only
 that physical screen and keeps the virtual desktop. Repeated restore of the
@@ -143,7 +145,7 @@ keys), and were installed with matching artifact hashes and verified signatures.
   restored the physical screen before releasing the virtual display; relaunch
   did not resume the exception. Ordinary display connect also ended a trial.
 - Test config removed; original topology/mode and unrelated held-disconnect
-  records were preserved. The tested M2 build remains installed and running.
+  records were preserved. The tested headless-session build remains installed and running.
 
 The hardware checks exposed a missing-UUID restore failure, corrected by the
 recorded-ID/descriptor fallback above and covered by a focused regression test.

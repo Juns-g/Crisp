@@ -282,10 +282,14 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
     /// CGVirtualDisplay, so those destroy and recreate it.
     @discardableResult
     func updateConfig(_ updated: VirtualDisplayConfig) async -> Bool {
-        guard !HeadlessDisplayService.shared.usesVirtual(updated.id), !creationGate.isBusy(updated.id),
+        guard !creationGate.isBusy(updated.id),
               pendingRemovals[updated.id] == nil,
               let idx = configs.firstIndex(where: { $0.id == updated.id }) else { return false }
         let old = configs[idx]
+        let geometryChanged = old.width != updated.width
+            || old.height != updated.height
+            || old.hiDPI != updated.hiDPI
+        guard !geometryChanged || !HeadlessDisplayService.shared.usesVirtual(updated.id) else { return false }
         configs[idx] = updated
         guard saveConfigs() else {
             configs[idx] = old
@@ -294,9 +298,6 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
             return false
         }
 
-        let geometryChanged = old.width != updated.width
-            || old.height != updated.height
-            || old.hiDPI != updated.hiDPI
         if geometryChanged && isActive(updated.id) {
             // Identity is stable, so must wait for the old display to actually leave the
             // online list, or the recreate races WindowServer's async teardown of it.

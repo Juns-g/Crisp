@@ -47,6 +47,15 @@ final class CrispControlHeadlessTests: XCTestCase {
         XCTAssertFalse(session.needsRecovery)
     }
 
+    func testConfirmedSessionReuseStillRequiresCurrentDisplayReadiness() {
+        var session = CrispControlHeadlessSession(id: UUID(), physicalUUID: physical, virtualConfigID: config)
+        session.phase = .active
+        XCTAssertTrue(session.canConfirm(session.id, expired: false, virtualReady: true, physicalOnline: false))
+        XCTAssertFalse(session.canConfirm(session.id, expired: false, virtualReady: false, physicalOnline: false))
+        XCTAssertFalse(session.canConfirm(session.id, expired: false, virtualReady: true, physicalOnline: nil))
+        XCTAssertFalse(session.canConfirm(session.id, expired: false, virtualReady: true, physicalOnline: true))
+    }
+
     func testJSONPreservesRecoveryFailureAndUnknownPhysicalState() throws {
         var session = CrispControlHeadlessSession(id: UUID(), physicalUUID: physical, virtualConfigID: config)
         session.phase = .recoveryFailed
@@ -86,5 +95,15 @@ final class CrispControlHeadlessTests: XCTestCase {
         XCTAssertEqual(CrispControlCLIModel.receiveTimeoutSeconds(for: .headlessStart), 45)
         XCTAssertEqual(CrispControlCLIModel.receiveTimeoutSeconds(for: .headlessRestore), 67)
         XCTAssertEqual(CrispControlCLIModel.receiveTimeoutSeconds(for: .disconnectDisplay), 30)
+    }
+
+    func testUUIDLessExternalRecoveryNeedsANonzeroSerial() {
+        func screen(uuid: String?, serial: UInt32) -> CrispControlPhysicalIdentity {
+            .init(displayID: 2, uuid: uuid, vendor: 123, product: 456, serial: serial, isBuiltin: false)
+        }
+        XCTAssertFalse(screen(uuid: physical, serial: 0).canRecoverRecorded(screen(uuid: nil, serial: 0)))
+        XCTAssertTrue(screen(uuid: physical, serial: 789).canRecoverRecorded(screen(uuid: nil, serial: 789)))
+        // A real UUID still identifies a serial-less screen without that fallback.
+        XCTAssertTrue(screen(uuid: physical, serial: 0).canRecoverRecorded(screen(uuid: physical, serial: 0)))
     }
 }

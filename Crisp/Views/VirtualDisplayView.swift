@@ -45,7 +45,7 @@ struct VirtualDisplayView: View {
                             isActivating: activatingID == config.id,
                             onActivate: { handleActivate(config) },
                             onDeactivate: {
-                                if !service.destroy(configID: config.id) { showUpdateError() }
+                                if !service.destroy(configID: config.id) { showUpdateError(for: config.id) }
                             },
                             onEdit: {
                                 withAnimation(.panelResize) {
@@ -112,7 +112,7 @@ struct VirtualDisplayView: View {
         )) {
             Button("Delete", role: .destructive) {
                 if let id = configToDelete, !service.removeConfig(id: id) {
-                    showUpdateError()
+                    showUpdateError(for: id)
                 }
                 configToDelete = nil
             }
@@ -168,13 +168,15 @@ struct VirtualDisplayView: View {
             if ok {
                 withAnimation(.panelResize) { editingID = nil }
             } else {
-                showUpdateError()
+                showUpdateError(for: config.id)
             }
         }
     }
 
-    private func showUpdateError() {
-        createError = String(localized: "Failed to update virtual display. Please try again.")
+    private func showUpdateError(for id: UUID) {
+        createError = HeadlessDisplayService.shared.usesVirtual(id)
+            ? String(localized: "Restore the physical screen before changing this virtual display.")
+            : String(localized: "Failed to update virtual display. Please try again.")
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             createError = nil

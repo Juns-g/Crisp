@@ -1355,6 +1355,8 @@ struct CrispControlPhysicalIdentity: Equatable {
               vendor == observed.vendor, product == observed.product, serial == observed.serial,
               isBuiltin == observed.isBuiltin else { return false }
         if let observedUUID = observed.uuid { return observedUUID == uuid }
-        return true
+        // An external with no serial cannot distinguish two copies of the same model
+        // when its old runtime ID is reused and the UUID is unavailable.
+        return isBuiltin || serial != 0
     }
 }

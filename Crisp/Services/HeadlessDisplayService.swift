@@ -99,6 +99,10 @@ final class HeadlessDisplayService {
                   session.phase == .awaitingConfirmation || session.phase == .active else {
                 return response("another session or recovery is in progress")
             }
+            guard session.canConfirm(session.id, expired: expired, virtualReady: virtualReady,
+                                     physicalOnline: physicalOnline) else {
+                return response("session is no longer ready; read headless status")
+            }
             // Do not extend the trial or silently perform another native write.
             return response()
         }
