@@ -152,3 +152,14 @@ recorded-ID/descriptor fallback above and covered by a focused regression test.
 Force-kill recovery, real WindowServer timeouts/late commits, forced virtual loss,
 physical hotplug and a Mac mini external monitor were not exercised. These are
 coverage limits for this draft, not claimed device results.
+
+### Review follow-up
+
+Code `6aa86db` passed `make check` (195 tests, 277 localization keys), was
+installed with matching App/CLI hashes and strict signatures, and repeated the
+native start/repeat, guarded writes, metadata edit, manual/automatic restore,
+expired-confirmation refusal and normal quit/reopen checks. Cleanup preserved
+the original physical topology/mode and held-disconnect records. The new
+custom-panel GUI interactions and GUI rebuild/CLI overlap were reviewed and
+compiled, but were not interactively exercised in this follow-up. The earlier
+TextEdit screenshot/input proof above belongs to code `2e00752`.
